@@ -1,4 +1,7 @@
-ifneq ($(shell command -v riscv64-elf-gcc 2>/dev/null),)
+ifneq ($(shell command -v riscv64-unknown-elf-gcc 2>/dev/null),)
+CROSS_COMPILE ?= riscv64-unknown-elf-
+COMMON_CFLAGS += --specs=picolibc.specs
+else ifneq ($(shell command -v riscv64-elf-gcc 2>/dev/null),)
 CROSS_COMPILE ?= riscv64-elf-
 else
 CROSS_COMPILE ?= riscv64-linux-gnu-
