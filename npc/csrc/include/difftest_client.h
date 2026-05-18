@@ -35,7 +35,7 @@ class Difftest {
 
  private:
   struct DifftestCPUState {
-    uint32_t gpr[16];
+    uint32_t gpr[32];
     uint32_t pc;
     struct {
       uint32_t mtvec;

@@ -91,7 +91,7 @@ bool Difftest::step_and_check(uint64_t cycle, uint32_t pc, uint32_t inst,
   uint32_t mmio_load_rd = 0;
   bool ignore_mmio_load_rd = decode_mmio_load_rd(inst, rf_before, mmio_load_rd);
 
-  for (int reg = 0; reg < 16; reg++) {
+  for (int reg = 0; reg < 32; reg++) {
     if (ignore_mmio_load_rd && reg == static_cast<int>(mmio_load_rd)) continue;
     if (ref_after.gpr[reg] != rf_after[reg]) {
       std::cerr << "[difftest] x" << reg << " mismatch at cycle " << cycle
@@ -116,7 +116,7 @@ bool Difftest::check_arch_state(uint64_t cycle,
                                 const DUTCSRState &dut_csr) {
   if (!enabled_ || !has_last_ref_state_) return true;
 
-  for (int reg = 0; reg < 16; reg++) {
+  for (int reg = 0; reg < 32; reg++) {
     if (last_ref_state_.gpr[reg] != rf_after[reg]) {
       std::cerr << "[difftest] x" << reg << " mismatch at cycle-end " << cycle
                 << ": dut=0x" << std::hex << rf_after[reg] << " ref=0x"
@@ -177,7 +177,7 @@ bool Difftest::decode_mmio_load_rd(uint32_t inst,
   if (rs1 >= rf_before.size()) return false;
   uint32_t addr = rf_before[rs1] + static_cast<uint32_t>(imm);
   if (!is_mmio_addr(addr)) return false;
-  if (rd == 0 || rd >= 16) return false;
+  if (rd == 0 || rd >= 32) return false;
 
   rd_out = rd;
   return true;
