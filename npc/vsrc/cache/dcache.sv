@@ -162,7 +162,7 @@ module dcache #(
       LSU_LHU: begin
         res = {{(Cfg.XLEN - 16) {1'b0}}, line[bit_idx+:16]};
       end
-      LSU_LW: begin
+      LSU_LW, LSU_LR: begin
         if (Cfg.XLEN == 32) begin
           res = line[bit_idx+:32];
         end else begin

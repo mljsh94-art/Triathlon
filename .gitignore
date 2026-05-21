@@ -12,6 +12,12 @@
 !init.sh
 !/fceux-am/*
 !/am-kernels/*
+!/opensbi/**
+!/echo_payload/**
+!merge.py
+!my_lab_log/**
+!/plans/**
+!CLAUDE.md
 .vscode
 .worktrees/
 

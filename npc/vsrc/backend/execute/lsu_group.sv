@@ -614,15 +614,20 @@ module lsu_group #(
   assign sc_success = is_sc && res_valid_q && (res_addr_q == req_eff_addr);
   assign sc_fail = is_sc && !sc_success;
 
+  logic req_is_lr;
+  assign req_is_lr = (pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op) == decode_pkg::LSU_LR;
+
   always_comb begin
     load_req_ready = 1'b0;
     alloc_grant = '0;
     alloc_lane_idx = '0;
     for (int i = 0; i < N_LSU; i++) begin
       if (!load_req_ready && lane_req_ready[i] && lq_alloc_ready) begin
-        load_req_ready = 1'b1;
-        alloc_grant[i] = 1'b1;
-        alloc_lane_idx = LANE_SEL_WIDTH'(i);
+        if (!req_is_lr || (sq_empty && store_wb_count_q == 0)) begin
+          load_req_ready = 1'b1;
+          alloc_grant[i] = 1'b1;
+          alloc_lane_idx = LANE_SEL_WIDTH'(i);
+        end
       end
     end
   end
