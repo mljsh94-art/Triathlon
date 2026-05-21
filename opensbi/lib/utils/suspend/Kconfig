@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: BSD-2-Clause
+
+menu "System Suspend Support"
+
+config FDT_SUSPEND
+	bool "FDT based suspend drivers"
+	depends on FDT
+	default n
+
+if FDT_SUSPEND
+
+config FDT_SUSPEND_ANDES_ATCSMU
+	bool "FDT Andes ATCSMU suspend driver"
+	depends on FDT_HSM_ANDES_ATCSMU && FDT_CACHE_ANDES_LLCACHE
+	default n
+
+config FDT_SUSPEND_RPMI
+	bool "FDT RPMI suspend driver"
+	depends on FDT_MAILBOX && RPMI_MAILBOX
+	default n
+
+config FDT_SUSPEND_SIFIVE_SMC0
+	bool "FDT SIFIVE SMC0 suspend driver"
+	depends on FDT_HSM_SIFIVE_TMC0 && IRQCHIP_APLIC
+	default n
+endif
+
+endmenu
