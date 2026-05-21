@@ -335,7 +335,7 @@ module lsu_group #(
             end
           end
         end
-        decode_pkg::LSU_SW: begin
+        decode_pkg::LSU_SW, decode_pkg::LSU_SC: begin
           for (int i = 0; i < 4; i++) begin
             if ((off + i) < SQ_BE_WIDTH) begin
               mask[off+i] = 1'b1;
@@ -399,7 +399,7 @@ module lsu_group #(
       unique case (op)
         decode_pkg::LSU_SB: is_store_misaligned = 1'b0;
         decode_pkg::LSU_SH: is_store_misaligned = addr[0];
-        decode_pkg::LSU_SW: is_store_misaligned = |addr[1:0];
+        decode_pkg::LSU_SW, decode_pkg::LSU_SC: is_store_misaligned = |addr[1:0];
         decode_pkg::LSU_SD: is_store_misaligned = |addr[2:0];
         default:            is_store_misaligned = 1'b0;
       endcase
@@ -440,7 +440,7 @@ module lsu_group #(
             aligned[(8*off)+:16] = data[15:0];
           end
         end
-        decode_pkg::LSU_SW: begin
+        decode_pkg::LSU_SW, decode_pkg::LSU_SC: begin
           if ((off + 3) < SQ_BE_WIDTH) begin
             aligned[(8*off)+:32] = data[31:0];
           end
@@ -605,6 +605,15 @@ module lsu_group #(
   assign lq_alloc_valid = load_alloc_fire && req_is_load;
   assign sq_alloc_valid = store_req_fire && store_need_sq;
 
+  logic res_valid_q;
+  logic [Cfg.PLEN-1:0] res_addr_q;
+  logic is_sc;
+  logic sc_success;
+  logic sc_fail;
+  assign is_sc = (pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op) == decode_pkg::LSU_SC;
+  assign sc_success = is_sc && res_valid_q && (res_addr_q == req_eff_addr);
+  assign sc_fail = is_sc && !sc_success;
+
   always_comb begin
     load_req_ready = 1'b0;
     alloc_grant = '0;
@@ -653,7 +662,9 @@ module lsu_group #(
     sb_ex_sb_id_o = pend_valid_q ? pend_sb_id_q : sb_id_i;
     sb_ex_addr_o = req_eff_addr;
     sb_ex_data_o = pend_valid_q ? pend_rs2_data_q : rs2_data_i;
-    sb_ex_op_o = pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op;
+    sb_ex_op_o = sc_fail ? decode_pkg::LSU_SC_FAIL :
+                 is_sc ? decode_pkg::LSU_SW : 
+                 (pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op);
     sb_ex_rob_idx_o = pend_valid_q ? pend_rob_tag_q : rob_tag_i;
     sb_load_addr_o = '0;
     sb_load_rob_idx_o = '0;
@@ -834,7 +845,18 @@ module lsu_group #(
       store_wb_count_q <= '0;
       wb_rr_q <= '0;
       ld_req_rr_q <= '0;
+      res_valid_q <= 1'b0;
+      res_addr_q <= '0;
     end else begin
+      if (flush_i) begin
+        res_valid_q <= 1'b0;
+      end else if (load_alloc_fire && (pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op) == decode_pkg::LSU_LR) begin
+        res_valid_q <= 1'b1;
+        res_addr_q <= req_eff_addr;
+      end else if (store_req_fire && is_sc) begin
+        res_valid_q <= 1'b0;
+      end
+
       if (req_accept_fire) begin
 `ifndef SYNTHESIS
         if (lsu_trace_en_q &&
@@ -942,7 +964,7 @@ module lsu_group #(
         store_wb_rob_idx_q[store_wb_tail_q] <= pend_valid_q ? pend_rob_tag_q : rob_tag_i;
         store_wb_data_q[store_wb_tail_q] <= (store_misaligned || store_page_fault) ?
                                             Cfg.XLEN'(pend_valid_q ? pend_addr_q : req_in_eff_addr) :
-                                            '0;
+                                            (is_sc && sc_fail) ? Cfg.XLEN'(1) : '0;
         store_wb_exception_q[store_wb_tail_q] <= store_misaligned || store_page_fault;
         store_wb_ecause_q[store_wb_tail_q] <= store_misaligned ? EXC_ST_ADDR_MISALIGNED :
                                               (store_page_fault ? EXC_ST_PAGE_FAULT : '0);

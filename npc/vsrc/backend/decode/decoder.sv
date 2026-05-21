@@ -499,14 +499,14 @@ module decoder #(
                   uop_decoded.rs2     = '0;
                   uop_decoded.has_rs2 = 1'b0;
                   uop_decoded.is_load = 1'b1;
-                  uop_decoded.lsu_op  = LSU_LW;
+                  uop_decoded.lsu_op  = LSU_LR;
                 end
               end
 
               5'b00011: begin  // SC.W
                 uop_decoded.has_rs2  = 1'b1;
                 uop_decoded.is_store = 1'b1;
-                uop_decoded.lsu_op   = LSU_SW;
+                uop_decoded.lsu_op   = LSU_SC;
               end
 
               // AMOSWAP/ADD/XOR/AND/OR/MIN/MAX/MINU/MAXU

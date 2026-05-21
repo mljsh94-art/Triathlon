@@ -117,7 +117,7 @@ module lsu_lane #(
         LSU_LHU: begin
           extract_fwd = {{(Cfg.XLEN - 16) {1'b0}}, data[15:0]};
         end
-        LSU_LW: begin
+        LSU_LW, LSU_LR: begin
           if (Cfg.XLEN == 32) begin
             extract_fwd = data[31:0];
           end else begin
@@ -208,6 +208,8 @@ module lsu_lane #(
   logic                                    resp_exc_q;
   logic                [ECAUSE_WIDTH-1:0]  resp_ecause_q;
   logic                [ROB_IDX_WIDTH-1:0] resp_tag_q;
+
+
 
   // ---------------------------------------------------------
   // Output defaults

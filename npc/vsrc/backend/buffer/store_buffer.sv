@@ -133,10 +133,12 @@ module store_buffer #(
   // =======================================================
   // Track whether head entry will be written back this cycle.
   logic wb_fire;
+  logic is_dummy_store;
   always_comb begin
+    is_dummy_store = (mem[head_ptr].op == decode_pkg::LSU_SC_FAIL);
     wb_fire = mem[head_ptr].valid && mem[head_ptr].committed &&
               mem[head_ptr].addr_valid && mem[head_ptr].data_valid &&
-              dcache_req_ready_i;
+              (dcache_req_ready_i || is_dummy_store);
   end
 
   logic [$clog2(SB_DEPTH):0] alloc_num;
@@ -202,6 +204,11 @@ module store_buffer #(
         mem[ex_sb_id_i].rob_tag    <= ex_rob_idx_i;
         mem[ex_sb_id_i].addr_valid <= 1'b1;
         mem[ex_sb_id_i].data_valid <= 1'b1;
+        if (ex_op_i == decode_pkg::LSU_SW || ex_op_i == decode_pkg::LSU_SC || ex_op_i == decode_pkg::LSU_SC_FAIL) begin
+`ifndef SYNTHESIS
+          // $display("[SB] Store Insert! id=%d addr=%x data=%x op=%d", ex_sb_id_i, ex_addr_i, ex_data_i, ex_op_i);
+`endif
+        end
       end
 
       // ------------------------------------
@@ -247,8 +254,14 @@ module store_buffer #(
         mem[head_ptr].committed  <= 1'b0;
         mem[head_ptr].addr_valid <= 1'b0;
         mem[head_ptr].data_valid <= 1'b0;
-
+        mem[head_ptr].rob_tag    <= '0;
         head_ptr                 <= head_ptr + 1;
+        
+        if (mem[head_ptr].op == decode_pkg::LSU_SW || mem[head_ptr].op == decode_pkg::LSU_SC || mem[head_ptr].op == decode_pkg::LSU_SC_FAIL) begin
+`ifndef SYNTHESIS
+          // $display("[SB] Store Writeback! addr=%x data=%x op=%d dummy=%b", mem[head_ptr].addr, mem[head_ptr].data, mem[head_ptr].op, is_dummy_store);
+`endif
+        end
       end
 
       // ------------------------------------
@@ -266,7 +279,8 @@ module store_buffer #(
   assign dcache_req_valid_o = mem[head_ptr].valid && 
                                 mem[head_ptr].committed && 
                                 mem[head_ptr].addr_valid && 
-                                mem[head_ptr].data_valid;
+                                mem[head_ptr].data_valid &&
+                                !is_dummy_store;
 
   assign dcache_req_addr_o = mem[head_ptr].addr;
   assign dcache_req_data_o = mem[head_ptr].data;

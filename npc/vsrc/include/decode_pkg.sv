@@ -60,7 +60,10 @@ package decode_pkg;
     LSU_SB,
     LSU_SH,
     LSU_SW,
-    LSU_SD
+    LSU_SD,
+    LSU_LR,
+    LSU_SC,
+    LSU_SC_FAIL
   } lsu_op_e;
 
   typedef enum logic [2:0] {
