@@ -3,7 +3,7 @@ import os
 with open("opensbi/build/platform/triathlon/firmware/fw_jump.bin", "rb") as f:
     opensbi_bin = f.read()
 
-with open("echo_payload/payload.bin", "rb") as f:
+with open("linux_workspace/linux/arch/riscv/boot/Image", "rb") as f:
     payload_bin = f.read()
 
 pad_len = 0x400000 - len(opensbi_bin)
