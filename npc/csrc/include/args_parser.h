@@ -16,6 +16,8 @@ struct SimArgs {
   bool trace = false;
   std::string trace_path = "npc.vcd";
   bool commit_trace = false;
+  uint64_t commit_trace_start = 0;
+  uint64_t commit_trace_end = 0;  // 0 = no upper bound (until max_cycles)
   bool fe_trace = false;
   bool bru_trace = false;
   bool stall_trace = false;

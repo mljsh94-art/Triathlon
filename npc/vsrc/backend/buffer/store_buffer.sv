@@ -131,15 +131,12 @@ module store_buffer #(
   // =======================================================
   // Main Sequential Logic
   // =======================================================
-  // Track whether head entry will be written back this cycle.
-  logic wb_fire;
   logic is_dummy_store;
-  always_comb begin
-    is_dummy_store = (mem[head_ptr].op == decode_pkg::LSU_SC_FAIL);
-    wb_fire = mem[head_ptr].valid && mem[head_ptr].committed &&
-              mem[head_ptr].addr_valid && mem[head_ptr].data_valid &&
-              (dcache_req_ready_i || is_dummy_store);
-  end
+  logic wb_fire;
+  assign is_dummy_store = (mem[head_ptr].op == decode_pkg::LSU_SC_FAIL);
+  assign wb_fire = mem[head_ptr].valid && mem[head_ptr].committed &&
+                   mem[head_ptr].addr_valid && mem[head_ptr].data_valid &&
+                   (dcache_req_ready_i || is_dummy_store);
 
   logic [$clog2(SB_DEPTH):0] alloc_num;
   always_comb begin

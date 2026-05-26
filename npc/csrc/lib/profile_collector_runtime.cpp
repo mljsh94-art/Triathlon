@@ -28,6 +28,19 @@ ProfileCollector::ProfileCollector(const SimArgs &args,
       cfg_commit_mask_(make_low_mask(cfg_commit_width_)),
       commit_width_hist_(std::max<uint32_t>(5u, cfg_commit_width_ + 1u), 0) {}
 
+bool ProfileCollector::commit_trace_window_active(uint64_t cycle) const {
+  if (!args_.commit_trace) return false;
+  if (cycle < args_.commit_trace_start) return false;
+  if (args_.commit_trace_end != 0 && cycle > args_.commit_trace_end) return false;
+  return true;
+}
+
+bool ProfileCollector::should_log_verbose_flush(uint64_t cycle) const {
+  if (args_.commit_trace) return commit_trace_window_active(cycle);
+  if (args_.bru_trace) return true;
+  return false;
+}
+
 void ProfileCollector::observe_cycle(const Vtb_triathlon *top) {
   uint32_t fq_count = static_cast<uint32_t>(top->dbg_ifu_fq_count_o);
   if (fq_count >= ifu_fq_occ_hist_.size()) fq_count = static_cast<uint32_t>(ifu_fq_occ_hist_.size() - 1);
@@ -114,6 +127,8 @@ void ProfileCollector::record_flush(uint64_t cycles,
   if (flush_reason == "branch_mispredict") {
     wrong_path_killed_uops_ += killed_uops;
   }
+
+  if (!should_log_verbose_flush(cycles)) return;
 
   std::ios::fmtflags f(std::cout.flags());
   std::cout << "[flush ] cycle=" << cycles
@@ -204,12 +219,14 @@ void ProfileCollector::record_commit_width(uint32_t commit_this_cycle) {
 void ProfileCollector::on_commit_cycle(uint64_t cycles) {
   if ((args_.commit_trace || args_.bru_trace) && pending_flush_penalty_ &&
       cycles > pending_flush_cycle_) {
-    std::ios::fmtflags f(std::cout.flags());
-    std::cout << "[flushp] cycle=" << cycles
-              << " reason=" << pending_flush_reason_
-              << " penalty=" << (cycles - pending_flush_cycle_)
-              << "\n";
-    std::cout.flags(f);
+    if (should_log_verbose_flush(cycles)) {
+      std::ios::fmtflags f(std::cout.flags());
+      std::cout << "[flushp] cycle=" << cycles
+                << " reason=" << pending_flush_reason_
+                << " penalty=" << (cycles - pending_flush_cycle_)
+                << "\n";
+      std::cout.flags(f);
+    }
     pending_flush_penalty_ = false;
   }
 }

@@ -75,13 +75,20 @@ Triathlon/
 ├── am-kernels/                      # Test programs and benchmarks
 ├── nemu/                            # Reference simulator
 ├── abstract-machine/                # Bare-metal runtime
-├── opensbi/                         # OpenSBI firmware (RISC-V Supervisor Binary Interface)
-├── echo_payload/                    # S-mode test payload (uses SBI DBCN extension to print console)
-│   ├── Makefile                     # Build system for payload
+├── opensbi/                         # OpenSBI firmware (platform/triathlon, FW_JUMP + DTB handoff)
+│   └── platform/triathlon/
+│       ├── objects.mk               # FW_JUMP_ADDR / FW_JUMP_FDT_ADDR 等平台参数
+│       ├── platform.c               # PLIC / CLINT / UART 平台驱动
+│       ├── triathlon.dts            # 设备树源（merge.py 编译为 DTB）
+│       └── configs/defconfig        # CONFIG_PLATFORM_TRIATHLON=y
+├── echo_payload/                    # Optional lightweight S-mode test (NOT used by merge.py)
+│   ├── Makefile                     # riscv64-unknown-elf-gcc，链接 0x80400000
 │   ├── link.ld                      # Linker script (links at 0x80400000)
-│   └── payload.S                    # S-mode payload assembly source
-├── merge.py                         # Python script to pad OpenSBI (to 4MB) and append the payload
-├── fw_combined.bin                  # Combined image loaded during full-system simulation
+│   └── payload.S                    # Minimal S-mode program (SBI DBCN console output)
+├── linux_workspace/                 # Linux kernel build tree (gitignored); Image consumed by merge.py
+├── build/triathlon.dtb              # merge.py 生成的 DTB（gitignore 或未跟踪）
+├── merge.py                         # 合并 OpenSBI + Linux Image + DTB → fw_combined.bin
+├── fw_combined.bin                  # 全系统仿真镜像（加载到 0x80000000）
 └── Makefile                         # Top-level build script
 ```
 
@@ -271,30 +278,120 @@ Backend -> Frontend:
   make ARCH=riscv32i-npc ALL=dummy run
   ```
 
-### 4. S-mode Payload 编译合并与 Trace 仿真流程 (OpenSBI + S-mode Payload)
+### 4. OpenSBI + Linux 镜像合并与全系统仿真
 
-当需要运行 S-mode 测试程序（通过 OpenSBI 引导）并导出详细的仿真轨迹（Commit Trace）进行 Debug 时，可使用以下一整套流水线命令：
+`merge.py` 生成的是 **OpenSBI + Linux Kernel Image + DTB** 组合镜像，**不是** `echo_payload/payload.bin`。OpenSBI 通过 `FW_JUMP_ADDR=0x80400000` 跳转到 S-mode Linux 入口，并通过 `FW_JUMP_FDT_ADDR=0x87F00000` 将 DTB 地址传给 Linux 的 `a1`。
 
-```bash
-wsl bash -c "cd echo_payload && make && cd .. && python3 merge.py && make -C npc sim IMG=/mnt/e/vivado_project/OOOcpu_design/Triathlon/fw_combined.bin DIFFTEST_SO= ARGS='--commit-trace --max-cycles=10000000' > npc/sim_trace.log 2>&1"
+#### 内存布局（`fw_combined.bin`）
+
+| 组件 | 物理地址 | 来源 |
+| :--- | :--- | :--- |
+| OpenSBI (`fw_jump.bin`) | `0x80000000` | `opensbi/build/platform/triathlon/firmware/fw_jump.bin` |
+| Linux Kernel Image | `0x80400000` | `linux_workspace/linux/arch/riscv/boot/Image` |
+| DTB | `0x87F00000` | `build/triathlon.dtb`（由 `merge.py` 生成） |
+
+仿真器将 `fw_combined.bin` 加载到 `0x80000000`（`npc/csrc/include/platform_contract.h` 中 `kPmemBase`）。OpenSBI 启动 banner 中应出现 `Domain0 Next Arg1 : 0x87f00000`（即 Linux 的 `a1`）。
+
+#### OpenSBI 平台配置（`opensbi/platform/triathlon/`）
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `objects.mk` | 平台构建参数与 `FW_JUMP` 跳转地址 |
+| `platform.c` | PLIC / CLINT / UART8250 等外设初始化 |
+| `triathlon.dts` | 设备树源文件（memory、cpu、clint、plic、uart） |
+| `configs/defconfig` | Kconfig：`CONFIG_PLATFORM_TRIATHLON=y` |
+
+`objects.mk` 当前关键配置：
+
+```makefile
+PLATFORM_RISCV_XLEN = 32
+PLATFORM_RISCV_ABI = ilp32
+PLATFORM_RISCV_ISA = rv32ima
+PLATFORM_RISCV_CODE_MODEL = medlow
+
+FW_JUMP=y
+FW_JUMP_ADDR=0x80400000      # OpenSBI 跳转到 Linux 入口
+FW_JUMP_FDT_ADDR=0x87F00000  # OpenSBI 传给 Linux 的 a1（DTB 物理地址）
 ```
 
-#### 流程步骤详细解析：
+修改 `FW_JUMP_FDT_ADDR` 或 `FW_JUMP_ADDR` 后，必须重新编译 OpenSBI 并重新运行 `merge.py`。
 
-1. **编译 Payload (`cd echo_payload && make && cd ..`)**
-   - 进入 `echo_payload` 目录，编译汇编源码 `payload.S`（通常使用 SBI 的 `DBCN` 扩展进行控制台字符打印）。
-   - 编译后生成裸二进制文件 `payload.bin` 并返回项目主目录。
-2. **合并固件与 Payload (`python3 merge.py`)**
-   - 运行 Python 脚本，读取 OpenSBI 固件二进制文件 `opensbi/build/platform/triathlon/firmware/fw_jump.bin`。
-   - 对 OpenSBI 固件填充（Pad）零字节至 `0x400000` (4MB) 大小，然后追加 `payload.bin`。
-   - 生成完整的系统引导镜像 `fw_combined.bin`。这使得 S-mode payload 正好位于物理地址 `0x80400000`，即 OpenSBI 跳转启动的默认负载地址。
-3. **启动 Verilator RTL 仿真并重定向日志 (`make -C npc sim ... > npc/sim_trace.log 2>&1`)**
-   - **`IMG=...`**: 指定加载上述合并生成的 `fw_combined.bin` 镜像。
-   - **`DIFFTEST_SO=`**: **置空此变量以禁用 DiffTest 协同仿真**。由于 S-mode 程序及 OpenSBI 涉及大量的特权级 CSR 寄存器切换、内存分页 (SV32 MMU) 机制以及特定的平台外设操作，普通的 bare-metal DiffTest 解释器（如 NEMU）无法与 RTL 设计严格对齐。
-   - **`ARGS='--commit-trace --max-cycles=10000000'`**:
-     - `--commit-trace`: 开启指令提交级的 Trace 输出，详尽记录每一步指令流执行（PC、GPR 写入等），方便进行指令流追踪。
-     - `--max-cycles=10000000`: 限制仿真最大时钟周期为 1000 万周期，防止死锁、挂死或产生超大型无限增长的日志文件。
-   - **`> npc/sim_trace.log 2>&1`**: 将所有仿真器的标准输出和错误信息重定向至 `npc/sim_trace.log`，以便后续离线分析 CPU 执行轨迹。
+#### 工具链
+
+| 用途 | 工具链前缀 | 说明 |
+| :--- | :--- | :--- |
+| **OpenSBI（Triathlon 平台）** | `riscv64-linux-gnu-` | WSL 下推荐；需支持 PIE（OpenSBI 固件链接要求） |
+| **echo_payload / 裸机测试** | `riscv64-unknown-elf-` | 见 `echo_payload/Makefile`；**不能**用于 OpenSBI（linker 不支持 PIE 时会报错） |
+| **Verilator 仿真** | 宿主机 `g++` + Verilator 5.008 | 见 `npc/Makefile`；与 OpenSBI 交叉编译无关 |
+| **DTB 编译（可选）** | `dtc`（device-tree-compiler） | 有则优先从 `triathlon.dts` 生成 DTB；无则 `merge.py` 使用内置等价 DTB |
+
+OpenSBI 编译示例（WSL）：
+
+```bash
+make -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-
+# 修改 objects.mk 后强制重建：
+make -B -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-
+```
+
+输出：`opensbi/build/platform/triathlon/firmware/fw_jump.bin`
+
+#### 前置条件
+
+- OpenSBI：已用 `riscv64-linux-gnu-` 编译 `fw_jump.bin`（见上）
+- Linux：`linux_workspace/linux/arch/riscv/boot/Image` 已编译（`linux_workspace/` 在 `.gitignore` 中）
+- DTB：`merge.py` 生成 `build/triathlon.dtb`（优先 `dtc` 编译 `triathlon.dts`，否则脚本内置 DTB）
+
+#### 合并与仿真示例
+
+```bash
+# 1. 重建 OpenSBI（修改 objects.mk 后必做）
+wsl bash -c "make -C /mnt/e/vivado_project/OOOcpu_design/Triathlon/opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-"
+
+# 2. 合并镜像并仿真
+wsl bash -c "cd /mnt/e/vivado_project/OOOcpu_design/Triathlon && python3 merge.py && make -C npc sim IMG=/mnt/e/vivado_project/OOOcpu_design/Triathlon/fw_combined.bin DIFFTEST_SO= ARGS='--max-cycles=2000000 --progress=500000 --linux-early-debug' > npc/sim_final_verify.log 2>&1"
+```
+
+#### 流程步骤
+
+1. **编译 OpenSBI**
+   - `make -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-`
+   - 确认 `objects.mk` 中 `FW_JUMP_ADDR` / `FW_JUMP_FDT_ADDR` 与 `merge.py` 中 `LINUX_LOAD_ADDR` / `DTB_LOAD_ADDR` 一致
+2. **合并镜像 (`python3 merge.py`)**
+   - 读取 `opensbi/build/platform/triathlon/firmware/fw_jump.bin`
+   - 读取 `linux_workspace/linux/arch/riscv/boot/Image`
+   - 生成 `build/triathlon.dtb`（优先 `dtc` + `triathlon.dts`，否则内置 DTB）
+   - 输出 `fw_combined.bin`（布局见上表）
+3. **启动 Verilator 仿真 (`make -C npc sim ...`)**
+   - **`IMG=...`**: 加载 `fw_combined.bin` 到 `0x80000000`
+   - **`DIFFTEST_SO=`**: 置空以禁用 DiffTest（OpenSBI/Linux 涉及 SV32 MMU、特权级 CSR 与外设，bare-metal NEMU 无法对齐）
+   - **`--linux-early-debug`**: 启用 Linux 早期启动调试输出（satp 变更、页故障、异常 flush 等），并输出一次性 `[linux-stage]` 里程碑（pc/inst/a0/a1/sp/gp/satp/CSR 等），由 `npc/csrc/include/linux_boot_stage.h` 实现
+   - **`--commit-trace`**: 可选，输出 commit 级 trace（`[commit]` / `[stwb]` / `[ldreq]` / `[ldrsp]` / `[flush]` / `[bru]` / `[flushp]`）；默认全周期。可限定窗口（窗口外上述 trace 均不打印，profile 统计仍全程收集）：
+     - `--commit-trace START:END` 或 `--commit-trace=START:END`（含首尾 cycle）
+     - `--commit-trace START END`（两个参数）
+     - `--commit-trace-start N` + `--commit-trace-end N`（`end=0` 表示不设上限）
+
+#### `--linux-early-debug` 启动阶段标记
+
+启用 `--linux-early-debug` 后，仿真器对每个关键阶段仅打印一次 `[linux-stage]` 行，典型顺序：
+
+| stage | 含义 |
+| :--- | :--- |
+| `opensbi-reset` | M-mode 复位入口 @ 0x80000000 |
+| `opensbi-dtb-a0` | OpenSBI 将 DTB 地址装入 a0 |
+| `opensbi-init` | OpenSBI 固件主路径 |
+| `opensbi-pre-jump` | 跳转 Linux 前 (hart_switch_mode) |
+| `linux-handoff` | 进入 Linux S-mode 物理入口 |
+| `linux-head` / `linux-decompress` / `linux-gp-init` | head.S / 解压 / gp 初始化 |
+| `linux-dtb-a1` | Linux 收到 a1=DTB |
+| `linux-mmu-enable` | 写 satp 开启 SV32 |
+| `linux-first-ipf` | 开 MMU 后首次 instruction page fault |
+| `linux-trap-redirect` / `linux-trap-vec` | fixmap trap 入口 |
+| `linux-swap-pgdir` | trap 路径切换页表 |
+| `linux-vtext` | 进入内核高地址虚拟文本区 |
+
+#### echo_payload（可选，独立测试）
+
+`echo_payload/` 是轻量级 S-mode 程序（通过 SBI DBCN 打印一行字符串后自旋），**不参与** `merge.py` 流程。若需单独验证 OpenSBI 跳转到最小 payload，需自行修改 `merge.py` 或手动将 `payload.bin` 拼接到 OpenSBI 之后，并确保链接地址为 `0x80400000`。
 
 ---
 

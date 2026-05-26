@@ -69,6 +69,9 @@ class ProfileCollector {
   static bool is_ret_inst(uint32_t inst);
   static bool is_indirect_jump_inst(uint32_t inst);
 
+  bool commit_trace_window_active(uint64_t cycle) const;
+  bool should_log_verbose_flush(uint64_t cycle) const;
+
   uint32_t popcount_commit(uint32_t v) const;
   int classify_stall_cycle(const Vtb_triathlon *top) const;
   int classify_frontend_empty_cycle(const Vtb_triathlon *top) const;
