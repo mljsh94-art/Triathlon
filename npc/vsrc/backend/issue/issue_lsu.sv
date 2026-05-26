@@ -63,8 +63,8 @@ module issue_lsu #(
 
   // C. Select Logic -> LSU
   localparam int ISSUE_WIDTH = 2;
-  wire [ISSUE_WIDTH-1:0] issue_valid_raw;
-  wire [$clog2(RS_DEPTH)-1:0] issue_rs_idx_raw[0:ISSUE_WIDTH-1];
+  logic [ISSUE_WIDTH-1:0] issue_valid_raw;
+  logic [$clog2(RS_DEPTH)-1:0] issue_rs_idx_raw[0:ISSUE_WIDTH-1];
   wire [DATA_W-1:0] issue_v1_0;
   wire [DATA_W-1:0] issue_v1_1;
   wire [DATA_W-1:0] issue_v2_0;
@@ -93,7 +93,9 @@ module issue_lsu #(
   localparam int unsigned LSU_STALL_TRACE_BUDGET = 512;
   logic [31:0] lsu_stall_trace_cnt_q;
   logic lsu_trace_en_q;
-  initial lsu_trace_en_q = $test$plusargs("npc_diag_trace");
+  initial begin
+    lsu_trace_en_q = $test$plusargs("npc_diag_trace");
+  end
 `endif
 
   function automatic logic is_spec_low_addr(input logic [DATA_W-1:0] addr);
@@ -101,6 +103,15 @@ module issue_lsu #(
       is_spec_low_addr = ((addr[DATA_W-1:12] == '0) || (&addr[DATA_W-1:12]));
     end
   endfunction
+
+  function automatic logic [TAG_W-1:0] rob_age(
+      input logic [TAG_W-1:0] idx, input logic [TAG_W-1:0] head);
+    begin
+      rob_age = idx - head;
+    end
+  endfunction
+
+  logic [TAG_W-1:0] rs_dst_tag[0:RS_DEPTH-1];
 
 `ifndef SYNTHESIS
   function automatic logic watch_lsu_pc(input logic [31:0] pc);
@@ -242,18 +253,57 @@ module issue_lsu #(
       .out_dst_tag_0(issue_dst_0),
       .out_dst_tag_1(issue_dst_1),
       .out_sb_id_0  (issue_sb_id_0),
-      .out_sb_id_1  (issue_sb_id_1)
+      .out_sb_id_1  (issue_sb_id_1),
+      .dst_tag_o    (rs_dst_tag)
   );
 
-  issue_select #(
-      .Cfg(Cfg),
-      .ISSUE_WIDTH(ISSUE_WIDTH)
-  ) u_select (
-      .ready_mask      (rs_ready_wires),
-      .issue_grant_mask(),
-      .issue_valid     (issue_valid_raw),
-      .issue_rs_idx    (issue_rs_idx_raw)
-  );
+  // Pick the oldest ready RS entries by ROB age, not RS physical index.
+  always_comb begin
+    logic found0;
+    logic found1;
+    logic [$clog2(RS_DEPTH)-1:0] pick_idx0;
+    logic [$clog2(RS_DEPTH)-1:0] pick_idx1;
+    logic [TAG_W-1:0] best_age0;
+    logic [TAG_W-1:0] best_age1;
+
+    issue_valid_raw[0] = 1'b0;
+    issue_valid_raw[1] = 1'b0;
+    pick_idx0 = '0;
+    pick_idx1 = '0;
+    found0 = 1'b0;
+    found1 = 1'b0;
+    best_age0 = {TAG_W{1'b1}};
+    best_age1 = {TAG_W{1'b1}};
+
+    for (int i = 0; i < RS_DEPTH; i++) begin
+      if (rs_ready_wires[i]) begin
+        automatic logic [TAG_W-1:0] age;
+        age = rob_age(rs_dst_tag[i], rob_head_i);
+        if (!found0 || (age < best_age0)) begin
+          found0 = 1'b1;
+          best_age0 = age;
+          pick_idx0 = i[$clog2(RS_DEPTH)-1:0];
+        end
+      end
+    end
+
+    for (int i = 0; i < RS_DEPTH; i++) begin
+      if (rs_ready_wires[i] && (i[$clog2(RS_DEPTH)-1:0] != pick_idx0)) begin
+        automatic logic [TAG_W-1:0] age;
+        age = rob_age(rs_dst_tag[i], rob_head_i);
+        if (!found1 || (age < best_age1)) begin
+          found1 = 1'b1;
+          best_age1 = age;
+          pick_idx1 = i[$clog2(RS_DEPTH)-1:0];
+        end
+      end
+    end
+
+    issue_valid_raw[0] = found0;
+    issue_valid_raw[1] = found1;
+    issue_rs_idx_raw[0] = pick_idx0;
+    issue_rs_idx_raw[1] = pick_idx1;
+  end
 
   // Free count for backpressure
   always_comb begin

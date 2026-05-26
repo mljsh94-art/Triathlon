@@ -48,7 +48,8 @@ module reservation_station_lsu #(
     output logic [  DATA_W-1:0] out_v2_0,
     output logic [  DATA_W-1:0] out_v2_1,
     output logic [   SB_W-1:0]  out_sb_id_0,
-    output logic [   SB_W-1:0]  out_sb_id_1
+    output logic [   SB_W-1:0]  out_sb_id_1,
+    output logic [   TAG_W-1:0] dst_tag_o[0:RS_DEPTH-1]
 );
 
   // RS 存储阵列
@@ -80,7 +81,9 @@ module reservation_station_lsu #(
   localparam int unsigned RS_LSU_TRACE_BUDGET = 512;
   logic [31:0] rs_lsu_trace_cnt_q;
   logic rs_lsu_trace_en_q;
-  initial rs_lsu_trace_en_q = $test$plusargs("npc_diag_trace");
+  initial begin
+    rs_lsu_trace_en_q = $test$plusargs("npc_diag_trace");
+  end
 `endif
 
   function automatic logic [TAG_W-1:0] rob_age(
@@ -236,6 +239,12 @@ module reservation_station_lsu #(
   assign out_sb_id_1   = sb_arr[sel_idx_1];
 
   assign busy_vector   = busy;
+
+  always_comb begin
+    for (int i = 0; i < RS_DEPTH; i++) begin
+      dst_tag_o[i] = dst_arr[i];
+    end
+  end
 
 `ifndef SYNTHESIS
   function automatic logic watch_lsu_pc(input logic [31:0] pc);

@@ -257,7 +257,7 @@ Backend -> Frontend:
 | :--- | :--- | :--- |
 | `TOPNAME` | `tb_triathlon` | 指定仿真的顶层模块名（对应 `vsrc/` 目录下的 `.sv` 文件）。 |
 | `IMG` | *(空)* | 待运行的程序镜像路径（例如编译好的 RISC-V 测试 bin/elf 文件）。 |
-| `ARGS` | *(空)* | 传给仿真器的自定义参数。 |
+| `ARGS` | *(空)* | 传给仿真器的扩展参数，详见 **§4**。 |
 | `DIFFTEST_SO` | `$(NPC_HOME)/ref/riscv32-nemu-interpreter-so` | DiffTest 动态链接库的路径，用于与 NEMU 进行协同仿真比对。 |
 
 ### 3. 典型使用示例
@@ -278,7 +278,130 @@ Backend -> Frontend:
   make ARCH=riscv32i-npc ALL=dummy run
   ```
 
-### 4. OpenSBI + Linux 镜像合并与全系统仿真
+### 4. 仿真器命令行扩展参数（`ARGS`）
+
+仿真主程序为 `npc/build/tb_triathlon`，参数解析见 `npc/csrc/lib/args_parser.cpp` 与 `npc/csrc/include/args_parser.h`。
+
+#### 传参方式
+
+```bash
+# Makefile（推荐）：ARGS 与 Makefile 变量 DIFFTEST 一并拼入命令行
+make -C npc sim IMG=/path/to/image.bin ARGS='--max-cycles=1000000 --progress=500000'
+make -C npc sim DIFFTEST= IMG=/path/to/fw_combined.bin ARGS='--linux-early-debug'  # 禁用 DiffTest
+
+# 直接运行
+./npc/build/tb_triathlon /path/to/image.bin --max-cycles=1000000
+```
+
+Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件存在且未设 `DIFFTEST=`）→ `IMG`（ positional，镜像路径）。Positional 参数 `<IMG>` 为**必需**。
+
+#### 参数一览
+
+| 参数 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `<IMG>` | — | 待加载二进制镜像路径（positional，必需） |
+| `--max-cycles N` / `--max-cycles=N` | `600000000` | 最大仿真周期；超出后打印 `TIMEOUT after N cycles` 并以退出码 1 结束 |
+| `-d REF_SO` / `--difftest=REF_SO` | Makefile 自动注入 | NEMU DiffTest 共享库；`DIFFTEST_SO=` 或 `DIFFTEST=` 可禁用 |
+| `--progress [N]` / `--progress=N` | 禁用；仅 `--progress` 时 `N=1000000` | 每 `N` 周期打印 `[progress]` 心跳（commits、last_pc、ROB、Store Buffer、LSU、DCache MSHR 等） |
+| `--trace [path]` / `--trace=path` | 默认 `npc.vcd` | 生成 VCD 波形；需编译时定义 `VM_TRACE`，否则忽略并打印 `[warn]` |
+| `--commit-trace [窗口]` | 禁用 | 启用 commit 级 trace 与仿真结束 profile 汇总（见下文「输出 Tag」） |
+| `--commit-trace=START:END` | — | 等价于 `--commit-trace START:END` |
+| `--commit-trace-start N` | `0` | 与 `--commit-trace` 配合：trace 起始 cycle（含） |
+| `--commit-trace-end N` | `0`（无上限） | 与 `--commit-trace` 配合：trace 结束 cycle（含）；`0` 表示不设上限 |
+| `--bru-trace` | 禁用 | BRU writeback trace（`[bruwb]`）+ pipeline flush trace（`[flush]`/`[flushp]`/`[bru]`，**无** cycle 窗口限制）+ profile 汇总 |
+| `--fe-trace` | 禁用 | 取指校验：前端 bundle 与内存指令不一致，或 slot_valid 不完整时打印 `[fe]` |
+| `--stall-trace [N]` / `--stall-trace=N` | 禁用；`N=200` | 连续 `N` 周期无 commit 时打印 `[stall]`，之后每再 stall `N` 周期重复打印 |
+| `--boot-handoff` | 禁用 | Boot ROM handoff 启动链（见下文） |
+| `--dtb <path>` / `--dtb=path` | 内置最小 FDT | `--boot-handoff` 下加载外部 DTB；省略则在 `0x87F00000` 写入占位 FDT |
+| `--firmware-load-base <addr>` / `=addr` | `0x80020000`（OpenSBI 区） | `--boot-handoff` 下固件加载基址；须 **4MiB 对齐**（RV32 Linux `setup_vm()` 要求），推荐 `0x80400000`；不得与复位 PC `0x80000000` 重叠 |
+| `--virtio-blk-image <path>` / `=path` | 无 | VirtIO block 后端磁盘镜像 |
+| `--linux-early-debug` | 禁用 | Linux/OpenSBI 早期启动调试：一次性 `[linux-stage]` 里程碑 + 条件 `[debug][...]` 细粒度日志 |
+
+#### `--commit-trace` 窗口语法
+
+窗口仅抑制 stdout 上的 commit/LSU/store trace 以及（在与 `--bru-trace` 同开时）`[flush]`/`[flushp]`/`[bru]`；**profile 汇总统计仍全程收集**。
+
+| 写法 | 含义 |
+| :--- | :--- |
+| `--commit-trace` | 全周期 |
+| `--commit-trace START:END` 或 `--commit-trace=START:END` | cycle `[START, END]`（含首尾） |
+| `--commit-trace START` | 单点 cycle `START` |
+| `--commit-trace START END` | 两个 positional：`START` 与 `END` |
+| `--commit-trace-start N` + `--commit-trace-end M` | 分别指定起止；`end=0` 无上限 |
+
+#### 镜像加载模式
+
+| 模式 | 条件 | 行为 |
+| :--- | :--- | :--- |
+| **整镜像加载**（默认） | 无 `--boot-handoff` | `<IMG>` 加载到 `0x80000000`（`kPmemBase`）；适用于 `merge.py` 输出的 `fw_combined.bin` |
+| **Boot handoff** | `--boot-handoff` | `<IMG>` 加载到 `--firmware-load-base`；在 `0x00001000` 安装 handoff stub（a0/a1/satp → 跳固件），复位 PC `0x80000000` 经 jump stub 进入 boot ROM；适用于 `fw_payload.bin` + 独立 DTB（见 `linux-smoke`） |
+
+#### 输出 Tag 速查
+
+| Tag | 触发条件 | 内容 |
+| :--- | :--- | :--- |
+| `[commit]` | `--commit-trace`（窗口内） | ROB retire：slot、pc、inst、we、rd、wdata、a0 |
+| `[stwb]` | `--commit-trace`（窗口内） | Store Buffer → DCache 写：`addr`、`data`、`op` |
+| `[ldreq]` / `[ldrsp]` | `--commit-trace`（窗口内） | LSU load 请求 / 响应：addr、tag、data、err |
+| `[flush]` | `--commit-trace`（窗口内）或 `--bru-trace` | Pipeline flush：reason、src_pc、redirect_pc、BPU RAS、miss 分类 |
+| `[flushp]` | 同上 | flush 后首个有 commit 的 cycle：惩罚周期数 |
+| `[bru]` | 同上（flush 同拍且 BRU mispred） | BRU 执行细节 |
+| `[bruwb]` | `--bru-trace` | 每拍 BRU writeback 有效：pc、操作数、redirect、mispred |
+| `[fe]` | `--fe-trace` | 取指 PC、slot_valid、FE/内存指令 mismatch、预测 NPC |
+| `[stall]` | `--stall-trace` | 无 commit stall：前端/IFU/解码/rename/ROB/LSU 等快照 |
+| `[progress]` | `--progress` | 周期性仿真心跳 |
+| `[linux-stage]` | `--linux-early-debug` | 启动里程碑（每 stage 仅一次，见下表） |
+| `[debug][...]` | `--linux-early-debug` | satp 变更、页表写、异常 flush、UART 等细粒度调试 |
+| `[commitm]` / `[controlm]` / `[stallm]` / `[stallm2]`–`[stallm6]` / `[ifum]` / `[pred  ]` / `[hotpcm]` / `[hotinstm]` | `--commit-trace` 或 `--bru-trace` | 仿真结束由 `ProfileCollector` 输出的汇总（commit 宽度、控制流、stall 分类、IFU FQ、BPU 命中率、热 PC/指令等） |
+| `HIT GOOD TRAP` / `HIT BAD TRAP` | — | AM 测试 `ebreak`：a0=0 成功 / 非 0 失败 |
+| `IPC=` / `CPI=` | — | 成功 trap 或超时前输出的性能指标 |
+
+#### `--linux-early-debug` 启动阶段标记
+
+启用后，每个关键阶段仅打印一次 `[linux-stage]` 行（含 cycle、pc、inst、priv、satp、CSR、a0/a1/sp/gp 等），典型顺序：
+
+| stage | 含义 |
+| :--- | :--- |
+| `opensbi-reset` | M-mode 复位入口 @ 0x80000000 |
+| `opensbi-dtb-a0` | OpenSBI 将 DTB 地址装入 a0 |
+| `opensbi-init` | OpenSBI 固件主路径 |
+| `opensbi-pre-jump` | 跳转 Linux 前 (hart_switch_mode) |
+| `linux-handoff` | 进入 Linux S-mode 物理入口 |
+| `linux-head` / `linux-decompress` / `linux-gp-init` | head.S / 解压 / gp 初始化 |
+| `linux-dtb-a1` | Linux 收到 a1=DTB |
+| `linux-mmu-enable` | 写 satp 开启 SV32 |
+| `linux-first-ipf` | 开 MMU 后首次 instruction page fault |
+| `linux-trap-redirect` / `linux-trap-vec` | fixmap trap 入口 |
+| `linux-swap-pgdir` | trap 路径切换页表 |
+| `linux-vtext` | 进入内核高地址虚拟文本区 |
+
+实现：`npc/csrc/include/linux_boot_stage.h`。
+
+#### 常用组合示例
+
+```bash
+# AM 基准测试 + profile（run_profile.sh 默认组合）
+make -C npc sim DIFFTEST= IMG=.../dhrystone-riscv32i-npc.bin \
+  ARGS='--commit-trace --bru-trace --stall-trace=100 --progress=50000'
+
+# 限定 commit trace 窗口
+make -C npc sim IMG=.../test.bin ARGS='--commit-trace 100000:150000'
+
+# merge.py 全系统镜像 + 早期调试
+make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
+  ARGS='--max-cycles=2000000 --progress=500000 --linux-early-debug'
+
+# Boot handoff + VirtIO（linux-smoke 风格）
+make -C npc sim DIFFTEST= IMG=~/rv32-linux/out/fw_payload.bin \
+  ARGS='--boot-handoff --dtb ~/rv32-linux/out/npc.dtb \
+        --virtio-blk-image ~/rv32-linux/out/rootfs.img \
+        --firmware-load-base 0x80400000 --max-cycles=80000000 --progress=0'
+
+# 波形（需 VM_TRACE 构建）
+make -C npc sim IMG=.../test.bin ARGS='--trace wave.vcd --max-cycles=50000'
+```
+
+### 5. OpenSBI + Linux 镜像合并与全系统仿真
 
 `merge.py` 生成的是 **OpenSBI + Linux Kernel Image + DTB** 组合镜像，**不是** `echo_payload/payload.bin`。OpenSBI 通过 `FW_JUMP_ADDR=0x80400000` 跳转到 S-mode Linux 入口，并通过 `FW_JUMP_FDT_ADDR=0x87F00000` 将 DTB 地址传给 Linux 的 `a1`。
 
@@ -364,30 +487,7 @@ wsl bash -c "cd /mnt/e/vivado_project/OOOcpu_design/Triathlon && python3 merge.p
 3. **启动 Verilator 仿真 (`make -C npc sim ...`)**
    - **`IMG=...`**: 加载 `fw_combined.bin` 到 `0x80000000`
    - **`DIFFTEST_SO=`**: 置空以禁用 DiffTest（OpenSBI/Linux 涉及 SV32 MMU、特权级 CSR 与外设，bare-metal NEMU 无法对齐）
-   - **`--linux-early-debug`**: 启用 Linux 早期启动调试输出（satp 变更、页故障、异常 flush 等），并输出一次性 `[linux-stage]` 里程碑（pc/inst/a0/a1/sp/gp/satp/CSR 等），由 `npc/csrc/include/linux_boot_stage.h` 实现
-   - **`--commit-trace`**: 可选，输出 commit 级 trace（`[commit]` / `[stwb]` / `[ldreq]` / `[ldrsp]` / `[flush]` / `[bru]` / `[flushp]`）；默认全周期。可限定窗口（窗口外上述 trace 均不打印，profile 统计仍全程收集）：
-     - `--commit-trace START:END` 或 `--commit-trace=START:END`（含首尾 cycle）
-     - `--commit-trace START END`（两个参数）
-     - `--commit-trace-start N` + `--commit-trace-end N`（`end=0` 表示不设上限）
-
-#### `--linux-early-debug` 启动阶段标记
-
-启用 `--linux-early-debug` 后，仿真器对每个关键阶段仅打印一次 `[linux-stage]` 行，典型顺序：
-
-| stage | 含义 |
-| :--- | :--- |
-| `opensbi-reset` | M-mode 复位入口 @ 0x80000000 |
-| `opensbi-dtb-a0` | OpenSBI 将 DTB 地址装入 a0 |
-| `opensbi-init` | OpenSBI 固件主路径 |
-| `opensbi-pre-jump` | 跳转 Linux 前 (hart_switch_mode) |
-| `linux-handoff` | 进入 Linux S-mode 物理入口 |
-| `linux-head` / `linux-decompress` / `linux-gp-init` | head.S / 解压 / gp 初始化 |
-| `linux-dtb-a1` | Linux 收到 a1=DTB |
-| `linux-mmu-enable` | 写 satp 开启 SV32 |
-| `linux-first-ipf` | 开 MMU 后首次 instruction page fault |
-| `linux-trap-redirect` / `linux-trap-vec` | fixmap trap 入口 |
-| `linux-swap-pgdir` | trap 路径切换页表 |
-| `linux-vtext` | 进入内核高地址虚拟文本区 |
+   - 仿真扩展参数见 **§4 仿真器命令行扩展参数**（常用：`--max-cycles`、`--progress`、`--linux-early-debug`、`--commit-trace` 等）
 
 #### echo_payload（可选，独立测试）
 

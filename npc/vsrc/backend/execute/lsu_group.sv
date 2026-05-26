@@ -123,7 +123,13 @@ module lsu_group #(
   int unsigned lsu_stall_trace_log_cnt_q;
   logic [15:0] lsu_stall_streak_q;
   logic lsu_trace_en_q;
+  integer agent_late_fault_log_fd;
+  int unsigned agent_late_fault_log_cnt;
   initial lsu_trace_en_q = $test$plusargs("npc_diag_trace");
+  initial begin
+    agent_late_fault_log_fd = 0;
+    agent_late_fault_log_cnt = 0;
+  end
 
   function automatic logic lsu_diag_watch_pc(input logic [31:0] pc);
     begin
@@ -248,6 +254,7 @@ module lsu_group #(
 
   logic                [             1:0]                     mmu_state_q;
   decode_pkg::uop_t                                            mmu_uop_q;
+  logic                [      Cfg.XLEN-1:0]                   mmu_rs1_data_q;
   logic                [      Cfg.XLEN-1:0]                   mmu_rs2_data_q;
   logic                [ ROB_IDX_WIDTH-1:0]                   mmu_rob_tag_q;
   logic                [  SB_IDX_WIDTH-1:0]                   mmu_sb_id_q;
@@ -275,6 +282,7 @@ module lsu_group #(
   logic [STORE_WB_Q_DEPTH-1:0] store_wb_is_mispred_q;
   logic [STORE_WB_Q_DEPTH-1:0][Cfg.PLEN-1:0] store_wb_redirect_pc_q;
   logic [STORE_WB_Q_DEPTH-1:0] store_wb_has_sq_q;
+  logic [STORE_WB_Q_DEPTH-1:0][Cfg.PLEN-1:0] store_wb_pc_q;
   logic [STORE_WB_Q_IDX_W-1:0] store_wb_head_q, store_wb_tail_q;
   logic [$clog2(STORE_WB_Q_DEPTH+1)-1:0] store_wb_count_q;
   logic store_wb_head_valid;
@@ -285,10 +293,10 @@ module lsu_group #(
   logic store_wb_head_is_mispred;
   logic [Cfg.PLEN-1:0] store_wb_head_redirect_pc;
   logic store_wb_head_has_sq;
+  logic [Cfg.PLEN-1:0] store_wb_head_pc;
 
   logic rsp_id_in_range;
   logic [LANE_SEL_WIDTH-1:0] rsp_lane_idx;
-
   function automatic logic [LANE_SEL_WIDTH-1:0] rr_next_idx(
       input logic [LANE_SEL_WIDTH-1:0] idx
   );
@@ -471,6 +479,14 @@ module lsu_group #(
                                  ((pend_valid_q && (req_is_load || req_is_store) &&
                                    !load_alloc_fire && !store_req_fire) ||
                                   (req_valid_i && (uop_i.is_load || uop_i.is_store) && !req_ready_o));
+  function automatic logic agent_watch_lsu_addr(input logic [31:0] addr);
+    begin
+      agent_watch_lsu_addr = (addr < 32'h00004000) ||
+                             ((addr >= 32'h80000000) && (addr < 32'h80000040)) ||
+                             (addr == 32'h3ffff000);
+    end
+  endfunction
+
 `endif
 
   assign pte_req_valid_o = mmu_pte_req_valid;
@@ -589,6 +605,7 @@ module lsu_group #(
   assign store_wb_head_is_mispred = store_wb_is_mispred_q[store_wb_head_q];
   assign store_wb_head_redirect_pc = store_wb_redirect_pc_q[store_wb_head_q];
   assign store_wb_head_has_sq = store_wb_has_sq_q[store_wb_head_q];
+  assign store_wb_head_pc = store_wb_pc_q[store_wb_head_q];
   assign sq_req_word_addr = {req_eff_addr[Cfg.PLEN-1:SQ_BYTE_OFF_W], {SQ_BYTE_OFF_W{1'b0}}};
   assign sq_store_be = store_be_mask(pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op, req_eff_addr);
   assign sq_load_be = load_be_mask(pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op, req_eff_addr);
@@ -798,6 +815,7 @@ module lsu_group #(
       pend_force_ecause_q <= '0;
       mmu_state_q <= MMU_ST_IDLE;
       mmu_uop_q <= '0;
+      mmu_rs1_data_q <= '0;
       mmu_rs2_data_q <= '0;
       mmu_rob_tag_q <= '0;
       mmu_sb_id_q <= '0;
@@ -810,6 +828,7 @@ module lsu_group #(
       store_wb_is_mispred_q <= '0;
       store_wb_redirect_pc_q <= '0;
       store_wb_has_sq_q <= '0;
+      store_wb_pc_q <= '0;
       store_wb_head_q <= '0;
       store_wb_tail_q <= '0;
       store_wb_count_q <= '0;
@@ -821,6 +840,7 @@ module lsu_group #(
       lsu_mmu_trace_log_cnt_q <= '0;
       lsu_stall_trace_log_cnt_q <= '0;
       lsu_stall_streak_q <= '0;
+      agent_late_fault_log_cnt <= 0;
 `endif
     end else if (flush_i) begin
       pend_valid_q <= 1'b0;
@@ -833,6 +853,7 @@ module lsu_group #(
       pend_force_ecause_q <= '0;
       mmu_state_q <= MMU_ST_IDLE;
       mmu_uop_q <= '0;
+      mmu_rs1_data_q <= '0;
       mmu_rs2_data_q <= '0;
       mmu_rob_tag_q <= '0;
       mmu_sb_id_q <= '0;
@@ -845,6 +866,7 @@ module lsu_group #(
       store_wb_is_mispred_q <= '0;
       store_wb_redirect_pc_q <= '0;
       store_wb_has_sq_q <= '0;
+      store_wb_pc_q <= '0;
       store_wb_head_q <= '0;
       store_wb_tail_q <= '0;
       store_wb_count_q <= '0;
@@ -889,6 +911,7 @@ module lsu_group #(
         end else if (req_need_mmu_walk) begin
           mmu_state_q <= MMU_ST_REQ;
           mmu_uop_q <= uop_i;
+          mmu_rs1_data_q <= rs1_data_i;
           mmu_rs2_data_q <= rs2_data_i;
           mmu_rob_tag_q <= rob_tag_i;
           mmu_sb_id_q <= sb_id_i;
@@ -944,6 +967,27 @@ module lsu_group #(
             lsu_pf_log_cnt_q <= lsu_pf_log_cnt_q + 1'b1;
           end
         end
+        // #region agent log
+        if ((agent_late_fault_log_cnt < 128) &&
+            (mmu_resp_page_fault || agent_watch_lsu_addr(mmu_vaddr_q))) begin
+          if (agent_late_fault_log_fd == 0) begin
+            agent_late_fault_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-61e984.log", "a");
+          end
+          if (agent_late_fault_log_fd != 0) begin
+            $fdisplay(agent_late_fault_log_fd,
+                      "{\"sessionId\":\"61e984\",\"runId\":\"late-fault-trace\",\"hypothesisId\":\"H56,H57,H58,H59\",\"location\":\"lsu_group.sv:mmu-response\",\"message\":\"late-lsu-mmu-response-state\",\"data\":{\"pc\":\"0x%08h\",\"rob\":%0d,\"sb\":%0d,\"vaddr\":\"0x%08h\",\"paddr\":\"0x%08h\",\"pageFault\":%0d,\"isLoad\":%0d,\"isStore\":%0d,\"access\":%0d,\"lsuOp\":%0d,\"rs1\":%0d,\"rs2\":%0d,\"rs1Data\":\"0x%08h\",\"rs2Data\":\"0x%08h\",\"imm\":\"0x%08h\",\"satp\":\"0x%08h\",\"priv\":%0d,\"sum\":%0d,\"mxr\":%0d,\"flush\":%0d,\"pendValid\":%0d,\"robHead\":%0d,\"storeWbCount\":%0d,\"lqCount\":%0d,\"sqCount\":%0d},\"timestamp\":0}",
+                      mmu_uop_q.pc, mmu_rob_tag_q, mmu_sb_id_q, mmu_vaddr_q,
+                      mmu_resp_paddr, mmu_resp_page_fault, mmu_uop_q.is_load,
+                      mmu_uop_q.is_store, mmu_uop_q.is_store ? MMU_ACCESS_STORE : MMU_ACCESS_LOAD,
+                      mmu_uop_q.lsu_op, mmu_uop_q.rs1, mmu_uop_q.rs2,
+                      mmu_rs1_data_q, mmu_rs2_data_q, mmu_uop_q.imm,
+                      mmu_satp_i, mmu_priv_i, mmu_sum_i, mmu_mxr_i, flush_i,
+                      pend_valid_q, rob_head_i, store_wb_count_q, dbg_lq_count_o, dbg_sq_count_o);
+            $fflush(agent_late_fault_log_fd);
+            agent_late_fault_log_cnt <= agent_late_fault_log_cnt + 1;
+          end
+        end
+        // #endregion agent log
 `endif
       end
 
@@ -976,6 +1020,7 @@ module lsu_group #(
         store_wb_is_mispred_q[store_wb_tail_q] <= 1'b0;
         store_wb_redirect_pc_q[store_wb_tail_q] <= '0;
         store_wb_has_sq_q[store_wb_tail_q] <= !store_misaligned && !store_page_fault;
+        store_wb_pc_q[store_wb_tail_q] <= pend_valid_q ? pend_uop_q.pc : uop_i.pc;
         store_wb_tail_q <= store_wbq_next_idx(store_wb_tail_q);
       end
       if (wb_fire && wb_sel_store) begin

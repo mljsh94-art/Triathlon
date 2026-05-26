@@ -36,9 +36,21 @@ module execute_alu #(
   logic alu_diag_trace_en_q;
   logic alu_legacy_trace_en_q;
   logic alu_bsearch_trace_en_q;
+  integer agent_branch_log_fd;
+  int unsigned agent_branch_log_cnt;
+  integer agent_ctrl_log_fd;
+  int unsigned agent_ctrl_log_cnt;
   initial alu_diag_trace_en_q = $test$plusargs("npc_diag_trace");
   initial alu_legacy_trace_en_q = $test$plusargs("npc_diag_alu_legacy");
   initial alu_bsearch_trace_en_q = $test$plusargs("npc_diag_bsearch");
+  initial begin
+    agent_branch_log_fd = 0;
+    agent_branch_log_cnt = 0;
+  end
+  initial begin
+    agent_ctrl_log_fd = 0;
+    agent_ctrl_log_cnt = 0;
+  end
 `endif
 
   // --- 1. 操作数准备 ---
@@ -238,6 +250,7 @@ module execute_alu #(
     end
     if (!rst_ni) begin
       alu_trace_cnt_q <= '0;
+      agent_branch_log_cnt <= 0;
     end else if (alu_diag_trace_en_q && alu_valid_i && watch_pc &&
                  (alu_trace_cnt_q < ALU_TRACE_BUDGET)) begin
       $display("[alu-trace] pc=%h alu_op=%0d br_op=%0d is_word=%0d is_j=%0d is_b=%0d rs1=%h rs2=%h imm=%h op_a=%h op_b=%h res=%h pred_npc=%h mispred=%0d redir=%h rob=%0d ftq=%0d epoch=%0d rvc=%0d",
@@ -247,6 +260,44 @@ module execute_alu #(
                rob_tag_i, uop_i.ftq_id, uop_i.fetch_epoch, uop_i.is_rvc);
       alu_trace_cnt_q <= alu_trace_cnt_q + 32'd1;
     end
+    // #region agent log
+    if (rst_ni && alu_valid_i && (uop_i.pc == 32'hc08181d4) &&
+        (agent_branch_log_cnt < 16)) begin
+      if (agent_branch_log_fd == 0) begin
+        agent_branch_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", "a");
+      end
+      if (agent_branch_log_fd != 0) begin
+        $fdisplay(agent_branch_log_fd,
+                  "{\"sessionId\":\"e93a92\",\"runId\":\"branch-bgeu-trace\",\"hypothesisId\":\"H17,H18,H19\",\"location\":\"alu.sv:branch-execute\",\"message\":\"bgeu-execute-state\",\"data\":{\"pc\":\"0x%08h\",\"brOp\":%0d,\"isBranch\":%0d,\"uopRs1\":%0d,\"uopRs2\":%0d,\"hasRs1\":%0d,\"hasRs2\":%0d,\"rs1\":\"0x%08h\",\"rs2\":\"0x%08h\",\"imm\":\"0x%08h\",\"brTake\":%0d,\"predNpc\":\"0x%08h\",\"actualNpc\":\"0x%08h\",\"mispred\":%0d,\"redirect\":\"0x%08h\",\"rob\":%0d,\"rvc\":%0d},\"timestamp\":0}",
+                  uop_i.pc, uop_i.br_op, uop_i.is_branch, uop_i.rs1, uop_i.rs2,
+                  uop_i.has_rs1, uop_i.has_rs2, rs1_data_i, rs2_data_i,
+                  uop_i.imm, br_take, uop_i.pred_npc, actual_npc, alu_is_mispred_o,
+                  alu_redirect_pc_o, rob_tag_i, uop_i.is_rvc);
+        $fflush(agent_branch_log_fd);
+        agent_branch_log_cnt <= agent_branch_log_cnt + 1;
+      end
+    end
+    // #endregion agent log
+    // #region agent log
+    if (rst_ni && alu_valid_i && control_uop &&
+        (((uop_i.pc >= 32'hc0453d9e) && (uop_i.pc < 32'hc04540d0)) ||
+         ((uop_i.pc >= 32'hc0454b3e) && (uop_i.pc < 32'hc0454c90))) &&
+        (agent_ctrl_log_cnt < 128)) begin
+      if (agent_ctrl_log_fd == 0) begin
+        agent_ctrl_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e8da83.log", "a");
+      end
+      if (agent_ctrl_log_fd != 0) begin
+        $fdisplay(agent_ctrl_log_fd,
+                  "{\"sessionId\":\"e8da83\",\"runId\":\"fdt-control-trace\",\"hypothesisId\":\"H35,H36\",\"location\":\"alu.sv:control-execute\",\"message\":\"control-execute-state\",\"data\":{\"pc\":\"0x%08h\",\"brOp\":%0d,\"isBranch\":%0d,\"isJump\":%0d,\"rs1\":\"0x%08h\",\"rs2\":\"0x%08h\",\"imm\":\"0x%08h\",\"brTake\":%0d,\"predNpc\":\"0x%08h\",\"actualNpc\":\"0x%08h\",\"mispred\":%0d,\"redirect\":\"0x%08h\",\"rob\":%0d,\"rvc\":%0d},\"timestamp\":0}",
+                  uop_i.pc, uop_i.br_op, uop_i.is_branch, uop_i.is_jump,
+                  rs1_data_i, rs2_data_i, uop_i.imm, br_take, uop_i.pred_npc,
+                  actual_npc, alu_is_mispred_o, alu_redirect_pc_o, rob_tag_i,
+                  uop_i.is_rvc);
+        $fflush(agent_ctrl_log_fd);
+        agent_ctrl_log_cnt <= agent_ctrl_log_cnt + 1;
+      end
+    end
+    // #endregion agent log
   end
 `endif
 

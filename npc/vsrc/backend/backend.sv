@@ -413,7 +413,13 @@ module backend #(
   localparam logic [Cfg.PLEN-1:0] DBG_PC_FAULT0 = 32'hc0803dae;
   localparam logic [Cfg.PLEN-1:0] DBG_PC_FAULT1 = 32'hc080ab72;
   logic be_trace_en_q;
+  integer agent_flush_log_fd;
+  int unsigned agent_flush_log_cnt;
   initial be_trace_en_q = $test$plusargs("npc_diag_trace");
+  initial begin
+    agent_flush_log_fd = 0;
+    agent_flush_log_cnt = 0;
+  end
 
   always_ff @(posedge clk_i) begin
     if (rst_ni && be_trace_en_q) begin
@@ -437,6 +443,39 @@ module backend #(
             rob_flush_is_exception, rob_flush_is_branch, rob_flush_is_jump, rob_flush_cause);
       end
     end
+  end
+
+  always_ff @(posedge clk_i) begin
+    // #region agent log
+    if (rst_ni && (agent_flush_log_cnt < 128) &&
+        (backend_flush || rob_flush || csr_irq_trap || rob_sync_exception_valid ||
+         rob_sync_exception_pending_q) &&
+        (((rob_flush_src_pc >= 32'hc0453d9e) && (rob_flush_src_pc < 32'hc04540d0)) ||
+         ((rob_flush_src_pc >= 32'hc0454b3e) && (rob_flush_src_pc < 32'hc0454c90)) ||
+         ((rob_head_pc >= 32'hc0453d9e) && (rob_head_pc < 32'hc04540d0)) ||
+         ((rob_head_pc >= 32'hc0454b3e) && (rob_head_pc < 32'hc0454c90)) ||
+         (rob_sync_exception_valid && (rob_sync_exception_pc[31:24] == 8'hc0)) ||
+         (rob_sync_exception_pending_q && (rob_sync_exception_pc_q[31:24] == 8'hc0)))) begin
+      if (agent_flush_log_fd == 0) begin
+        agent_flush_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e8da83.log", "a");
+      end
+      if (agent_flush_log_fd != 0) begin
+        $fdisplay(agent_flush_log_fd,
+                  "{\"sessionId\":\"e8da83\",\"runId\":\"backend-flush-trace\",\"hypothesisId\":\"H34,H36\",\"location\":\"backend.sv:flush-propagation\",\"message\":\"backend-flush-state\",\"data\":{\"backendFlush\":%0d,\"redirect\":\"0x%08h\",\"robFlush\":%0d,\"robFlushPc\":\"0x%08h\",\"robFlushSrcPc\":\"0x%08h\",\"robFlushMispred\":%0d,\"robFlushException\":%0d,\"robFlushBranch\":%0d,\"robFlushJump\":%0d,\"robCause\":%0d,\"csrTrap\":%0d,\"csrTrapCause\":%0d,\"csrTrapPc\":\"0x%08h\",\"csrTrapRedirect\":\"0x%08h\",\"syncValid\":%0d,\"syncCause\":%0d,\"syncPc\":\"0x%08h\",\"syncTval\":\"0x%08h\",\"syncPending\":%0d,\"pendingCause\":%0d,\"pendingPc\":\"0x%08h\",\"pendingTval\":\"0x%08h\",\"robHead\":%0d,\"robHeadPc\":\"0x%08h\",\"robEmpty\":%0d},\"timestamp\":0}",
+                  backend_flush, backend_redirect_pc_o, rob_flush, rob_flush_pc,
+                  rob_flush_src_pc, rob_flush_is_mispred, rob_flush_is_exception,
+                  rob_flush_is_branch, rob_flush_is_jump, rob_flush_cause,
+                  csr_irq_trap, csr_irq_trap_cause, csr_irq_trap_pc,
+                  csr_irq_trap_redirect_pc, rob_sync_exception_valid,
+                  rob_sync_exception_cause, rob_sync_exception_pc,
+                  rob_sync_exception_tval, rob_sync_exception_pending_q,
+                  rob_sync_exception_cause_q, rob_sync_exception_pc_q,
+                  rob_sync_exception_tval_q, rob_head_ptr, rob_head_pc, rob_empty);
+        $fflush(agent_flush_log_fd);
+        agent_flush_log_cnt <= agent_flush_log_cnt + 1;
+      end
+    end
+    // #endregion agent log
   end
 `endif
 
@@ -850,6 +889,12 @@ module backend #(
 `ifndef SYNTHESIS
   localparam int unsigned BE_OPR_TRACE_BUDGET = 4096;
   logic [31:0] be_opr_trace_cnt_q;
+  integer agent_dispatch_log_fd;
+  int unsigned agent_dispatch_log_cnt;
+  initial begin
+    agent_dispatch_log_fd = 0;
+    agent_dispatch_log_cnt = 0;
+  end
 `endif
 
   // Commit -> ARF read bypass (handles same-cycle commit/rename after flush)
@@ -968,6 +1013,7 @@ module backend #(
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       be_opr_trace_cnt_q <= '0;
+      agent_dispatch_log_cnt <= 0;
     end else if (be_trace_en_q && (be_opr_trace_cnt_q < BE_OPR_TRACE_BUDGET)) begin
       int unsigned trace_inc;
       trace_inc = 0;
@@ -1001,6 +1047,31 @@ module backend #(
         be_opr_trace_cnt_q <= be_opr_trace_cnt_q + trace_inc;
       end
     end
+    // #region agent log
+    if (rst_ni && (agent_dispatch_log_cnt < 16)) begin
+      for (int i = 0; i < DISPATCH_WIDTH; i++) begin
+        if (issue_valid[i] && (rename_sel_uops[i].pc == 32'hc08181d4)) begin
+          if (agent_dispatch_log_fd == 0) begin
+            agent_dispatch_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", "a");
+          end
+          if (agent_dispatch_log_fd != 0) begin
+            $fdisplay(agent_dispatch_log_fd,
+                      "{\"sessionId\":\"e93a92\",\"runId\":\"branch-uop-trace\",\"hypothesisId\":\"H20,H21,H22\",\"location\":\"backend.sv:operand-dispatch\",\"message\":\"bgeu-dispatch-state\",\"data\":{\"pc\":\"0x%08h\",\"slot\":%0d,\"uopRs1\":%0d,\"uopRs2\":%0d,\"hasRs1\":%0d,\"hasRs2\":%0d,\"imm\":\"0x%08h\",\"brOp\":%0d,\"fu\":%0d,\"isBranch\":%0d,\"rs1InRob\":%0d,\"rs1Idx\":%0d,\"rs1Tag\":%0d,\"rs1Ready\":%0d,\"v1\":\"0x%08h\",\"q1\":%0d,\"rs2InRob\":%0d,\"rs2Idx\":%0d,\"rs2Tag\":%0d,\"rs2Ready\":%0d,\"v2\":\"0x%08h\",\"q2\":%0d,\"dst\":%0d,\"predNpc\":\"0x%08h\",\"epoch\":%0d},\"timestamp\":0}",
+                      rename_sel_uops[i].pc, i, rename_sel_uops[i].rs1, rename_sel_uops[i].rs2,
+                      rename_sel_uops[i].has_rs1, rename_sel_uops[i].has_rs2,
+                      rename_sel_uops[i].imm, rename_sel_uops[i].br_op, rename_sel_uops[i].fu,
+                      rename_sel_uops[i].is_branch, issue_rs1_in_rob[i], issue_rs1_idx[i],
+                      issue_rs1_rob_idx[i], issue_r1[i], issue_v1[i], issue_q1[i],
+                      issue_rs2_in_rob[i], issue_rs2_idx[i], issue_rs2_rob_idx[i],
+                      issue_r2[i], issue_v2[i], issue_q2[i], issue_rd_rob_idx[i],
+                      rename_sel_uops[i].pred_npc, rename_sel_uops[i].fetch_epoch);
+            $fflush(agent_dispatch_log_fd);
+            agent_dispatch_log_cnt <= agent_dispatch_log_cnt + 1;
+          end
+        end
+      end
+    end
+    // #endregion agent log
   end
 `endif
 
@@ -1837,6 +1908,15 @@ module backend #(
   logic csr_mstatus_mxr;
   logic csr_sfence_vma_flush;
 
+`ifndef SYNTHESIS
+  integer agent_csr_exc_log_fd;
+  int unsigned agent_csr_exc_log_cnt;
+  initial begin
+    agent_csr_exc_log_fd = 0;
+    agent_csr_exc_log_cnt = 0;
+  end
+`endif
+
   always_comb begin
     csr_rob_exception_inject = rob_sync_exception_pending_q && !csr_en;
     csr_ifetch_fault_inject = ifetch_fault_valid_i && !csr_en && !csr_rob_exception_inject;
@@ -1876,6 +1956,34 @@ module backend #(
       csr_exec_async_tval = '0;
     end
   end
+
+`ifndef SYNTHESIS
+  always_ff @(posedge clk_i) begin
+    // #region agent log
+    if (rst_ni && (agent_csr_exc_log_cnt < 128) &&
+        (rob_sync_exception_valid || rob_sync_exception_pending_q ||
+         csr_rob_exception_inject || csr_irq_trap)) begin
+      if (agent_csr_exc_log_fd == 0) begin
+        agent_csr_exc_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", "a");
+      end
+      if (agent_csr_exc_log_fd != 0) begin
+        $fdisplay(agent_csr_exc_log_fd,
+                  "{\"sessionId\":\"e93a92\",\"runId\":\"csr-exception-trace\",\"hypothesisId\":\"H30,H31,H32\",\"location\":\"backend.sv:csr-exception-handshake\",\"message\":\"csr-exception-handshake-state\",\"data\":{\"robSyncValid\":%0d,\"robSyncCause\":%0d,\"robSyncPc\":\"0x%08h\",\"robSyncTval\":\"0x%08h\",\"pending\":%0d,\"pendingCause\":%0d,\"pendingPc\":\"0x%08h\",\"pendingTval\":\"0x%08h\",\"csrEn\":%0d,\"csrExecValid\":%0d,\"csrRobInject\":%0d,\"csrIfetchInject\":%0d,\"csrAsyncInject\":%0d,\"csrIrqInject\":%0d,\"csrIrqTrap\":%0d,\"csrIrqTrapCause\":%0d,\"csrIrqTrapPc\":\"0x%08h\",\"csrIrqTrapRedirect\":\"0x%08h\",\"backendFlush\":%0d,\"robFlush\":%0d,\"robFlushPc\":\"0x%08h\",\"robFlushSrcPc\":\"0x%08h\",\"robHeadPc\":\"0x%08h\",\"robHeadPtr\":%0d,\"robEmpty\":%0d},\"timestamp\":0}",
+                  rob_sync_exception_valid, rob_sync_exception_cause, rob_sync_exception_pc,
+                  rob_sync_exception_tval, rob_sync_exception_pending_q,
+                  rob_sync_exception_cause_q, rob_sync_exception_pc_q,
+                  rob_sync_exception_tval_q, csr_en, csr_exec_valid,
+                  csr_rob_exception_inject, csr_ifetch_fault_inject, csr_async_exception_inject,
+                  csr_irq_inject, csr_irq_trap, csr_irq_trap_cause, csr_irq_trap_pc,
+                  csr_irq_trap_redirect_pc, backend_flush, rob_flush, rob_flush_pc,
+                  rob_flush_src_pc, rob_head_pc, rob_head_ptr, rob_empty);
+        $fflush(agent_csr_exc_log_fd);
+        agent_csr_exc_log_cnt <= agent_csr_exc_log_cnt + 1;
+      end
+    end
+    // #endregion agent log
+  end
+`endif
 
   execute_csr #(
       .Cfg  (Cfg),

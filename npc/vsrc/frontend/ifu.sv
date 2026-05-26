@@ -222,8 +222,14 @@ module ifu #(
   logic aa_inf_watch_w;
   logic ifu_diag_trace_en_q;
   logic ifu_bsearch_trace_en_q;
+  integer agent_ifu_log_fd;
+  int unsigned agent_ifu_log_cnt;
   initial ifu_diag_trace_en_q = $test$plusargs("npc_diag_trace");
   initial ifu_bsearch_trace_en_q = $test$plusargs("npc_diag_bsearch");
+  initial begin
+    agent_ifu_log_fd = 0;
+    agent_ifu_log_cnt = 0;
+  end
 `endif
 
   logic fault_pending_q;
@@ -488,6 +494,7 @@ module ifu #(
 `ifndef SYNTHESIS
       ifu_pc_dbg_cnt_q <= '0;
       ifu_aa_dbg_cnt_q <= '0;
+      agent_ifu_log_cnt <= 0;
 `endif
 
     end else begin
@@ -629,6 +636,32 @@ module ifu #(
     $display("\n");
 `endif
 `ifndef SYNTHESIS
+    // #region agent log
+    if ((agent_ifu_log_cnt < 16) &&
+        ((req_issue_fire_w && (req_head_pc_w >= 32'hc08181c0) &&
+          (req_head_pc_w <= 32'hc08181f0)) ||
+         (rsp_capture_w && (inf_head_pc_w >= 32'hc08181c0) &&
+          (inf_head_pc_w <= 32'hc08181f0)) ||
+         (ibuf_pop_w && (ifu_ibuffer_rsp_pc_o >= 32'hc08181c0) &&
+          (ifu_ibuffer_rsp_pc_o <= 32'hc08181f0)))) begin
+      if (agent_ifu_log_fd == 0) begin
+        agent_ifu_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", "a");
+      end
+      if (agent_ifu_log_fd != 0) begin
+        $fdisplay(agent_ifu_log_fd,
+                  "{\"sessionId\":\"e93a92\",\"runId\":\"frontend-fetch-trace\",\"hypothesisId\":\"H23,H24,H26\",\"location\":\"ifu.sv:fetch-response\",\"message\":\"target-ifu-state\",\"data\":{\"reqFire\":%0d,\"reqPc\":\"0x%08h\",\"issuePaddr\":\"0x%08h\",\"rspCapture\":%0d,\"infPc\":\"0x%08h\",\"ibufPop\":%0d,\"outPc\":\"0x%08h\",\"rsp0\":\"0x%08h\",\"rsp1\":\"0x%08h\",\"rsp2\":\"0x%08h\",\"rsp3\":\"0x%08h\",\"slotValid\":\"0x%0h\",\"pred0\":\"0x%08h\",\"pred1\":\"0x%08h\",\"epoch\":%0d,\"satp\":\"0x%08h\"},\"timestamp\":0}",
+                  req_issue_fire_w, req_head_pc_w, issue_paddr_w, rsp_capture_w,
+                  inf_head_pc_w, ibuf_pop_w, ifu_ibuffer_rsp_pc_o,
+                  icache2ifu_rsp_data_i[0], icache2ifu_rsp_data_i[1],
+                  icache2ifu_rsp_data_i[2], icache2ifu_rsp_data_i[3],
+                  rsp_slot_valid_w, rsp_pred_npc_w[0], rsp_pred_npc_w[1],
+                  fetch_epoch_q, mmu_satp_i);
+        $fflush(agent_ifu_log_fd);
+        agent_ifu_log_cnt <= agent_ifu_log_cnt + 1;
+      end
+    end
+    // #endregion agent log
+
     if (ifu_diag_trace_en_q && req_issue_fire_w && (ifu_pc_dbg_cnt_q < IFU_PC_DBG_BUDGET) && (
         ((req_head_pc_w & 32'hfffff000) == 32'hc0800000) ||
         ((req_head_pc_w & 32'hfffff000) == 32'hc0401000) ||

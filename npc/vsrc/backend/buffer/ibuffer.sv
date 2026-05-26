@@ -82,6 +82,14 @@ module ibuffer #(
   logic carry_valid_next_w;
   logic [15:0] carry_half_next_w;
   logic [Cfg.PLEN-1:0] carry_pc_next_w;
+`ifndef SYNTHESIS
+  integer agent_ibuf_log_fd;
+  int unsigned agent_ibuf_log_cnt;
+  initial begin
+    agent_ibuf_log_fd = 0;
+    agent_ibuf_log_cnt = 0;
+  end
+`endif
 
   for (genvar i = 0; i < FE_EXPAND_MAX; i++) begin : gen_ibuf_rvc_dec
     compressed_decoder u_compressed_decoder (
@@ -379,6 +387,9 @@ module ibuffer #(
       carry_valid_q <= 1'b0;
       carry_half_q <= '0;
       carry_pc_q <= '0;
+`ifndef SYNTHESIS
+      agent_ibuf_log_cnt <= 0;
+`endif
     end else begin
       wr_ptr_q <= wr_ptr_d;
       rd_ptr_q <= rd_ptr_d;
@@ -387,13 +398,41 @@ module ibuffer #(
         carry_valid_q <= 1'b0;
         carry_half_q <= '0;
         carry_pc_q <= '0;
-      end else begin
+      end else if (fe_fire_w) begin
         carry_valid_q <= carry_valid_next_w;
         carry_half_q <= carry_half_next_w;
         carry_pc_q <= carry_pc_next_w;
       end
       // TODO: 优化为只写入被更新的那些位置
       fifo_q   <= fifo_d;
+`ifndef SYNTHESIS
+      // #region agent log
+      if ((agent_ibuf_log_cnt < 16) &&
+          ((fe_fire_w && (fe_pc_i >= 32'hc08181c0) && (fe_pc_i <= 32'hc08181f0)) ||
+           ((ibuf_valid_o && ibuf_ready_i) &&
+            (((ibuf_pcs_o[0] >= 32'hc08181c0) && (ibuf_pcs_o[0] <= 32'hc08181f0)) ||
+             ((ibuf_pcs_o[1] >= 32'hc08181c0) && (ibuf_pcs_o[1] <= 32'hc08181f0)) ||
+             ((ibuf_pcs_o[2] >= 32'hc08181c0) && (ibuf_pcs_o[2] <= 32'hc08181f0)) ||
+             ((ibuf_pcs_o[3] >= 32'hc08181c0) && (ibuf_pcs_o[3] <= 32'hc08181f0)))))) begin
+        if (agent_ibuf_log_fd == 0) begin
+          agent_ibuf_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", "a");
+        end
+        if (agent_ibuf_log_fd != 0) begin
+          $fdisplay(agent_ibuf_log_fd,
+                    "{\"sessionId\":\"e93a92\",\"runId\":\"frontend-fetch-trace\",\"hypothesisId\":\"H24,H26\",\"location\":\"ibuffer.sv:rvc-expand\",\"message\":\"target-ibuf-state\",\"data\":{\"feFire\":%0d,\"fePc\":\"0x%08h\",\"fe0\":\"0x%08h\",\"fe1\":\"0x%08h\",\"fe2\":\"0x%08h\",\"fe3\":\"0x%08h\",\"feSlotValid\":\"0x%0h\",\"entryCount\":%0d,\"carryValid\":%0d,\"carryHalf\":\"0x%04h\",\"entry0Pc\":\"0x%08h\",\"entry0\":\"0x%08h\",\"entry1Pc\":\"0x%08h\",\"entry1\":\"0x%08h\",\"entry2Pc\":\"0x%08h\",\"entry2\":\"0x%08h\",\"out0Pc\":\"0x%08h\",\"out0\":\"0x%08h\",\"out1Pc\":\"0x%08h\",\"out1\":\"0x%08h\",\"out2Pc\":\"0x%08h\",\"out2\":\"0x%08h\",\"out3Pc\":\"0x%08h\",\"out3\":\"0x%08h\"},\"timestamp\":0}",
+                    fe_fire_w, fe_pc_i, fe_instrs_i[0], fe_instrs_i[1], fe_instrs_i[2],
+                    fe_instrs_i[3], fe_slot_valid_i, fe_valid_entry_count_w, carry_valid_q,
+                    carry_half_q, fe_valid_entries_w[0].pc, fe_valid_entries_w[0].instr,
+                    fe_valid_entries_w[1].pc, fe_valid_entries_w[1].instr,
+                    fe_valid_entries_w[2].pc, fe_valid_entries_w[2].instr,
+                    ibuf_pcs_o[0], ibuf_instrs_o[0], ibuf_pcs_o[1], ibuf_instrs_o[1],
+                    ibuf_pcs_o[2], ibuf_instrs_o[2], ibuf_pcs_o[3], ibuf_instrs_o[3]);
+          $fflush(agent_ibuf_log_fd);
+          agent_ibuf_log_cnt <= agent_ibuf_log_cnt + 1;
+        end
+      end
+      // #endregion agent log
+`endif
     end
   end
 

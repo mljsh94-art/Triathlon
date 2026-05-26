@@ -137,14 +137,35 @@ module rob #(
   logic [31:0] rob_tag_trace_cnt_q;
   logic rob_trace_en_q;
   logic rob_tag_trace_en_q;
+  integer agent_rob_exc_log_fd;
+  int unsigned agent_rob_exc_log_cnt;
+  integer agent_rob_ctrl_log_fd;
+  int unsigned agent_rob_ctrl_log_cnt;
+  integer agent_late_head_log_fd;
+  int unsigned agent_late_head_log_cnt;
+  logic [PTR_WIDTH-1:0] agent_late_head_last_q;
+  logic [$clog2(ROB_DEPTH+1)-1:0] agent_late_count_last_q;
   initial rob_trace_en_q = $test$plusargs("npc_diag_trace");
   initial rob_tag_trace_en_q = $test$plusargs("npc_diag_robtag");
+  initial begin
+    agent_rob_exc_log_fd = 0;
+    agent_rob_exc_log_cnt = 0;
+  end
+  initial begin
+    agent_rob_ctrl_log_fd = 0;
+    agent_rob_ctrl_log_cnt = 0;
+    agent_late_head_log_fd = 0;
+    agent_late_head_log_cnt = 0;
+    agent_late_head_last_q = '0;
+    agent_late_count_last_q = '0;
+  end
 
   function automatic logic watch_kernel_pc(input logic [Cfg.PLEN-1:0] pc);
     begin
       watch_kernel_pc = (pc[31:28] == 4'hc);
     end
   endfunction
+
 `endif
 
   typedef struct packed {
@@ -562,6 +583,151 @@ module rob #(
         rob_tag_trace_cnt_q <= rob_tag_trace_cnt_q + trace_inc[31:0];
       end
     end
+  end
+
+  always_ff @(posedge clk_i) begin
+    // #region agent log
+    if (rst_ni && (agent_rob_exc_log_cnt < 128)) begin
+      for (int k = 0; k < WB_WIDTH; k++) begin
+        if (wb_valid_i[k] && wb_exception_i[k] &&
+            ((wb_ecause_i[k] == 5'd13) || (wb_ecause_i[k] == 5'd15))) begin
+          if (agent_rob_exc_log_fd == 0) begin
+            agent_rob_exc_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", "a");
+          end
+          if (agent_rob_exc_log_fd != 0) begin
+            $fdisplay(agent_rob_exc_log_fd,
+                      "{\"sessionId\":\"e93a92\",\"runId\":\"rob-exception-trace\",\"hypothesisId\":\"H30,H31,H32,H33\",\"location\":\"rob.sv:exception-writeback\",\"message\":\"rob-exception-wb-state\",\"data\":{\"lane\":%0d,\"rob\":%0d,\"pc\":\"0x%08h\",\"valid\":%0d,\"complete\":%0d,\"oldException\":%0d,\"wbData\":\"0x%08h\",\"wbCause\":%0d,\"head\":%0d,\"tail\":%0d,\"count\":%0d,\"flushI\":%0d,\"flushO\":%0d,\"headPc\":\"0x%08h\"},\"timestamp\":0}",
+                      k, wb_rob_index_i[k], rob_ram[wb_rob_index_i[k]].pc,
+                      rob_ram[wb_rob_index_i[k]].valid, rob_ram[wb_rob_index_i[k]].complete,
+                      rob_ram[wb_rob_index_i[k]].exception, wb_data_i[k], wb_ecause_i[k],
+                      head_ptr_q, tail_ptr_q, count_q, flush_i, flush_o, rob_ram[head_ptr_q].pc);
+            $fflush(agent_rob_exc_log_fd);
+            agent_rob_exc_log_cnt <= agent_rob_exc_log_cnt + 1;
+          end
+        end
+      end
+
+      for (int i = 0; i < COMMIT_WIDTH; i++) begin
+        logic [PTR_WIDTH-1:0] idx;
+        idx = head_ptr_q + i[PTR_WIDTH-1:0];
+        if ((count_q > i) && rob_ram[idx].complete && rob_ram[idx].exception &&
+            ((rob_ram[idx].ecause == 5'd13) || (rob_ram[idx].ecause == 5'd15))) begin
+          if (agent_rob_exc_log_fd == 0) begin
+            agent_rob_exc_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", "a");
+          end
+          if (agent_rob_exc_log_fd != 0) begin
+            $fdisplay(agent_rob_exc_log_fd,
+                      "{\"sessionId\":\"e93a92\",\"runId\":\"rob-exception-trace\",\"hypothesisId\":\"H30,H31,H32,H33\",\"location\":\"rob.sv:exception-head\",\"message\":\"rob-exception-head-state\",\"data\":{\"slot\":%0d,\"rob\":%0d,\"pc\":\"0x%08h\",\"cause\":%0d,\"tval\":\"0x%08h\",\"head\":%0d,\"tail\":%0d,\"count\":%0d,\"stopCommit\":%0d,\"syncValid\":%0d,\"syncCause\":%0d,\"syncPc\":\"0x%08h\",\"syncTval\":\"0x%08h\",\"flushI\":%0d,\"flushO\":%0d},\"timestamp\":0}",
+                      i, idx, rob_ram[idx].pc, rob_ram[idx].ecause, rob_ram[idx].data,
+                      head_ptr_q, tail_ptr_q, count_q, stop_commit, sync_exception_valid_o,
+                      sync_exception_cause_o, sync_exception_pc_o, sync_exception_tval_o,
+                      flush_i, flush_o);
+            $fflush(agent_rob_exc_log_fd);
+            agent_rob_exc_log_cnt <= agent_rob_exc_log_cnt + 1;
+          end
+        end
+      end
+    end
+    // #endregion agent log
+  end
+
+  always_ff @(posedge clk_i) begin
+    // #region agent log
+    if (rst_ni && (agent_late_head_log_cnt < 256) && (count_q != '0) &&
+        (rob_ram[head_ptr_q].pc[31:28] == 4'hc) &&
+        (flush_o || !head_fast_complete[0] || rob_ram[head_ptr_q].is_mispred ||
+         rob_ram[head_ptr_q].exception || (count_q >= (ROB_DEPTH - COMMIT_WIDTH))) &&
+        ((agent_late_head_log_cnt < 32) || flush_o ||
+         (head_ptr_q != agent_late_head_last_q) || (count_q != agent_late_count_last_q))) begin
+      automatic logic [PTR_WIDTH-1:0] idx0;
+      automatic logic [PTR_WIDTH-1:0] idx1;
+      automatic logic [PTR_WIDTH-1:0] idx2;
+      automatic logic [PTR_WIDTH-1:0] idx3;
+      idx0 = head_ptr_q;
+      idx1 = head_ptr_q + PTR_WIDTH'(1);
+      idx2 = head_ptr_q + PTR_WIDTH'(2);
+      idx3 = head_ptr_q + PTR_WIDTH'(3);
+      if (agent_late_head_log_fd == 0) begin
+        agent_late_head_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-61e984.log", "a");
+      end
+      if (agent_late_head_log_fd != 0) begin
+        $fdisplay(agent_late_head_log_fd,
+                  "{\"sessionId\":\"61e984\",\"runId\":\"late-fault-trace\",\"hypothesisId\":\"H60,H61,H62,H63\",\"location\":\"rob.sv:late-head\",\"message\":\"late-rob-head-state\",\"data\":{\"head\":%0d,\"tail\":%0d,\"count\":%0d,\"stopCommit\":%0d,\"flushI\":%0d,\"flushO\":%0d,\"flushPc\":\"0x%08h\",\"headFastComplete\":%0d,\"h0Pc\":\"0x%08h\",\"h0Valid\":%0d,\"h0Complete\":%0d,\"h0Fu\":%0d,\"h0Exception\":%0d,\"h0Cause\":%0d,\"h0Mispred\":%0d,\"h0Redirect\":\"0x%08h\",\"h1Pc\":\"0x%08h\",\"h1Valid\":%0d,\"h1Complete\":%0d,\"h1Fu\":%0d,\"h1Exception\":%0d,\"h1Mispred\":%0d,\"h2Pc\":\"0x%08h\",\"h2Valid\":%0d,\"h2Complete\":%0d,\"h2Fu\":%0d,\"h2Exception\":%0d,\"h2Mispred\":%0d,\"h3Pc\":\"0x%08h\",\"h3Valid\":%0d,\"h3Complete\":%0d,\"h3Fu\":%0d,\"h3Exception\":%0d,\"h3Mispred\":%0d},\"timestamp\":0}",
+                  head_ptr_q, tail_ptr_q, count_q, stop_commit, flush_i, flush_o,
+                  flush_pc_o, head_fast_complete[0],
+                  rob_ram[idx0].pc, rob_ram[idx0].valid, rob_ram[idx0].complete,
+                  rob_ram[idx0].fu_type, rob_ram[idx0].exception, rob_ram[idx0].ecause,
+                  rob_ram[idx0].is_mispred, rob_ram[idx0].redirect_pc,
+                  rob_ram[idx1].pc, rob_ram[idx1].valid, rob_ram[idx1].complete,
+                  rob_ram[idx1].fu_type, rob_ram[idx1].exception, rob_ram[idx1].is_mispred,
+                  rob_ram[idx2].pc, rob_ram[idx2].valid, rob_ram[idx2].complete,
+                  rob_ram[idx2].fu_type, rob_ram[idx2].exception, rob_ram[idx2].is_mispred,
+                  rob_ram[idx3].pc, rob_ram[idx3].valid, rob_ram[idx3].complete,
+                  rob_ram[idx3].fu_type, rob_ram[idx3].exception, rob_ram[idx3].is_mispred);
+        $fflush(agent_late_head_log_fd);
+        agent_late_head_log_cnt <= agent_late_head_log_cnt + 1;
+        agent_late_head_last_q <= head_ptr_q;
+        agent_late_count_last_q <= count_q;
+      end
+    end
+    // #endregion agent log
+  end
+
+  always_ff @(posedge clk_i) begin
+    // #region agent log
+    if (rst_ni && (agent_rob_ctrl_log_cnt < 160)) begin
+      for (int k = 0; k < WB_WIDTH; k++) begin
+        if (wb_valid_i[k] && wb_exception_i[k] &&
+            ((wb_ecause_i[k] == 5'd13) || (wb_ecause_i[k] == 5'd15)) &&
+            (agent_rob_ctrl_log_cnt < 160)) begin
+          automatic int exc_slot;
+          automatic int older_mispred_slot;
+          automatic logic [PTR_WIDTH-1:0] older_mispred_idx;
+          exc_slot = -1;
+          older_mispred_slot = -1;
+          older_mispred_idx = '0;
+          for (int s = 0; s < ROB_DEPTH; s++) begin
+            logic [PTR_WIDTH-1:0] scan_idx;
+            scan_idx = head_ptr_q + PTR_WIDTH'(s);
+            if ((s < count_q) && (scan_idx == wb_rob_index_i[k])) begin
+              exc_slot = s;
+            end
+          end
+          for (int s = 0; s < ROB_DEPTH; s++) begin
+            logic [PTR_WIDTH-1:0] scan_idx;
+            scan_idx = head_ptr_q + PTR_WIDTH'(s);
+            if ((s < count_q) && (exc_slot >= 0) && (s < exc_slot) &&
+                rob_ram[scan_idx].valid && rob_ram[scan_idx].complete &&
+                rob_ram[scan_idx].is_mispred && (older_mispred_slot < 0)) begin
+              older_mispred_slot = s;
+              older_mispred_idx = scan_idx;
+            end
+          end
+          // #region agent log
+          if ((agent_rob_ctrl_log_cnt < 160) && rob_ram[wb_rob_index_i[k]].pc[31:24] == 8'hc0) begin
+            if (agent_rob_ctrl_log_fd == 0) begin
+              agent_rob_ctrl_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-61e984.log", "a");
+            end
+            if (agent_rob_ctrl_log_fd != 0) begin
+              $fdisplay(agent_rob_ctrl_log_fd,
+                        "{\"sessionId\":\"61e984\",\"runId\":\"late-fault-trace\",\"hypothesisId\":\"H56,H57,H60\",\"location\":\"rob.sv:page-fault-writeback\",\"message\":\"late-rob-pagefault-wb-state\",\"data\":{\"lane\":%0d,\"rob\":%0d,\"pc\":\"0x%08h\",\"tval\":\"0x%08h\",\"cause\":%0d,\"excSlot\":%0d,\"olderMispred\":%0d,\"olderMispredSlot\":%0d,\"olderMispredRob\":%0d,\"olderMispredPc\":\"0x%08h\",\"olderRedirect\":\"0x%08h\",\"head\":%0d,\"tail\":%0d,\"count\":%0d,\"headPc\":\"0x%08h\",\"headComplete\":%0d,\"headException\":%0d,\"headCause\":%0d,\"flushI\":%0d,\"flushO\":%0d,\"flushPc\":\"0x%08h\"},\"timestamp\":0}",
+                        k, wb_rob_index_i[k], rob_ram[wb_rob_index_i[k]].pc,
+                        wb_data_i[k], wb_ecause_i[k], exc_slot, (older_mispred_slot >= 0),
+                        older_mispred_slot, older_mispred_idx,
+                        (older_mispred_slot >= 0) ? rob_ram[older_mispred_idx].pc : '0,
+                        (older_mispred_slot >= 0) ? rob_ram[older_mispred_idx].redirect_pc : '0,
+                        head_ptr_q, tail_ptr_q, count_q, rob_ram[head_ptr_q].pc,
+                        head_fast_complete[0], rob_ram[head_ptr_q].exception,
+                        rob_ram[head_ptr_q].ecause, flush_i, flush_o, flush_pc_o);
+              $fflush(agent_rob_ctrl_log_fd);
+              agent_rob_ctrl_log_cnt <= agent_rob_ctrl_log_cnt + 1;
+            end
+          end
+          // #endregion agent log
+        end
+      end
+    end
+    // #endregion agent log
   end
 `endif
 

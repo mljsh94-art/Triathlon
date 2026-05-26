@@ -37,7 +37,13 @@ module decoder #(
   localparam int unsigned DEC_PC_DBG_BUDGET = 1024;
   logic [31:0] dec_pc_dbg_cnt_q;
   logic dec_diag_trace_en_q;
+  integer agent_decode_log_fd;
+  int unsigned agent_decode_log_cnt;
   initial dec_diag_trace_en_q = $test$plusargs("npc_diag_trace");
+  initial begin
+    agent_decode_log_fd = 0;
+    agent_decode_log_cnt = 0;
+  end
 `endif
 
   // ----------------------------------------------------------------------
@@ -683,6 +689,7 @@ module decoder #(
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       dec_pc_dbg_cnt_q <= '0;
+      agent_decode_log_cnt <= 0;
     end else if (dec_diag_trace_en_q && ibuf2dec_valid_i && backend2dec_ready_i) begin
       logic [31:0] dec_pc_dbg_cnt_n;
       dec_pc_dbg_cnt_n = dec_pc_dbg_cnt_q;
@@ -704,6 +711,29 @@ module decoder #(
       end
       dec_pc_dbg_cnt_q <= dec_pc_dbg_cnt_n;
     end
+    // #region agent log
+    if (rst_ni && ibuf2dec_valid_i && backend2dec_ready_i &&
+        (agent_decode_log_cnt < 16)) begin
+      for (int i = 0; i < DECODE_WIDTH; i++) begin
+        if (ibuf_slot_valid_i[i] && (ibuf_pcs_i[i] == 32'hc08181d4)) begin
+          if (agent_decode_log_fd == 0) begin
+            agent_decode_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", "a");
+          end
+          if (agent_decode_log_fd != 0) begin
+            $fdisplay(agent_decode_log_fd,
+                      "{\"sessionId\":\"e93a92\",\"runId\":\"branch-uop-trace\",\"hypothesisId\":\"H20,H21,H22\",\"location\":\"decoder.sv:decode\",\"message\":\"bgeu-decode-state\",\"data\":{\"pc\":\"0x%08h\",\"instr\":\"0x%08h\",\"slot\":%0d,\"valid\":%0d,\"uopRs1\":%0d,\"uopRs2\":%0d,\"uopImm\":\"0x%08h\",\"brOp\":%0d,\"fu\":%0d,\"isBranch\":%0d,\"predNpc\":\"0x%08h\",\"isRvc\":%0d,\"ftq\":%0d,\"epoch\":%0d},\"timestamp\":0}",
+                      ibuf_pcs_i[i], ibuf_instrs_i[i], i, dec_uops_o[i].valid,
+                      dec_uops_o[i].rs1, dec_uops_o[i].rs2, dec_uops_o[i].imm,
+                      dec_uops_o[i].br_op, dec_uops_o[i].fu, dec_uops_o[i].is_branch,
+                      dec_uops_o[i].pred_npc, dec_uops_o[i].is_rvc,
+                      dec_uops_o[i].ftq_id, dec_uops_o[i].fetch_epoch);
+            $fflush(agent_decode_log_fd);
+            agent_decode_log_cnt <= agent_decode_log_cnt + 1;
+          end
+        end
+      end
+    end
+    // #endregion agent log
   end
 `endif
 
