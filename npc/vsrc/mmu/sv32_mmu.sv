@@ -332,11 +332,12 @@ module sv32_mmu #(
 `endif
             if (pte_invalid(pte)) begin
 `ifndef SYNTHESIS
-              if (mmu_pf_log_cnt_q < MMU_PF_LOG_BUDGET) begin
-                $display("[mmu-pf-l1] reason=invalid vaddr=%h pte_addr=%h pte=%h access=%0d priv=%0d sum=%0d mxr=%0d",
-                         req_vaddr_q, l1_pte_addr_w, pte, req_access_q, req_priv_q, req_sum_q, req_mxr_q);
-                mmu_pf_log_cnt_q <= mmu_pf_log_cnt_q + 1'b1;
-              end
+              // Suppress noisy wrong-path L1 invalid page-fault prints during Linux boot.
+              // if (mmu_pf_log_cnt_q < MMU_PF_LOG_BUDGET) begin
+              //   $display("[mmu-pf-l1] reason=invalid vaddr=%h pte_addr=%h pte=%h access=%0d priv=%0d sum=%0d mxr=%0d",
+              //            req_vaddr_q, l1_pte_addr_w, pte, req_access_q, req_priv_q, req_sum_q, req_mxr_q);
+              //   mmu_pf_log_cnt_q <= mmu_pf_log_cnt_q + 1'b1;
+              // end
 `endif
               state_q <= ST_IDLE;
               resp_valid_q <= 1'b1;

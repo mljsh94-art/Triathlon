@@ -166,6 +166,7 @@ module execute_csr #(
   logic [Cfg.PLEN-1:0] trap_pc;
   logic [Cfg.PLEN-1:0] trap_redirect_pc;
   logic trap_delegate_to_s;
+  logic [1:0] trap_record_priv;
   logic regular_valid;
   logic satp_write_flush;
 
@@ -412,10 +413,19 @@ module execute_csr #(
   end
 
   always_comb begin
+    trap_record_priv = current_priv;
+    if (trap_take && uop_i.is_ecall) begin
+      unique case (trap_ecause)
+        EXC_ECALL_MMODE: trap_record_priv = PRIV_LVL_M;
+        EXC_ECALL_SMODE: trap_record_priv = PRIV_LVL_S;
+        default: trap_record_priv = PRIV_LVL_U;
+      endcase
+    end
+
     mstatus_trap_next = csr_mstatus;
     mstatus_trap_next[MSTATUS_MPIE_BIT] = csr_mstatus[MSTATUS_MIE_BIT];
     mstatus_trap_next[MSTATUS_MIE_BIT] = 1'b0;
-    mstatus_trap_next[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] = current_priv;
+    mstatus_trap_next[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] = trap_record_priv;
 
     mstatus_s_trap_next = csr_mstatus;
     mstatus_s_trap_next[MSTATUS_SPIE_BIT] = csr_mstatus[MSTATUS_SIE_BIT];
@@ -487,7 +497,7 @@ module execute_csr #(
         endcase
       end
 
-      if (trap_take) begin
+      if (interrupt_take || async_exception_take) begin
         if (trap_to_s_mode) begin
           csr_sepc <= XLEN'(trap_pc);
           csr_scause <= trap_scause;

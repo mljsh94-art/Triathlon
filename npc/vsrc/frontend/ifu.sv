@@ -10,61 +10,61 @@ import global_config_pkg::*;
 module ifu #(
     parameter config_pkg::cfg_t Cfg = config_pkg::EmptyCfg
 ) (
-    input logic clk,
-    input logic rst,
+    input logic clk,   // 核心时钟信号
+    input logic rst,   // 高电平复位信号 (ifu 内部逻辑使用)
 
-    //--- 1.BPU握手接口 ---
-    output handshake_t                ifu2bpu_handshake_o,
-    input  handshake_t                bpu2ifu_handshake_i,
-    output logic       [Cfg.PLEN-1:0] ifu2bpu_pc_o,
-    input  logic       [Cfg.PLEN-1:0] bpu2ifu_predicted_pc_i,
-    input  logic                       bpu2ifu_pred_slot_valid_i,
-    input  logic [$clog2(Cfg.INSTR_PER_FETCH)-1:0] bpu2ifu_pred_slot_idx_i,
-    input  logic       [Cfg.PLEN-1:0] bpu2ifu_pred_target_i,
+    //--- 1.BPU握手接口 (分支预测交互，申请下一拍取指地址) ---
+    output handshake_t                ifu2bpu_handshake_o,      // IFU 发送给 BPU 的请求有效/就绪握手信号
+    input  handshake_t                bpu2ifu_handshake_i,      // BPU 返回给 IFU 的响应有效/就绪握手信号
+    output logic       [Cfg.PLEN-1:0] ifu2bpu_pc_o,             // IFU 送给 BPU 进行查找和预测的当前 PC
+    input  logic       [Cfg.PLEN-1:0] bpu2ifu_predicted_pc_i,   // BPU 预测的下一条取指包的 PC 目标
+    input  logic                       bpu2ifu_pred_slot_valid_i,// 预测有效标志：表示预测出的跳转在这个取指包内确实存在
+    input  logic [$clog2(Cfg.INSTR_PER_FETCH)-1:0] bpu2ifu_pred_slot_idx_i, // 指明是取指包中第几个槽位触发了跳转
+    input  logic       [Cfg.PLEN-1:0] bpu2ifu_pred_target_i,    // 预测的跳转目标地址
 
-    //--- 2.ICache请求接口 ---
-    output handshake_t ifu2icache_req_handshake_o,
-    input handshake_t icache2ifu_rsp_handshake_i,
-    output logic [Cfg.VLEN-1:0] ifu2icache_req_addr_o,
-    input  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] icache2ifu_rsp_data_i,
-    output logic flush_icache_o,
+    //--- 2.ICache请求接口 (缓存提货，获取指令数据) ---
+    output handshake_t ifu2icache_req_handshake_o,  // 发送给 ICache 的取指请求握手 (valid/ready)
+    input handshake_t icache2ifu_rsp_handshake_i,   // ICache 返回指令数据的响应握手 (valid/ready)
+    output logic [Cfg.VLEN-1:0] ifu2icache_req_addr_o, // 发给 ICache 的取指地址 (物理/虚拟地址)
+    input  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] icache2ifu_rsp_data_i, // ICache 返回的一整组指令数据
+    output logic flush_icache_o,                    // 冲刷 ICache 缓存 (如切换页表或发生 SFENCE.VMA 时)
 
-    //--- 3.Ibuffer响应接口 ---
-    output logic ifu_ibuffer_rsp_valid_o,
-    output logic [Cfg.PLEN-1:0] ifu_ibuffer_rsp_pc_o,
-    input  logic                      ibuffer_ifu_rsp_ready_i,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ifu_ibuffer_rsp_data_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0] ifu_ibuffer_rsp_slot_valid_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ifu_ibuffer_rsp_pred_npc_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] ifu_ibuffer_rsp_ftq_id_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ifu_ibuffer_rsp_fetch_epoch_o,
+    //--- 3.Ibuffer响应接口 (交付给后端译码阶段) ---
+    output logic ifu_ibuffer_rsp_valid_o,           // 发送给 IBuffer 的交货有效信号
+    input  logic                      ibuffer_ifu_rsp_ready_i, // 后端 IBuffer 反馈的就绪信号 (可签收)
+    output logic [Cfg.PLEN-1:0] ifu_ibuffer_rsp_pc_o, // 这一包指令的起始虚拟 PC 地址
+    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ifu_ibuffer_rsp_data_o, // 发送给后端的指令数据包
+    output logic [Cfg.INSTR_PER_FETCH-1:0] ifu_ibuffer_rsp_slot_valid_o, // 包内各指令槽位的有效性
+    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ifu_ibuffer_rsp_pred_npc_o, // 携带的每条指令对应的预测下一拍 PC
+    output logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] ifu_ibuffer_rsp_ftq_id_o, // 指令对应分配的 FTQ ID
+    output logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ifu_ibuffer_rsp_fetch_epoch_o, // 当前取指所属的“时空代数” Epoch，用于识别/丢弃错路指令
 
-    //--- 4.后端冲刷/重定向接口 ---
-    input logic                flush_i,
-    input logic [Cfg.PLEN-1:0] redirect_pc_i,
+    //--- 4.后端冲刷/重定向接口 (纠错机制) ---
+    input logic                flush_i,       // 后端发起的流水线强行冲刷信号 (清除错路指令)
+    input logic [Cfg.PLEN-1:0] redirect_pc_i, // 后端命令的重新定向新 PC 地址
 
-    //--- 5.I-side MMU control + page table walker ---
-    input logic [31:0] mmu_satp_i,
-    input logic [1:0]  mmu_priv_i,
-    input logic        mmu_sum_i,
-    input logic        mmu_mxr_i,
-    input logic        mmu_sfence_vma_i,
-    output logic       pte_req_valid_o,
-    input logic        pte_req_ready_i,
-    output logic [31:0] pte_req_paddr_o,
-    input logic        pte_rsp_valid_i,
-    input logic [31:0] pte_rsp_data_i,
-    output logic       pte_upd_valid_o,
-    input logic        pte_upd_ready_i,
-    output logic [31:0] pte_upd_paddr_o,
-    output logic [31:0] pte_upd_data_o,
+    //--- 5.I-side MMU control + page table walker (虚拟地址翻译) ---
+    input logic [31:0] mmu_satp_i,       // SATP 寄存器 (控制 MMU 开关及页表根地址)
+    input logic [1:0]  mmu_priv_i,       // 当前 CPU 的特权模式级别 (U/S/M-mode)
+    input logic        mmu_sum_i,        // SUM 位 (监管者是否可访问用户页面)
+    input logic        mmu_mxr_i,        // MXR 位 (可执行是否可读)
+    input logic        mmu_sfence_vma_i, // TLB 刷新指令指示
+    output logic       pte_req_valid_o,  // 发起页表项读取的有效信号
+    input logic        pte_req_ready_i,  // 内存就绪信号
+    output logic [31:0] pte_req_paddr_o, // 页表项物理地址
+    input logic        pte_rsp_valid_i,  // 内存页表项返回有效
+    input logic [31:0] pte_rsp_data_i,   // 页表项数据
+    output logic       pte_upd_valid_o,  // 页表项标志更新有效信号
+    input logic        pte_upd_ready_i,  // 内存更新就绪
+    output logic [31:0] pte_upd_paddr_o, // 待更新页表项物理地址
+    output logic [31:0] pte_upd_data_o,  // 待更新页表项数据
 
-    //--- 6.IFetch fault sideband (to backend) ---
-    output logic       ifetch_fault_valid_o,
-    input logic        ifetch_fault_ready_i,
-    output logic [Cfg.PLEN-1:0] ifetch_fault_pc_o,
-    output logic [Cfg.PLEN-1:0] ifetch_fault_tval_o,
-    output logic [4:0] ifetch_fault_cause_o
+    //--- 6.IFetch fault sideband (to backend) (取指异常上报) ---
+    output logic       ifetch_fault_valid_o,   // 取指页面异常有效信号
+    input logic        ifetch_fault_ready_i,   // 后端已准备接收异常
+    output logic [Cfg.PLEN-1:0] ifetch_fault_pc_o,    // 发生页面错误的虚拟 PC 地址
+    output logic [Cfg.PLEN-1:0] ifetch_fault_tval_o,  // 错误地址值
+    output logic [4:0] ifetch_fault_cause_o    // 页面异常原因编码
 );
 
   localparam int unsigned INSTR_BYTES = Cfg.ILEN / 8;
@@ -222,13 +222,13 @@ module ifu #(
   logic aa_inf_watch_w;
   logic ifu_diag_trace_en_q;
   logic ifu_bsearch_trace_en_q;
-  integer agent_ifu_log_fd;
-  int unsigned agent_ifu_log_cnt;
+  integer agent49_ifu_src_log_fd;
+  int unsigned agent49_ifu_src_log_cnt;
   initial ifu_diag_trace_en_q = $test$plusargs("npc_diag_trace");
   initial ifu_bsearch_trace_en_q = $test$plusargs("npc_diag_bsearch");
   initial begin
-    agent_ifu_log_fd = 0;
-    agent_ifu_log_cnt = 0;
+    agent49_ifu_src_log_fd = 0;
+    agent49_ifu_src_log_cnt = 0;
   end
 `endif
 
@@ -494,7 +494,7 @@ module ifu #(
 `ifndef SYNTHESIS
       ifu_pc_dbg_cnt_q <= '0;
       ifu_aa_dbg_cnt_q <= '0;
-      agent_ifu_log_cnt <= 0;
+      agent49_ifu_src_log_cnt <= 0;
 `endif
 
     end else begin
@@ -637,27 +637,35 @@ module ifu #(
 `endif
 `ifndef SYNTHESIS
     // #region agent log
-    if ((agent_ifu_log_cnt < 16) &&
-        ((req_issue_fire_w && (req_head_pc_w >= 32'hc08181c0) &&
-          (req_head_pc_w <= 32'hc08181f0)) ||
-         (rsp_capture_w && (inf_head_pc_w >= 32'hc08181c0) &&
-          (inf_head_pc_w <= 32'hc08181f0)) ||
-         (ibuf_pop_w && (ifu_ibuffer_rsp_pc_o >= 32'hc08181c0) &&
-          (ifu_ibuffer_rsp_pc_o <= 32'hc08181f0)))) begin
-      if (agent_ifu_log_fd == 0) begin
-        agent_ifu_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", "a");
+    if ((agent49_ifu_src_log_cnt < 128) &&
+        ((req_enq_fire_w &&
+          ((bpu_query_pc_w >= 32'hc0804e40) && (bpu_query_pc_w <= 32'hc0804e80))) ||
+         (req_issue_fire_w &&
+          ((req_head_pc_w >= 32'hc0804e40) && (req_head_pc_w <= 32'hc0804e80))) ||
+         (rsp_capture_w &&
+          ((inf_head_pc_w >= 32'hc0804e40) && (inf_head_pc_w <= 32'hc0804e80))) ||
+         (ibuf_pop_w &&
+          ((ifu_ibuffer_rsp_pc_o >= 32'hc0804e40) && (ifu_ibuffer_rsp_pc_o <= 32'hc0804e80))) ||
+         (flush_i &&
+          (((redirect_pc_i >= 32'hc0804e40) && (redirect_pc_i <= 32'hc0804e80)) ||
+           ((pc_reg >= 32'hc0804e40) && (pc_reg <= 32'hc0804e80)))))) begin
+      if (agent49_ifu_src_log_fd == 0) begin
+        agent49_ifu_src_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-49fa23.log", "a");
       end
-      if (agent_ifu_log_fd != 0) begin
-        $fdisplay(agent_ifu_log_fd,
-                  "{\"sessionId\":\"e93a92\",\"runId\":\"frontend-fetch-trace\",\"hypothesisId\":\"H23,H24,H26\",\"location\":\"ifu.sv:fetch-response\",\"message\":\"target-ifu-state\",\"data\":{\"reqFire\":%0d,\"reqPc\":\"0x%08h\",\"issuePaddr\":\"0x%08h\",\"rspCapture\":%0d,\"infPc\":\"0x%08h\",\"ibufPop\":%0d,\"outPc\":\"0x%08h\",\"rsp0\":\"0x%08h\",\"rsp1\":\"0x%08h\",\"rsp2\":\"0x%08h\",\"rsp3\":\"0x%08h\",\"slotValid\":\"0x%0h\",\"pred0\":\"0x%08h\",\"pred1\":\"0x%08h\",\"epoch\":%0d,\"satp\":\"0x%08h\"},\"timestamp\":0}",
-                  req_issue_fire_w, req_head_pc_w, issue_paddr_w, rsp_capture_w,
-                  inf_head_pc_w, ibuf_pop_w, ifu_ibuffer_rsp_pc_o,
-                  icache2ifu_rsp_data_i[0], icache2ifu_rsp_data_i[1],
-                  icache2ifu_rsp_data_i[2], icache2ifu_rsp_data_i[3],
-                  rsp_slot_valid_w, rsp_pred_npc_w[0], rsp_pred_npc_w[1],
-                  fetch_epoch_q, mmu_satp_i);
-        $fflush(agent_ifu_log_fd);
-        agent_ifu_log_cnt <= agent_ifu_log_cnt + 1;
+      if (agent49_ifu_src_log_fd != 0) begin
+        $fdisplay(agent49_ifu_src_log_fd,
+                  "{\"sessionId\":\"49fa23\",\"runId\":\"illegal-halfword-source-pre\",\"hypothesisId\":\"H29,H30,H31\",\"location\":\"ifu.sv:pc-source\",\"message\":\"misc-mem-init-ifu-source\",\"data\":{\"flush\":%0d,\"redirect\":\"0x%08h\",\"pcReg\":\"0x%08h\",\"bpuQuery\":\"0x%08h\",\"bpuNpc\":\"0x%08h\",\"bpuSlotValid\":%0d,\"bpuSlotIdx\":%0d,\"bpuTarget\":\"0x%08h\",\"enq\":%0d,\"issue\":%0d,\"issuePc\":\"0x%08h\",\"issuePaddr\":\"0x%08h\",\"rspCapture\":%0d,\"infPc\":\"0x%08h\",\"ibufPop\":%0d,\"outPc\":\"0x%08h\",\"reqCount\":%0d,\"infCount\":%0d,\"fqCount\":%0d,\"fetchEpoch\":%0d,\"reqHeadEpoch\":%0d,\"infHeadEpoch\":%0d,\"slotValid\":\"0x%0h\",\"rsp0\":\"0x%08h\",\"rsp1\":\"0x%08h\",\"rsp2\":\"0x%08h\",\"rsp3\":\"0x%08h\",\"pred0\":\"0x%08h\",\"pred1\":\"0x%08h\",\"pred2\":\"0x%08h\",\"pred3\":\"0x%08h\"},\"timestamp\":0}",
+                  flush_i, redirect_pc_i, pc_reg, bpu_query_pc_w, bpu2ifu_predicted_pc_i,
+                  bpu2ifu_pred_slot_valid_i, bpu2ifu_pred_slot_idx_i, bpu2ifu_pred_target_i,
+                  req_enq_fire_w, req_issue_fire_w, req_head_pc_w, issue_paddr_w,
+                  rsp_capture_w, inf_head_pc_w, ibuf_pop_w, ifu_ibuffer_rsp_pc_o,
+                  req_count_q, inf_count_q, fq_count_q, fetch_epoch_q, req_head_epoch_w,
+                  inf_head_epoch_w, rsp_slot_valid_w, icache2ifu_rsp_data_i[0],
+                  icache2ifu_rsp_data_i[1], icache2ifu_rsp_data_i[2],
+                  icache2ifu_rsp_data_i[3], rsp_pred_npc_w[0], rsp_pred_npc_w[1],
+                  rsp_pred_npc_w[2], rsp_pred_npc_w[3]);
+        $fflush(agent49_ifu_src_log_fd);
+        agent49_ifu_src_log_cnt <= agent49_ifu_src_log_cnt + 1;
       end
     end
     // #endregion agent log

@@ -134,7 +134,7 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 
 #### Decode
 - **IBuffer**: 16-entry FIFO between frontend and decode. Absorbs fetch/decode rate mismatch.
-- **Decoder**: 4-wide decode. Converts 32-bit RISC-V instructions into uop_t micro-ops.
+- **Decoder**: 4-wide decode. Converts 32-bit RISC-V instructions into uop_t micro-ops. Illegal instructions are routed to the CSR FU so they retire as precise illegal-instruction traps.
 
 #### Rename & Dispatch
 - **Rename**: Allocates ROB entries, queries RAT for source register mappings, allocates Store Buffer entries for stores.
@@ -158,7 +158,7 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
   - **Load Queue (LQ) & Store Queue (SQ)**: Tracks in-flight memory operations for OOO execution, memory disambiguation, and load-store forwarding.
   - **Memory Dependence Predictor (MDP)**: Predicts memory aliasing to prevent load-store ordering violations.
   - Supports RISC-V A Extension (`LR`/`SC`) atomic operations.
-- **CSR** (`csr.sv`): CSR read/modify/write and exception/interrupt handling. Single-issue, ROB-head ordered.
+- **CSR** (`csr.sv`): CSR read/modify/write and exception/interrupt handling. Single-issue, ROB-head ordered. CSR/system exceptions are reported to the ROB first, then applied through the commit-time trap injection path so trap CSRs and `mstatus.MPP`/`SPP` are updated precisely once.
 
 #### Writeback & CDB
 - **Writeback Arbiter** (`writeback.sv`): 7 FU inputs -> 4 CDB ports. Priority arbitration broadcasts execution results.

@@ -84,11 +84,11 @@ module ibuffer #(
   logic [15:0] carry_half_next_w;
   logic [Cfg.PLEN-1:0] carry_pc_next_w;
 `ifndef SYNTHESIS
-  integer agent_ibuf_log_fd;
-  int unsigned agent_ibuf_log_cnt;
+  integer agent49_ibuf_log_fd;
+  int unsigned agent49_ibuf_log_cnt;
   initial begin
-    agent_ibuf_log_fd = 0;
-    agent_ibuf_log_cnt = 0;
+    agent49_ibuf_log_fd = 0;
+    agent49_ibuf_log_cnt = 0;
   end
 `endif
 
@@ -397,7 +397,7 @@ module ibuffer #(
       carry_half_q <= '0;
       carry_pc_q <= '0;
 `ifndef SYNTHESIS
-      agent_ibuf_log_cnt <= 0;
+      agent49_ibuf_log_cnt <= 0;
 `endif
     end else begin
       wr_ptr_q <= wr_ptr_d;
@@ -416,28 +416,44 @@ module ibuffer #(
       fifo_q   <= fifo_d;
 `ifndef SYNTHESIS
       // #region agent log
-      if ((agent_ibuf_log_cnt < 16) &&
-          ((fe_fire_w && (fe_pc_i >= 32'hc08181c0) && (fe_pc_i <= 32'hc08181f0)) ||
+      if ((agent49_ibuf_log_cnt < 64) &&
+          ((fe_fire_w && (fe_pc_i >= 32'hc0804e40) && (fe_pc_i <= 32'hc0804e80)) ||
            ((ibuf_valid_o && ibuf_ready_i) &&
-            (((ibuf_pcs_o[0] >= 32'hc08181c0) && (ibuf_pcs_o[0] <= 32'hc08181f0)) ||
-             ((ibuf_pcs_o[1] >= 32'hc08181c0) && (ibuf_pcs_o[1] <= 32'hc08181f0)) ||
-             ((ibuf_pcs_o[2] >= 32'hc08181c0) && (ibuf_pcs_o[2] <= 32'hc08181f0)) ||
-             ((ibuf_pcs_o[3] >= 32'hc08181c0) && (ibuf_pcs_o[3] <= 32'hc08181f0)))))) begin
-        if (agent_ibuf_log_fd == 0) begin
-          agent_ibuf_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", "a");
+            (((ibuf_pcs_o[0] >= 32'hc0804e40) && (ibuf_pcs_o[0] <= 32'hc0804e80)) ||
+             ((ibuf_pcs_o[1] >= 32'hc0804e40) && (ibuf_pcs_o[1] <= 32'hc0804e80)) ||
+             ((ibuf_pcs_o[2] >= 32'hc0804e40) && (ibuf_pcs_o[2] <= 32'hc0804e80)) ||
+             ((ibuf_pcs_o[3] >= 32'hc0804e40) && (ibuf_pcs_o[3] <= 32'hc0804e80)))))) begin
+        if (agent49_ibuf_log_fd == 0) begin
+          agent49_ibuf_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-49fa23.log", "a");
         end
-        if (agent_ibuf_log_fd != 0) begin
-          $fdisplay(agent_ibuf_log_fd,
-                    "{\"sessionId\":\"e93a92\",\"runId\":\"frontend-fetch-trace\",\"hypothesisId\":\"H24,H26\",\"location\":\"ibuffer.sv:rvc-expand\",\"message\":\"target-ibuf-state\",\"data\":{\"feFire\":%0d,\"fePc\":\"0x%08h\",\"fe0\":\"0x%08h\",\"fe1\":\"0x%08h\",\"fe2\":\"0x%08h\",\"fe3\":\"0x%08h\",\"feSlotValid\":\"0x%0h\",\"entryCount\":%0d,\"carryValid\":%0d,\"carryHalf\":\"0x%04h\",\"entry0Pc\":\"0x%08h\",\"entry0\":\"0x%08h\",\"entry1Pc\":\"0x%08h\",\"entry1\":\"0x%08h\",\"entry2Pc\":\"0x%08h\",\"entry2\":\"0x%08h\",\"out0Pc\":\"0x%08h\",\"out0\":\"0x%08h\",\"out1Pc\":\"0x%08h\",\"out1\":\"0x%08h\",\"out2Pc\":\"0x%08h\",\"out2\":\"0x%08h\",\"out3Pc\":\"0x%08h\",\"out3\":\"0x%08h\"},\"timestamp\":0}",
+        if (agent49_ibuf_log_fd != 0) begin
+          $fdisplay(agent49_ibuf_log_fd,
+                    "{\"sessionId\":\"49fa23\",\"runId\":\"illegal-halfword-pre\",\"hypothesisId\":\"H25,H26\",\"location\":\"ibuffer.sv:rvc-expand\",\"message\":\"misc-mem-init-ibuf-state\",\"data\":{\"feFire\":%0d,\"fePc\":\"0x%08h\",\"fe0\":\"0x%08h\",\"fe1\":\"0x%08h\",\"fe2\":\"0x%08h\",\"fe3\":\"0x%08h\",\"feSlotValid\":\"0x%0h\",\"entryCount\":%0d,\"carryValid\":%0d,\"carryHalf\":\"0x%04h\",\"e0Pc\":\"0x%08h\",\"e0Instr\":\"0x%08h\",\"e0Raw\":\"0x%08h\",\"e0Rvc\":%0d,\"e0Pred\":\"0x%08h\",\"e1Pc\":\"0x%08h\",\"e1Instr\":\"0x%08h\",\"e1Raw\":\"0x%08h\",\"e1Rvc\":%0d,\"e1Pred\":\"0x%08h\",\"e2Pc\":\"0x%08h\",\"e2Instr\":\"0x%08h\",\"e2Raw\":\"0x%08h\",\"e2Rvc\":%0d,\"e2Pred\":\"0x%08h\",\"e3Pc\":\"0x%08h\",\"e3Instr\":\"0x%08h\",\"e3Raw\":\"0x%08h\",\"e3Rvc\":%0d,\"e3Pred\":\"0x%08h\",\"out0Pc\":\"0x%08h\",\"out0Instr\":\"0x%08h\",\"out0Raw\":\"0x%08h\",\"out0Rvc\":%0d,\"out0Pred\":\"0x%08h\",\"out1Pc\":\"0x%08h\",\"out1Instr\":\"0x%08h\",\"out1Raw\":\"0x%08h\",\"out1Rvc\":%0d,\"out1Pred\":\"0x%08h\",\"out2Pc\":\"0x%08h\",\"out2Instr\":\"0x%08h\",\"out2Raw\":\"0x%08h\",\"out2Rvc\":%0d,\"out2Pred\":\"0x%08h\",\"out3Pc\":\"0x%08h\",\"out3Instr\":\"0x%08h\",\"out3Raw\":\"0x%08h\",\"out3Rvc\":%0d,\"out3Pred\":\"0x%08h\"},\"timestamp\":0}",
                     fe_fire_w, fe_pc_i, fe_instrs_i[0], fe_instrs_i[1], fe_instrs_i[2],
                     fe_instrs_i[3], fe_slot_valid_i, fe_valid_entry_count_w, carry_valid_q,
-                    carry_half_q, fe_valid_entries_w[0].pc, fe_valid_entries_w[0].instr,
+                    carry_half_q,
+                    fe_valid_entries_w[0].pc, fe_valid_entries_w[0].instr,
+                    fe_valid_entries_w[0].raw_inst, fe_valid_entries_w[0].is_rvc,
+                    fe_valid_entries_w[0].pred_npc,
                     fe_valid_entries_w[1].pc, fe_valid_entries_w[1].instr,
+                    fe_valid_entries_w[1].raw_inst, fe_valid_entries_w[1].is_rvc,
+                    fe_valid_entries_w[1].pred_npc,
                     fe_valid_entries_w[2].pc, fe_valid_entries_w[2].instr,
-                    ibuf_pcs_o[0], ibuf_instrs_o[0], ibuf_pcs_o[1], ibuf_instrs_o[1],
-                    ibuf_pcs_o[2], ibuf_instrs_o[2], ibuf_pcs_o[3], ibuf_instrs_o[3]);
-          $fflush(agent_ibuf_log_fd);
-          agent_ibuf_log_cnt <= agent_ibuf_log_cnt + 1;
+                    fe_valid_entries_w[2].raw_inst, fe_valid_entries_w[2].is_rvc,
+                    fe_valid_entries_w[2].pred_npc,
+                    fe_valid_entries_w[3].pc, fe_valid_entries_w[3].instr,
+                    fe_valid_entries_w[3].raw_inst, fe_valid_entries_w[3].is_rvc,
+                    fe_valid_entries_w[3].pred_npc,
+                    ibuf_pcs_o[0], ibuf_instrs_o[0], ibuf_raw_instrs_o[0],
+                    ibuf_is_rvc_o[0], ibuf_pred_npc_o[0],
+                    ibuf_pcs_o[1], ibuf_instrs_o[1], ibuf_raw_instrs_o[1],
+                    ibuf_is_rvc_o[1], ibuf_pred_npc_o[1],
+                    ibuf_pcs_o[2], ibuf_instrs_o[2], ibuf_raw_instrs_o[2],
+                    ibuf_is_rvc_o[2], ibuf_pred_npc_o[2],
+                    ibuf_pcs_o[3], ibuf_instrs_o[3], ibuf_raw_instrs_o[3],
+                    ibuf_is_rvc_o[3], ibuf_pred_npc_o[3]);
+          $fflush(agent49_ibuf_log_fd);
+          agent49_ibuf_log_cnt <= agent49_ibuf_log_cnt + 1;
         end
       end
       // #endregion agent log

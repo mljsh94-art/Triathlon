@@ -38,12 +38,12 @@ module decoder #(
   localparam int unsigned DEC_PC_DBG_BUDGET = 1024;
   logic [31:0] dec_pc_dbg_cnt_q;
   logic dec_diag_trace_en_q;
-  integer agent_decode_log_fd;
-  int unsigned agent_decode_log_cnt;
+  integer agent49_decode_log_fd;
+  int unsigned agent49_decode_log_cnt;
   initial dec_diag_trace_en_q = $test$plusargs("npc_diag_trace");
   initial begin
-    agent_decode_log_fd = 0;
-    agent_decode_log_cnt = 0;
+    agent49_decode_log_fd = 0;
+    agent49_decode_log_cnt = 0;
   end
 `endif
 
@@ -639,9 +639,8 @@ module decoder #(
         end
       endcase
 
-      // Narrow guard: only reroute illegal uops that would otherwise enter LSU issue.
-      // This prevents FU_LSU non-load/store entries from deadlocking the backend.
-      if (uop_decoded.illegal && (uop_decoded.fu == FU_LSU)) begin
+      // Illegal instructions must retire through the CSR FU so they raise a precise trap.
+      if (uop_decoded.illegal) begin
         uop_decoded.fu      = FU_CSR;
         uop_decoded.alu_op  = ALU_NOP;
         uop_decoded.is_load = 1'b0;
@@ -693,7 +692,7 @@ module decoder #(
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       dec_pc_dbg_cnt_q <= '0;
-      agent_decode_log_cnt <= 0;
+      agent49_decode_log_cnt <= 0;
     end else if (dec_diag_trace_en_q && ibuf2dec_valid_i && backend2dec_ready_i) begin
       logic [31:0] dec_pc_dbg_cnt_n;
       dec_pc_dbg_cnt_n = dec_pc_dbg_cnt_q;
@@ -717,22 +716,23 @@ module decoder #(
     end
     // #region agent log
     if (rst_ni && ibuf2dec_valid_i && backend2dec_ready_i &&
-        (agent_decode_log_cnt < 16)) begin
+        (agent49_decode_log_cnt < 64)) begin
       for (int i = 0; i < DECODE_WIDTH; i++) begin
-        if (ibuf_slot_valid_i[i] && (ibuf_pcs_i[i] == 32'hc08181d4)) begin
-          if (agent_decode_log_fd == 0) begin
-            agent_decode_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", "a");
+        if (ibuf_slot_valid_i[i] &&
+            (ibuf_pcs_i[i] >= 32'hc0804e40) && (ibuf_pcs_i[i] <= 32'hc0804e80)) begin
+          if (agent49_decode_log_fd == 0) begin
+            agent49_decode_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-49fa23.log", "a");
           end
-          if (agent_decode_log_fd != 0) begin
-            $fdisplay(agent_decode_log_fd,
-                      "{\"sessionId\":\"e93a92\",\"runId\":\"branch-uop-trace\",\"hypothesisId\":\"H20,H21,H22\",\"location\":\"decoder.sv:decode\",\"message\":\"bgeu-decode-state\",\"data\":{\"pc\":\"0x%08h\",\"instr\":\"0x%08h\",\"slot\":%0d,\"valid\":%0d,\"uopRs1\":%0d,\"uopRs2\":%0d,\"uopImm\":\"0x%08h\",\"brOp\":%0d,\"fu\":%0d,\"isBranch\":%0d,\"predNpc\":\"0x%08h\",\"isRvc\":%0d,\"ftq\":%0d,\"epoch\":%0d},\"timestamp\":0}",
-                      ibuf_pcs_i[i], ibuf_instrs_i[i], i, dec_uops_o[i].valid,
-                      dec_uops_o[i].rs1, dec_uops_o[i].rs2, dec_uops_o[i].imm,
-                      dec_uops_o[i].br_op, dec_uops_o[i].fu, dec_uops_o[i].is_branch,
-                      dec_uops_o[i].pred_npc, dec_uops_o[i].is_rvc,
-                      dec_uops_o[i].ftq_id, dec_uops_o[i].fetch_epoch);
-            $fflush(agent_decode_log_fd);
-            agent_decode_log_cnt <= agent_decode_log_cnt + 1;
+          if (agent49_decode_log_fd != 0) begin
+            $fdisplay(agent49_decode_log_fd,
+                      "{\"sessionId\":\"49fa23\",\"runId\":\"illegal-halfword-pre\",\"hypothesisId\":\"H25,H26,H27\",\"location\":\"decoder.sv:decode\",\"message\":\"misc-mem-init-decode-state\",\"data\":{\"slot\":%0d,\"pc\":\"0x%08h\",\"instr\":\"0x%08h\",\"raw\":\"0x%08h\",\"lo16\":\"0x%04h\",\"valid\":%0d,\"isRvc\":%0d,\"predNpc\":\"0x%08h\",\"illegal\":%0d,\"fu\":%0d,\"isStore\":%0d,\"lsuOp\":%0d,\"isBranch\":%0d,\"isJump\":%0d,\"ftq\":%0d,\"epoch\":%0d},\"timestamp\":0}",
+                      i, ibuf_pcs_i[i], ibuf_instrs_i[i], ibuf_raw_instrs_i[i],
+                      ibuf_instrs_i[i][15:0], dec_uops_o[i].valid, dec_uops_o[i].is_rvc,
+                      dec_uops_o[i].pred_npc, dec_uops_o[i].illegal, dec_uops_o[i].fu,
+                      dec_uops_o[i].is_store, dec_uops_o[i].lsu_op, dec_uops_o[i].is_branch,
+                      dec_uops_o[i].is_jump, dec_uops_o[i].ftq_id, dec_uops_o[i].fetch_epoch);
+            $fflush(agent49_decode_log_fd);
+            agent49_decode_log_cnt <= agent49_decode_log_cnt + 1;
           end
         end
       end
