@@ -189,6 +189,8 @@ module backend #(
 
   logic [    COMMIT_WIDTH-1:0]                    commit_valid;
   logic [    COMMIT_WIDTH-1:0][     Cfg.PLEN-1:0] commit_pc;
+  logic [    COMMIT_WIDTH-1:0][     Cfg.ILEN-1:0] commit_inst;
+  logic [    COMMIT_WIDTH-1:0][     Cfg.ILEN-1:0] commit_decoded_inst;
   logic [    COMMIT_WIDTH-1:0]                    commit_we;
   logic [    COMMIT_WIDTH-1:0][              4:0] commit_areg;
   logic [    COMMIT_WIDTH-1:0][     Cfg.XLEN-1:0] commit_wdata;
@@ -257,6 +259,8 @@ module backend #(
 
       .dispatch_valid_i(rob_dispatch_valid),
       .dispatch_pc_i   (rob_dispatch_pc),
+      .dispatch_inst_i (rob_dispatch_inst),
+      .dispatch_decoded_inst_i(rob_dispatch_decoded_inst),
       .dispatch_fu_type_i(rob_dispatch_fu_type),
       .dispatch_areg_i (rob_dispatch_areg),
       .dispatch_has_rd_i(rob_dispatch_has_rd),
@@ -297,6 +301,8 @@ module backend #(
 
       .commit_valid_o     (commit_valid),
       .commit_pc_o        (commit_pc),
+      .commit_inst_o      (commit_inst),
+      .commit_decoded_inst_o(commit_decoded_inst),
       .commit_we_o        (commit_we),
       .commit_areg_o      (commit_areg),
       .commit_wdata_o     (commit_wdata),
@@ -564,6 +570,8 @@ module backend #(
 
   logic            [DISPATCH_WIDTH-1:0]                    rob_dispatch_valid;
   logic            [DISPATCH_WIDTH-1:0][     Cfg.PLEN-1:0] rob_dispatch_pc;
+  logic            [DISPATCH_WIDTH-1:0][     Cfg.ILEN-1:0] rob_dispatch_inst;
+  logic            [DISPATCH_WIDTH-1:0][     Cfg.ILEN-1:0] rob_dispatch_decoded_inst;
   decode_pkg::fu_e [DISPATCH_WIDTH-1:0]                    rob_dispatch_fu_type;
   logic            [DISPATCH_WIDTH-1:0][              4:0] rob_dispatch_areg;
   logic            [DISPATCH_WIDTH-1:0]                    rob_dispatch_has_rd;
@@ -817,6 +825,8 @@ module backend #(
 
       .rob_dispatch_valid_o(rob_dispatch_valid),
       .rob_dispatch_pc_o   (rob_dispatch_pc),
+      .rob_dispatch_inst_o (rob_dispatch_inst),
+      .rob_dispatch_decoded_inst_o(rob_dispatch_decoded_inst),
       .rob_dispatch_fu_type_o(rob_dispatch_fu_type),
       .rob_dispatch_areg_o (rob_dispatch_areg),
       .rob_dispatch_has_rd_o(rob_dispatch_has_rd),

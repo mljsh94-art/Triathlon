@@ -32,6 +32,7 @@ module frontend_ingress_cluster #(
   logic decode_ibuf_valid;
   logic decode_ibuf_ready;
   logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] decode_ibuf_instrs;
+  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] decode_ibuf_raw_instrs;
   logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] decode_ibuf_pcs;
   logic [Cfg.INSTR_PER_FETCH-1:0] decode_ibuf_slot_valid;
   logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] decode_ibuf_pred_npc;
@@ -59,6 +60,7 @@ module frontend_ingress_cluster #(
       .ibuf_valid_o (decode_ibuf_valid),
       .ibuf_ready_i (decode_ibuf_ready),
       .ibuf_instrs_o(decode_ibuf_instrs),
+      .ibuf_raw_instrs_o(decode_ibuf_raw_instrs),
       .ibuf_pcs_o   (decode_ibuf_pcs),
       .ibuf_slot_valid_o(decode_ibuf_slot_valid),
       .ibuf_pred_npc_o(decode_ibuf_pred_npc),
@@ -79,6 +81,7 @@ module frontend_ingress_cluster #(
       .ibuf2dec_valid_i (decode_ibuf_valid),
       .dec2ibuf_ready_o (decode_ibuf_ready),
       .ibuf_instrs_i    (decode_ibuf_instrs),
+      .ibuf_raw_instrs_i(decode_ibuf_raw_instrs),
       .ibuf_pcs_i       (decode_ibuf_pcs),
       .ibuf_slot_valid_i(decode_ibuf_slot_valid),
       .ibuf_pred_npc_i  (decode_ibuf_pred_npc),

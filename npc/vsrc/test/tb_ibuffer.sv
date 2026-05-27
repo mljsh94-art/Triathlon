@@ -24,6 +24,7 @@ module tb_ibuffer #(
     input  logic                                    ibuf_ready_i,
     // [DECODE_WIDTH * ILEN - 1 : 0]
     output logic [Cfg.INSTR_PER_FETCH*Cfg.ILEN-1:0] ibuf_instrs_o,
+    output logic [Cfg.INSTR_PER_FETCH*Cfg.ILEN-1:0] ibuf_raw_instrs_o,
     // [DECODE_WIDTH * PLEN - 1 : 0]
     output logic [Cfg.INSTR_PER_FETCH*Cfg.PLEN-1:0] ibuf_pcs_o,
     output logic [Cfg.INSTR_PER_FETCH-1:0]          ibuf_slot_valid_o,
@@ -57,6 +58,7 @@ module tb_ibuffer #(
       .ibuf_valid_o(ibuf_valid_o),
       .ibuf_ready_i(ibuf_ready_i),
       .ibuf_instrs_o(ibuf_instrs_o),
+      .ibuf_raw_instrs_o(ibuf_raw_instrs_o),
       .ibuf_pcs_o(ibuf_pcs_o),
       .ibuf_slot_valid_o(ibuf_slot_valid_o),
       .ibuf_pred_npc_o(ibuf_pred_npc_o),

@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < kCommitWidth; i++) {
       if (((top.commit_valid_o >> i) & 0x1) == 0) continue;
       uint32_t pc = top.commit_pc_o[i];
-      uint32_t inst = mem.mem.read_word(pc);
+      uint32_t inst = top.commit_decoded_inst_o[i];
       bool we = ((top.commit_we_o >> i) & 0x1) != 0;
       uint32_t rd = (top.commit_areg_o >> (i * 5)) & 0x1fu;
       uint32_t wdata = top.commit_wdata_o[i];

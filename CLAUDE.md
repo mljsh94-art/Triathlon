@@ -166,6 +166,7 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 
 #### Commit
 - **ROB** (rob.sv): 64-entry circular buffer. In-order retirement, up to 4 per cycle.
+  - Stores raw and decoded instruction words for each uop and exports retired instruction metadata to the simulator.
   - Stores: 1 per cycle max
   - Branches: 1 per cycle max
   - Loads: 2 per cycle max
@@ -204,6 +205,7 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 ```systemverilog
 struct packed {
   logic valid, illegal;
+  logic [31:0] inst, raw_inst;       // Decoded 32-bit instruction and raw retired encoding
   fu_e fu;           // FU_ALU, FU_BRANCH, FU_LSU, FU_MUL, FU_DIV, FU_CSR
   alu_op_e alu_op;
   branch_op_e br_op;

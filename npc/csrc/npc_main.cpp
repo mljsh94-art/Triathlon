@@ -566,7 +566,9 @@ int main(int argc, char **argv) {
       }
 
       uint32_t pc = top->commit_pc_o[i];
-      uint32_t inst = mem.mem.read_word(pc);
+      uint32_t inst = top->commit_inst_o[i];
+      uint32_t decoded_inst = top->commit_decoded_inst_o[i];
+      bool is_rvc = ((top->commit_is_rvc_o >> i) & 0x1) != 0;
       // #region agent log
       if (args.linux_early_debug &&
           (cycles >= 1400000u) &&
@@ -875,7 +877,7 @@ int main(int argc, char **argv) {
           linux_opensbi_smode_logs++;
         }
       }
-      profile.record_commit(pc, inst);
+      profile.record_commit(pc, inst, decoded_inst, is_rvc);
       if (args.linux_early_debug &&
           pc >= 0x810043b0u && pc < 0x81004430u &&
           setup_vm_step_logs < kSetupVmStepLogLimit) {
@@ -1052,6 +1054,8 @@ int main(int argc, char **argv) {
                   << " slot=" << i
                   << " pc=0x" << std::hex << pc
                   << " inst=0x" << inst
+                  << " decoded=0x" << decoded_inst
+                  << " rvc=" << std::dec << static_cast<int>(is_rvc)
                   << " we=" << std::dec << we
                   << " rd=x" << rd
                   << " data=0x" << std::hex << data
@@ -1059,14 +1063,16 @@ int main(int argc, char **argv) {
                   << std::dec << "\n";
         std::cout.flags(f);
       }
-      if (!difftest.step_and_check(cycles, pc, inst, rf_before, rf)) {
+      if (!difftest.step_and_check(cycles, pc, decoded_inst, rf_before, rf)) {
         std::cerr << "[difftest] stop on first mismatch\n";
         profile.emit_summary(cycles, top);
         if (tfp) tfp->close();
         delete top;
         return 1;
       }
-      if (npc::is_ebreak_insn_word(inst, pc) && !args.boot_handoff) {
+      if ((npc::is_ebreak_insn_word(inst, pc) ||
+           (is_rvc && decoded_inst == npc::kEbreakInsn)) &&
+          !args.boot_handoff) {
         uint32_t code = rf[10];
         if (code == 0) {
           std::cout << "HIT GOOD TRAP\n";
@@ -1122,6 +1128,9 @@ int main(int argc, char **argv) {
                 << " no_commit=" << no_commit_cycles
                 << " last_pc=0x" << std::hex << last_pc
                 << " last_inst=0x" << profile.last_commit_inst()
+                << " last_decoded=0x" << profile.last_commit_decoded_inst()
+                << " last_rvc=" << std::dec << static_cast<int>(profile.last_commit_is_rvc())
+                << std::hex
                 << " a0=0x" << rf[10]
                 << " rob_head(pc/comp/is_store/fu)=0x" << top->dbg_rob_head_pc_o
                 << "/" << std::dec

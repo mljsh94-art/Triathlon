@@ -15,10 +15,12 @@
 !/opensbi/**
 !/echo_payload/**
 !merge.py
-!my_lab_log/**
 !CLAUDE.md
 .vscode
 .worktrees/
+
+# Local logs (do not track)
+my_lab_log/
 
 # Build outputs (keep local, do not track)
 **/build/

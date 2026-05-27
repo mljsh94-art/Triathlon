@@ -52,6 +52,8 @@ module tb_rob_exception (
 
   logic [DISPATCH_WIDTH-1:0] dispatch_valid_bus;
   logic [DISPATCH_WIDTH-1:0][Cfg.PLEN-1:0] dispatch_pc_bus;
+  logic [DISPATCH_WIDTH-1:0][Cfg.ILEN-1:0] dispatch_inst_bus;
+  logic [DISPATCH_WIDTH-1:0][Cfg.ILEN-1:0] dispatch_decoded_inst_bus;
   decode_pkg::fu_e [DISPATCH_WIDTH-1:0] dispatch_fu_type_bus;
   logic [DISPATCH_WIDTH-1:0][4:0] dispatch_areg_bus;
   logic [DISPATCH_WIDTH-1:0] dispatch_has_rd_bus;
@@ -59,6 +61,7 @@ module tb_rob_exception (
   logic [DISPATCH_WIDTH-1:0] dispatch_is_jump_bus;
   logic [DISPATCH_WIDTH-1:0] dispatch_is_call_bus;
   logic [DISPATCH_WIDTH-1:0] dispatch_is_ret_bus;
+  logic [DISPATCH_WIDTH-1:0] dispatch_is_rvc_bus;
   logic [DISPATCH_WIDTH-1:0][decode_pkg::FTQ_ID_W-1:0] dispatch_ftq_id_bus;
   logic [DISPATCH_WIDTH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] dispatch_fetch_epoch_bus;
   logic [DISPATCH_WIDTH-1:0] dispatch_is_store_bus;
@@ -86,6 +89,8 @@ module tb_rob_exception (
 
   logic [COMMIT_WIDTH-1:0] commit_valid_bus;
   logic [COMMIT_WIDTH-1:0][Cfg.PLEN-1:0] commit_pc_bus;
+  logic [COMMIT_WIDTH-1:0][Cfg.ILEN-1:0] commit_inst_bus;
+  logic [COMMIT_WIDTH-1:0][Cfg.ILEN-1:0] commit_decoded_inst_bus;
   logic [COMMIT_WIDTH-1:0] commit_we_bus;
   logic [COMMIT_WIDTH-1:0][4:0] commit_areg_bus;
   logic [COMMIT_WIDTH-1:0][Cfg.XLEN-1:0] commit_wdata_bus;
@@ -96,6 +101,7 @@ module tb_rob_exception (
   logic [COMMIT_WIDTH-1:0] commit_is_jump_bus;
   logic [COMMIT_WIDTH-1:0] commit_is_call_bus;
   logic [COMMIT_WIDTH-1:0] commit_is_ret_bus;
+  logic [COMMIT_WIDTH-1:0] commit_is_rvc_bus;
   logic [COMMIT_WIDTH-1:0][Cfg.PLEN-1:0] commit_actual_npc_bus;
   logic [COMMIT_WIDTH-1:0][decode_pkg::FTQ_ID_W-1:0] commit_ftq_id_bus;
   logic [COMMIT_WIDTH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] commit_fetch_epoch_bus;
@@ -125,6 +131,8 @@ module tb_rob_exception (
 
   assign dispatch_valid_bus[0] = dispatch_valid_i;
   assign dispatch_pc_bus[0] = dispatch_pc_i;
+  assign dispatch_inst_bus[0] = 32'h00000013;
+  assign dispatch_decoded_inst_bus[0] = 32'h00000013;
   assign dispatch_fu_type_bus[0] = decode_pkg::fu_e'(dispatch_fu_type_i);
   assign dispatch_areg_bus[0] = dispatch_areg_i;
   assign dispatch_has_rd_bus[0] = dispatch_has_rd_i;
@@ -132,6 +140,7 @@ module tb_rob_exception (
   assign dispatch_is_jump_bus[0] = 1'b0;
   assign dispatch_is_call_bus[0] = 1'b0;
   assign dispatch_is_ret_bus[0] = 1'b0;
+  assign dispatch_is_rvc_bus[0] = 1'b0;
   assign dispatch_ftq_id_bus[0] = '0;
   assign dispatch_fetch_epoch_bus[0] = '0;
   assign dispatch_is_store_bus[0] = dispatch_is_store_i;
@@ -187,6 +196,8 @@ module tb_rob_exception (
 
       .dispatch_valid_i(dispatch_valid_bus),
       .dispatch_pc_i(dispatch_pc_bus),
+      .dispatch_inst_i(dispatch_inst_bus),
+      .dispatch_decoded_inst_i(dispatch_decoded_inst_bus),
       .dispatch_fu_type_i(dispatch_fu_type_bus),
       .dispatch_areg_i(dispatch_areg_bus),
       .dispatch_has_rd_i(dispatch_has_rd_bus),
@@ -194,6 +205,7 @@ module tb_rob_exception (
       .dispatch_is_jump_i(dispatch_is_jump_bus),
       .dispatch_is_call_i(dispatch_is_call_bus),
       .dispatch_is_ret_i(dispatch_is_ret_bus),
+      .dispatch_is_rvc_i(dispatch_is_rvc_bus),
       .dispatch_ftq_id_i(dispatch_ftq_id_bus),
       .dispatch_fetch_epoch_i(dispatch_fetch_epoch_bus),
       .dispatch_is_store_i(dispatch_is_store_bus),
@@ -225,6 +237,8 @@ module tb_rob_exception (
 
       .commit_valid_o(commit_valid_bus),
       .commit_pc_o(commit_pc_bus),
+      .commit_inst_o(commit_inst_bus),
+      .commit_decoded_inst_o(commit_decoded_inst_bus),
       .commit_we_o(commit_we_bus),
       .commit_areg_o(commit_areg_bus),
       .commit_wdata_o(commit_wdata_bus),
@@ -235,6 +249,7 @@ module tb_rob_exception (
       .commit_is_jump_o(commit_is_jump_bus),
       .commit_is_call_o(commit_is_call_bus),
       .commit_is_ret_o(commit_is_ret_bus),
+      .commit_is_rvc_o(commit_is_rvc_bus),
       .commit_actual_npc_o(commit_actual_npc_bus),
       .commit_ftq_id_o(commit_ftq_id_bus),
       .commit_fetch_epoch_o(commit_fetch_epoch_bus),

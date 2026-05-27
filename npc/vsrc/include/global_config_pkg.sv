@@ -28,6 +28,7 @@ package global_config_pkg;
   typedef struct packed {
     logic                 slot_valid;
     logic [Cfg.ILEN-1:0] instr;
+    logic [Cfg.ILEN-1:0] raw_inst;
     logic [Cfg.PLEN-1:0] pc;
     logic [Cfg.PLEN-1:0] pred_npc;
     logic                is_rvc;

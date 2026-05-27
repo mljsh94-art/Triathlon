@@ -36,6 +36,7 @@ module tb_decoder (
   // 内部信号
   uop_t [DECODE_WIDTH-1:0] dec_uops;  // 假设 decode width = 4
   logic [DECODE_WIDTH-1:0][ILEN-1:0] ibuf_instrs;
+  logic [DECODE_WIDTH-1:0][ILEN-1:0] ibuf_raw_instrs;
   logic [DECODE_WIDTH-1:0][ILEN-1:0] ibuf_pcs;
   logic [DECODE_WIDTH-1:0] ibuf_slot_valid;
   logic [DECODE_WIDTH-1:0][31:0] ibuf_pred_npc;
@@ -45,6 +46,7 @@ module tb_decoder (
 
   // 构造输入：只给第0路喂有效数据，其他给NOP
   assign ibuf_instrs[0] = inst_i;
+  assign ibuf_raw_instrs[0] = inst_i;
   assign ibuf_pcs[0]    = pc_i;
   assign ibuf_slot_valid[0] = 1'b1;
   assign ibuf_pred_npc[0] = pc_i + 32'd4;
@@ -54,6 +56,7 @@ module tb_decoder (
 
   for (genvar i = 1; i < DECODE_WIDTH; i++) begin : gen_nop_instrs
     assign ibuf_instrs[i] = 32'h00000013;  // NOP
+    assign ibuf_raw_instrs[i] = 32'h00000013;  // NOP
     assign ibuf_pcs[i]    = pc_i + i * 4;
     assign ibuf_slot_valid[i] = 1'b0;
     assign ibuf_pred_npc[i] = '0;
@@ -71,6 +74,7 @@ module tb_decoder (
       .ibuf2dec_valid_i(1'b1),  // 始终有效
       .dec2ibuf_ready_o(),
       .ibuf_instrs_i(ibuf_instrs),
+      .ibuf_raw_instrs_i(ibuf_raw_instrs),
       .ibuf_pcs_i(ibuf_pcs),
       .ibuf_slot_valid_i(ibuf_slot_valid),
       .ibuf_pred_npc_i(ibuf_pred_npc),

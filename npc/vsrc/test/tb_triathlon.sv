@@ -53,6 +53,9 @@ module tb_triathlon #(
     output logic [Cfg.NRET-1:0][4:0]           commit_areg_o,
     output logic [Cfg.NRET-1:0][Cfg.XLEN-1:0]  commit_wdata_o,
     output logic [Cfg.NRET-1:0][Cfg.PLEN-1:0]  commit_pc_o,
+    output logic [Cfg.NRET-1:0][Cfg.ILEN-1:0]  commit_inst_o,
+    output logic [Cfg.NRET-1:0][Cfg.ILEN-1:0]  commit_decoded_inst_o,
+    output logic [Cfg.NRET-1:0]                commit_is_rvc_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_mtvec_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_mepc_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_mstatus_o,
@@ -354,6 +357,9 @@ module tb_triathlon #(
   assign commit_areg_o  = dut.u_backend.commit_areg;
   assign commit_wdata_o = dut.u_backend.commit_wdata;
   assign commit_pc_o    = dut.u_backend.commit_pc;
+  assign commit_inst_o  = dut.u_backend.commit_inst;
+  assign commit_decoded_inst_o = dut.u_backend.commit_decoded_inst;
+  assign commit_is_rvc_o = dut.u_backend.commit_is_rvc;
   assign dbg_csr_mtvec_o   = dut.u_backend.u_csr.csr_mtvec;
   assign dbg_csr_mepc_o    = dut.u_backend.u_csr.csr_mepc;
   assign dbg_csr_mstatus_o = dut.u_backend.u_csr.csr_mstatus;

@@ -23,6 +23,7 @@ module ibuffer #(
     output logic                                  ibuf_valid_o,
     input  logic                                  ibuf_ready_i,
     output logic [DECODE_WIDTH-1:0][Cfg.ILEN-1:0] ibuf_instrs_o,
+    output logic [DECODE_WIDTH-1:0][Cfg.ILEN-1:0] ibuf_raw_instrs_o,
     output logic [DECODE_WIDTH-1:0][Cfg.PLEN-1:0] ibuf_pcs_o,
     output logic [DECODE_WIDTH-1:0]               ibuf_slot_valid_o,
     output logic [DECODE_WIDTH-1:0][Cfg.PLEN-1:0] ibuf_pred_npc_o,
@@ -171,6 +172,7 @@ module ibuffer #(
       hw_slot_arr[i] = '0;
       hw_raw_idx_arr[i] = '0;
       fe_valid_entries_w[i].instr = '0;
+      fe_valid_entries_w[i].raw_inst = '0;
       fe_valid_entries_w[i].pc = '0;
       fe_valid_entries_w[i].slot_valid = 1'b0;
       fe_valid_entries_w[i].pred_npc = '0;
@@ -205,6 +207,7 @@ module ibuffer #(
         for (int i = 0; i < FETCH_WIDTH; i++) begin
           if (fe_slot_valid_i[i] && (wr_idx < FE_EXPAND_MAX)) begin
             fe_valid_entries_w[wr_idx].instr = fe_instrs_i[i];
+            fe_valid_entries_w[wr_idx].raw_inst = fe_instrs_i[i];
             fe_valid_entries_w[wr_idx].pc = fe_pc_i + Cfg.PLEN'(INSTR_BYTES * i);
             fe_valid_entries_w[wr_idx].slot_valid = 1'b1;
             fe_valid_entries_w[wr_idx].pred_npc = fe_pred_npc_i[i];
@@ -223,6 +226,7 @@ module ibuffer #(
             half1 = hw_data[0];
             instr32 = {half1, carry_half_q};
             fe_valid_entries_w[wr_idx].instr = instr32;
+            fe_valid_entries_w[wr_idx].raw_inst = instr32;
             fe_valid_entries_w[wr_idx].pc = carry_pc_q;
             fe_valid_entries_w[wr_idx].slot_valid = 1'b1;
             fe_valid_entries_w[wr_idx].pred_npc = carry_pc_q + Cfg.PLEN'(4);
@@ -255,6 +259,7 @@ module ibuffer #(
                 is_low_half && (pred_npc_slot != fallthrough_npc) &&
                 (pred_npc_slot != slot_fallthrough_npc);
             fe_valid_entries_w[wr_idx].instr = instr32;
+            fe_valid_entries_w[wr_idx].raw_inst = {16'b0, half0};
             fe_valid_entries_w[wr_idx].pc = pc_cur;
             fe_valid_entries_w[wr_idx].slot_valid = 1'b1;
             fe_valid_entries_w[wr_idx].pred_npc =
@@ -278,6 +283,7 @@ module ibuffer #(
               fallthrough_npc = pc_cur + Cfg.PLEN'(4);
               stop_after_this = is_low_half && (pred_npc_slot != fallthrough_npc);
               fe_valid_entries_w[wr_idx].instr = instr32;
+              fe_valid_entries_w[wr_idx].raw_inst = instr32;
               fe_valid_entries_w[wr_idx].pc = pc_cur;
               fe_valid_entries_w[wr_idx].slot_valid = 1'b1;
               fe_valid_entries_w[wr_idx].pred_npc = is_low_half ? pred_npc_slot : fallthrough_npc;
@@ -347,6 +353,7 @@ module ibuffer #(
       ridx = '0;
       fe_idx = '0;
       ibuf_instrs_o[j] = '0;
+      ibuf_raw_instrs_o[j] = '0;
       ibuf_pcs_o[j] = '0;
       ibuf_slot_valid_o[j] = 1'b0;
       ibuf_pred_npc_o[j] = '0;
@@ -358,6 +365,7 @@ module ibuffer #(
         if (CNT_W'(j) < count_q) begin
           ridx = PTR_W'(rd_ptr_q + PTR_W'(j));
           ibuf_instrs_o[j] = fifo_q[ridx].instr;
+          ibuf_raw_instrs_o[j] = fifo_q[ridx].raw_inst;
           ibuf_pcs_o[j] = fifo_q[ridx].pc;
           ibuf_slot_valid_o[j] = fifo_q[ridx].slot_valid;
           ibuf_pred_npc_o[j] = fifo_q[ridx].pred_npc;
@@ -367,6 +375,7 @@ module ibuffer #(
         end else begin
           fe_idx = CNT_W'(j) - count_q;
           ibuf_instrs_o[j] = fe_valid_entries_w[fe_idx].instr;
+          ibuf_raw_instrs_o[j] = fe_valid_entries_w[fe_idx].raw_inst;
           ibuf_pcs_o[j] = fe_valid_entries_w[fe_idx].pc;
           ibuf_slot_valid_o[j] = fe_valid_entries_w[fe_idx].slot_valid;
           ibuf_pred_npc_o[j] = fe_valid_entries_w[fe_idx].pred_npc;

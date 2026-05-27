@@ -98,6 +98,8 @@ package decode_pkg;
     logic [Cfg.XLEN-1:0] imm;
 
     // PC & 控制流信息
+    logic [Cfg.ILEN-1:0] inst;
+    logic [Cfg.ILEN-1:0] raw_inst;
     logic [Cfg.PLEN-1:0] pc;
     logic [Cfg.PLEN-1:0] pred_npc;
     logic is_rvc;

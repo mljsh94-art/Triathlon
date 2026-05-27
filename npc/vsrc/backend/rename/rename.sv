@@ -20,6 +20,8 @@ module rename #(
     // --- To ROB (Dispatch Interface) ---
     output logic            [Cfg.INSTR_PER_FETCH-1:0]               rob_dispatch_valid_o,
     output logic            [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] rob_dispatch_pc_o,
+    output logic            [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] rob_dispatch_inst_o,
+    output logic            [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] rob_dispatch_decoded_inst_o,
     output decode_pkg::fu_e [Cfg.INSTR_PER_FETCH-1:0]               rob_dispatch_fu_type_o,
     output logic            [Cfg.INSTR_PER_FETCH-1:0][         4:0] rob_dispatch_areg_o,
     output logic            [Cfg.INSTR_PER_FETCH-1:0]               rob_dispatch_has_rd_o,
@@ -198,6 +200,8 @@ module rename #(
         // --- To ROB ---
         rob_dispatch_valid_o[i]    = 1'b1;
         rob_dispatch_pc_o[i]       = dec_uops_i[i].pc;
+        rob_dispatch_inst_o[i]     = dec_uops_i[i].raw_inst;
+        rob_dispatch_decoded_inst_o[i] = dec_uops_i[i].inst;
         rob_dispatch_fu_type_o[i]  = dec_uops_i[i].fu;
         rob_dispatch_areg_o[i]     = dec_uops_i[i].rd;
         rob_dispatch_has_rd_o[i]   = dec_uops_i[i].has_rd;
@@ -242,6 +246,8 @@ module rename #(
         // 氣泡 / 阻塞狀態清零
         rob_dispatch_valid_o[i]    = 0;
         rob_dispatch_pc_o[i]       = '0;
+        rob_dispatch_inst_o[i]     = '0;
+        rob_dispatch_decoded_inst_o[i] = '0;
         rob_dispatch_fu_type_o[i]  = decode_pkg::FU_NONE;
         rob_dispatch_areg_o[i]     = '0;
         rob_dispatch_has_rd_o[i]   = 1'b0;

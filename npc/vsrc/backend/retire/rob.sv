@@ -25,6 +25,8 @@ module rob #(
     // =========================================================
     input logic            [DISPATCH_WIDTH-1:0]               dispatch_valid_i,
     input logic            [DISPATCH_WIDTH-1:0][Cfg.PLEN-1:0] dispatch_pc_i,
+    input logic            [DISPATCH_WIDTH-1:0][Cfg.ILEN-1:0] dispatch_inst_i,
+    input logic            [DISPATCH_WIDTH-1:0][Cfg.ILEN-1:0] dispatch_decoded_inst_i,
     input decode_pkg::fu_e [DISPATCH_WIDTH-1:0]               dispatch_fu_type_i,
     input logic            [DISPATCH_WIDTH-1:0][         4:0] dispatch_areg_i,
     input logic            [DISPATCH_WIDTH-1:0]               dispatch_has_rd_i,
@@ -76,6 +78,8 @@ module rob #(
     // =========================================================
     output logic [COMMIT_WIDTH-1:0] commit_valid_o,
     output logic [COMMIT_WIDTH-1:0][Cfg.PLEN-1:0] commit_pc_o,
+    output logic [COMMIT_WIDTH-1:0][Cfg.ILEN-1:0] commit_inst_o,
+    output logic [COMMIT_WIDTH-1:0][Cfg.ILEN-1:0] commit_decoded_inst_o,
 
     // To ARF
     output logic [COMMIT_WIDTH-1:0]               commit_we_o,
@@ -185,6 +189,8 @@ module rob #(
     logic is_rvc;
     logic [Cfg.XLEN-1:0] data;
     logic [Cfg.PLEN-1:0] pc;
+    logic [Cfg.ILEN-1:0] inst;
+    logic [Cfg.ILEN-1:0] decoded_inst;
     logic [decode_pkg::FTQ_ID_W-1:0] ftq_id;
     logic [decode_pkg::FETCH_EPOCH_W-1:0] fetch_epoch;
 
@@ -279,6 +285,8 @@ module rob #(
 
     commit_valid_o = '0;
     commit_pc_o    = '0;
+    commit_inst_o  = '0;
+    commit_decoded_inst_o = '0;
     commit_we_o    = '0;
     commit_areg_o  = '0;
     commit_wdata_o = '0;
@@ -354,6 +362,8 @@ module rob #(
               // 分支/跳转误预测：先退休该指令，再触发 flush
               commit_valid_o[i] = 1'b1;
               commit_pc_o[i]    = rob_ram[commit_rob_index_o[i]].pc;
+              commit_inst_o[i]  = rob_ram[commit_rob_index_o[i]].inst;
+              commit_decoded_inst_o[i] = rob_ram[commit_rob_index_o[i]].decoded_inst;
 
               commit_areg_o[i]  = rob_ram[commit_rob_index_o[i]].areg;
               commit_wdata_o[i] = head_fast_data[i];
@@ -384,6 +394,8 @@ module rob #(
               // 正常退休
               commit_valid_o[i] = 1'b1;
               commit_pc_o[i]    = rob_ram[commit_rob_index_o[i]].pc;
+              commit_inst_o[i]  = rob_ram[commit_rob_index_o[i]].inst;
+              commit_decoded_inst_o[i] = rob_ram[commit_rob_index_o[i]].decoded_inst;
 
               commit_areg_o[i]  = rob_ram[commit_rob_index_o[i]].areg;
               commit_wdata_o[i] = head_fast_data[i];
@@ -773,6 +785,8 @@ module rob #(
             rob_ram[w_idx].is_ret      <= dispatch_is_ret_i[i];
             rob_ram[w_idx].is_rvc      <= dispatch_is_rvc_i[i];
             rob_ram[w_idx].pc          <= dispatch_pc_i[i];
+            rob_ram[w_idx].inst        <= dispatch_inst_i[i];
+            rob_ram[w_idx].decoded_inst <= dispatch_decoded_inst_i[i];
             rob_ram[w_idx].ftq_id      <= dispatch_ftq_id_i[i];
             rob_ram[w_idx].fetch_epoch <= dispatch_fetch_epoch_i[i];
 

@@ -21,7 +21,7 @@ class ProfileCollector {
 
   void observe_cycle(const Vtb_triathlon *top);
   void record_flush(uint64_t cycles, const Vtb_triathlon *top, const UnifiedMem &mem);
-  void record_commit(uint32_t pc, uint32_t inst);
+  void record_commit(uint32_t pc, uint32_t raw_inst, uint32_t decoded_inst, bool is_rvc);
   void record_commit_width(uint32_t commit_this_cycle);
   void on_commit_cycle(uint64_t cycles);
   void on_no_commit_cycle(uint64_t cycles, uint64_t no_commit_cycles, const Vtb_triathlon *top);
@@ -30,6 +30,8 @@ class ProfileCollector {
   uint64_t total_commits() const { return total_commits_; }
   uint32_t last_commit_pc() const { return last_commit_pc_; }
   uint32_t last_commit_inst() const { return last_commit_inst_; }
+  uint32_t last_commit_decoded_inst() const { return last_commit_decoded_inst_; }
+  bool last_commit_is_rvc() const { return last_commit_is_rvc_; }
 
  private:
   enum StallKindIdx : int {
@@ -96,6 +98,8 @@ class ProfileCollector {
   uint64_t total_commits_ = 0;
   uint32_t last_commit_pc_ = 0;
   uint32_t last_commit_inst_ = 0;
+  uint32_t last_commit_decoded_inst_ = 0;
+  bool last_commit_is_rvc_ = false;
 
   bool pending_flush_penalty_ = false;
   uint64_t pending_flush_cycle_ = 0;

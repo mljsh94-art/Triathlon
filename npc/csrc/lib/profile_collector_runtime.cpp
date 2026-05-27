@@ -166,10 +166,10 @@ void ProfileCollector::record_flush(uint64_t cycles,
   }
 }
 
-void ProfileCollector::record_commit(uint32_t pc, uint32_t inst) {
+void ProfileCollector::record_commit(uint32_t pc, uint32_t raw_inst, uint32_t decoded_inst, bool is_rvc) {
   total_commits_++;
   commit_pc_hist_[pc]++;
-  commit_inst_hist_[inst]++;
+  commit_inst_hist_[raw_inst]++;
 
   if (has_prev_commit_) {
     uint32_t prev_opcode = prev_commit_inst_ & 0x7Fu;
@@ -187,29 +187,31 @@ void ProfileCollector::record_commit(uint32_t pc, uint32_t inst) {
   }
   has_prev_commit_ = true;
   prev_commit_pc_ = pc;
-  prev_commit_inst_ = inst;
+  prev_commit_inst_ = decoded_inst;
 
-  uint32_t opcode = inst & 0x7Fu;
+  uint32_t opcode = decoded_inst & 0x7Fu;
   if (opcode == 0x63u) {
     pred_cond_total_++;
   } else if (opcode == 0x6Fu || opcode == 0x67u) {
-    if (is_ret_inst(inst)) {
+    if (is_ret_inst(decoded_inst)) {
       pred_ret_total_++;
     } else {
       pred_jump_total_++;
-      if (is_indirect_jump_inst(inst)) {
+      if (is_indirect_jump_inst(decoded_inst)) {
         pred_jump_indirect_total_++;
       } else {
         pred_jump_direct_total_++;
       }
     }
   }
-  if (is_call_inst(inst)) {
+  if (is_call_inst(decoded_inst)) {
     pred_call_total_++;
   }
 
   last_commit_pc_ = pc;
-  last_commit_inst_ = inst;
+  last_commit_inst_ = raw_inst;
+  last_commit_decoded_inst_ = decoded_inst;
+  last_commit_is_rvc_ = is_rvc;
 }
 
 void ProfileCollector::record_commit_width(uint32_t commit_this_cycle) {
