@@ -10,14 +10,11 @@
 #include "verilated_vcd_c.h"
 
 #include <array>
-#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <fstream>
 #include <iostream>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -32,7 +29,7 @@ int main(int argc, char **argv) {
               << " [--bru-trace] [--fe-trace] [--stall-trace [N]] [--boot-handoff]"
               << " [--dtb <path>] [--firmware-load-base <addr>]"
               << " [--virtio-blk-image <path>]"
-              << " [--progress [N]] [--linux-early-debug]\n";
+              << " [--progress [N]] [--progress-verbose] [--linux-early-debug]\n";
     return 1;
   }
 
@@ -182,67 +179,6 @@ int main(int argc, char **argv) {
   constexpr uint32_t kLinuxPtWatchEnd = 0x81004000u;
   uint64_t linux_pt_write_logs = 0;
   npc::LinuxBootStageTracker linux_stages;
-  uint64_t agent_satp_logs = 0;
-  uint64_t agent_pt_store_logs = 0;
-  uint64_t agent_exc_logs = 0;
-  uint64_t agent_vmsetup_logs = 0;
-  uint64_t agent_lsu_fault_logs = 0;
-  uint64_t agent_lsm_logs = 0;
-  uint64_t agent_fdt_logs = 0;
-
-  auto hex32 = [](uint32_t value) {
-    std::ostringstream os;
-    os << "0x" << std::hex << value;
-    return os.str();
-  };
-
-  auto linux_kva_to_pa = [](uint32_t value) {
-    return (value >= 0xc0000000u) ? (value - 0x40000000u) : value;
-  };
-
-  auto read_linux_word = [&](uint32_t value) {
-    return mem.mem.read_word(linux_kva_to_pa(value));
-  };
-
-  // #region agent log
-  auto agent_log = [&](uint64_t cycle,
-                       const char *hypothesis,
-                       const char *location,
-                       const char *message,
-                       const std::string &data_json) {
-    std::ofstream log("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", std::ios::app);
-    if (!log) return;
-    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                      std::chrono::system_clock::now().time_since_epoch())
-                      .count();
-    log << "{\"sessionId\":\"e93a92\",\"runId\":\"boot-rootcause-trace\","
-        << "\"hypothesisId\":\"" << hypothesis << "\","
-        << "\"location\":\"" << location << "\","
-        << "\"message\":\"" << message << "\","
-        << "\"data\":{\"cycle\":" << cycle << "," << data_json << "},"
-        << "\"timestamp\":" << now_ms << "}\n";
-  };
-  // #endregion agent log
-
-  // #region agent log
-  auto agent_log_current = [&](uint64_t cycle,
-                               const char *hypothesis,
-                               const char *location,
-                               const char *message,
-                               const std::string &data_json) {
-    std::ofstream log("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-61e984.log", std::ios::app);
-    if (!log) return;
-    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                      std::chrono::system_clock::now().time_since_epoch())
-                      .count();
-    log << "{\"sessionId\":\"61e984\",\"runId\":\"late-fdt-progress\","
-        << "\"hypothesisId\":\"" << hypothesis << "\","
-        << "\"location\":\"" << location << "\","
-        << "\"message\":\"" << message << "\","
-        << "\"data\":{\"cycle\":" << cycle << "," << data_json << "},"
-        << "\"timestamp\":" << now_ms << "}\n";
-  };
-  // #endregion agent log
 
   auto commit_trace_active = [&](uint64_t cycle) {
     if (!args.commit_trace) return false;
@@ -272,7 +208,6 @@ int main(int argc, char **argv) {
     view.mcause = top->dbg_csr_mcause_o;
     view.mtval = top->dbg_csr_stval_o;
     view.rob_flush_cause = static_cast<uint32_t>(top->dbg_rob_flush_cause_o);
-    view.dtb_magic = mem.mem.read_word(npc::kDtbBase);
     view.rf = &regs;
     return view;
   };
@@ -298,22 +233,6 @@ int main(int argc, char **argv) {
       mem.mem.write_store(addr, data, op);
       if (watch_pt_write) {
         uint32_t new_word = mem.mem.read_word(aligned);
-        if (agent_pt_store_logs < 64) {
-          std::ostringstream data_os;
-          data_os << "\"addr\":\"" << hex32(addr) << "\","
-                  << "\"aligned\":\"" << hex32(aligned) << "\","
-                  << "\"data\":\"" << hex32(data) << "\","
-                  << "\"oldWord\":\"" << hex32(old_word) << "\","
-                  << "\"newWord\":\"" << hex32(new_word) << "\","
-                  << "\"targetPte\":\"" << hex32(mem.mem.read_word(0x81002800u)) << "\","
-                  << "\"satp\":\"" << hex32(top->dbg_csr_satp_o) << "\","
-                  << "\"robHeadPc\":\"" << hex32(top->dbg_rob_head_pc_o) << "\","
-                  << "\"commitValid\":\"" << hex32(static_cast<uint32_t>(top->commit_valid_o)) << "\","
-                  << "\"isTarget81002800\":" << (aligned == 0x81002800u ? "true" : "false");
-          agent_log(cycles, "H1,H2,H5", "npc_main.cpp:pt-write",
-                    "page-table-region-store", data_os.str());
-          agent_pt_store_logs++;
-        }
         std::ios::fmtflags f(std::cout.flags());
         std::cout << "[debug][pt-write] cycle=" << cycles
                   << " addr=0x" << std::hex << addr
@@ -371,42 +290,6 @@ int main(int argc, char **argv) {
       std::cout.flags(f);
     }
 
-    // #region agent log
-    if (args.linux_early_debug && agent_lsu_fault_logs < 64) {
-      uint32_t lsu_sel_pc = top->dbg_lsu_sel_pc_o;
-      uint32_t lsu_req_addr = top->dbg_lsu_ld_req_addr_o;
-      uint32_t lsu_inflight_addr = top->dbg_lsu_inflight_addr_o;
-      bool watch_lsu =
-          (top->dbg_csr_satp_o != 0u) &&
-          ((lsu_sel_pc >= 0xc0817570u && lsu_sel_pc < 0xc0817590u) ||
-           (top->dbg_lsu_ld_fire_o &&
-            (lsu_req_addr == 0x80000000u || lsu_req_addr == 0x3ffff000u ||
-             lsu_req_addr == 0x00000000u || lsu_req_addr == 0xc0c06d5bu)) ||
-           (top->dbg_lsu_rsp_fire_o && top->dbg_lsu_ld_rsp_err_o));
-      if (watch_lsu) {
-        std::ostringstream data_os;
-        data_os << "\"lsuSelPc\":\"" << hex32(lsu_sel_pc) << "\","
-                << "\"ldReqValid\":" << (top->dbg_lsu_ld_req_valid_o ? "true" : "false") << ","
-                << "\"ldReqReady\":" << (top->dbg_lsu_ld_req_ready_o ? "true" : "false") << ","
-                << "\"ldFire\":" << (top->dbg_lsu_ld_fire_o ? "true" : "false") << ","
-                << "\"ldReqAddr\":\"" << hex32(lsu_req_addr) << "\","
-                << "\"rspFire\":" << (top->dbg_lsu_rsp_fire_o ? "true" : "false") << ","
-                << "\"rspErr\":" << (top->dbg_lsu_ld_rsp_err_o ? "true" : "false") << ","
-                << "\"inflightAddr\":\"" << hex32(lsu_inflight_addr) << "\","
-                << "\"inflightTag\":\"" << hex32(static_cast<uint32_t>(top->dbg_lsu_inflight_tag_o)) << "\","
-                << "\"robHeadPc\":\"" << hex32(top->dbg_rob_head_pc_o) << "\","
-                << "\"satp\":\"" << hex32(top->dbg_csr_satp_o) << "\","
-                << "\"scause\":\"" << hex32(top->dbg_csr_scause_o) << "\","
-                << "\"sepc\":\"" << hex32(top->dbg_csr_sepc_o) << "\","
-                << "\"stval\":\"" << hex32(top->dbg_csr_stval_o) << "\","
-                << "\"targetPte\":\"" << hex32(mem.mem.read_word(0x81002800u)) << "\"";
-        agent_log(cycles, "H10,H12", "npc_main.cpp:lsu-fault-watch",
-                  "lsu-fault-or-lsm-watch", data_os.str());
-        agent_lsu_fault_logs++;
-      }
-    }
-    // #endregion agent log
-
     profile.record_flush(cycles, top, mem.mem);
 
     if (!args.boot_handoff && top->backend_flush_o && top->dbg_rob_flush_o &&
@@ -439,8 +322,10 @@ int main(int argc, char **argv) {
         top->dbg_rob_flush_is_exception_o) {
       uint32_t src_pc = top->dbg_rob_flush_src_pc_o;
       uint32_t src_inst = mem.mem.read_word(src_pc);
-      npc::LinuxBootStageView flush_view = make_linux_stage_view(cycles, 0, src_pc, src_inst, rf);
-      linux_stages.on_flush(flush_view, src_pc, src_inst, mem.mem);
+      if (args.linux_early_debug && !linux_stages.all_seen()) {
+        npc::LinuxBootStageView flush_view = make_linux_stage_view(cycles, 0, src_pc, src_inst, rf);
+        linux_stages.on_flush(flush_view, src_pc, src_inst, mem.mem);
+      }
       if (args.linux_early_debug) {
       bool pc_changed = (src_pc != last_flush_src_pc);
       bool periodic_log = (cycles - last_flush_log_cycle >= 100000ull);
@@ -463,21 +348,6 @@ int main(int argc, char **argv) {
         std::cout.flags(f);
         last_flush_src_pc = src_pc;
         last_flush_log_cycle = cycles;
-      }
-      if (top->dbg_csr_satp_o == 0x80081002u && agent_exc_logs < 16) {
-        std::ostringstream data_os;
-        data_os << "\"srcPc\":\"" << hex32(src_pc) << "\","
-                << "\"srcInst\":\"" << hex32(src_inst) << "\","
-                << "\"cause\":\"" << hex32(static_cast<uint32_t>(top->dbg_rob_flush_cause_o)) << "\","
-                << "\"scause\":\"" << hex32(top->dbg_csr_scause_o) << "\","
-                << "\"sepc\":\"" << hex32(top->dbg_csr_sepc_o) << "\","
-                << "\"stval\":\"" << hex32(top->dbg_csr_stval_o) << "\","
-                << "\"targetPte\":\"" << hex32(mem.mem.read_word(0x81002800u)) << "\","
-                << "\"pteC000\":\"" << hex32(mem.mem.read_word(0x81002c00u)) << "\","
-                << "\"satp\":\"" << hex32(top->dbg_csr_satp_o) << "\"";
-        agent_log(cycles, "H1,H4", "npc_main.cpp:flush-exc",
-                  "exception-after-swapper-pgdir", data_os.str());
-        agent_exc_logs++;
       }
       }
     }
@@ -569,168 +439,17 @@ int main(int argc, char **argv) {
       uint32_t inst = top->commit_inst_o[i];
       uint32_t decoded_inst = top->commit_decoded_inst_o[i];
       bool is_rvc = ((top->commit_is_rvc_o >> i) & 0x1) != 0;
-      // #region agent log
-      if (args.linux_early_debug &&
-          (cycles >= 1400000u) &&
-          ((agent_fdt_logs < 64u) || ((cycles >= 1490000u) && (agent_fdt_logs < 256u))) &&
-          ((pc >= 0xc04540d0u && pc < 0xc0454248u) ||
-           (pc >= 0xc0454b3eu && pc < 0xc0454c90u))) {
-        std::ostringstream data_os;
-        data_os << "\"pc\":\"" << hex32(pc) << "\","
-                << "\"inst\":\"" << hex32(inst) << "\","
-                << "\"slot\":" << i << ","
-                << "\"we\":" << (we ? "true" : "false") << ","
-                << "\"rd\":" << rd << ","
-                << "\"wdata\":\"" << hex32(data) << "\","
-                << "\"func\":\""
-                << ((pc >= 0xc04540d0u && pc < 0xc0454188u) ? "fdt_offset_ptr" :
-                    ((pc >= 0xc0454188u && pc < 0xc0454248u) ? "fdt_next_tag" :
-                     "fdt_other"))
-                << "\","
-                << "\"ra\":\"" << hex32(rf_before[1]) << "\","
-                << "\"sp\":\"" << hex32(rf_before[2]) << "\","
-                << "\"gp\":\"" << hex32(rf_before[3]) << "\","
-                << "\"a0\":\"" << hex32(rf_before[10]) << "\","
-                << "\"a1\":\"" << hex32(rf_before[11]) << "\","
-                << "\"a2\":\"" << hex32(rf_before[12]) << "\","
-                << "\"a3\":\"" << hex32(rf_before[13]) << "\","
-                << "\"a4\":\"" << hex32(rf_before[14]) << "\","
-                << "\"a5\":\"" << hex32(rf_before[15]) << "\","
-                << "\"a6\":\"" << hex32(rf_before[16]) << "\","
-                << "\"a7\":\"" << hex32(rf_before[17]) << "\","
-                << "\"s0\":\"" << hex32(rf_before[8]) << "\","
-                << "\"s1\":\"" << hex32(rf_before[9]) << "\","
-                << "\"s2\":\"" << hex32(rf_before[18]) << "\","
-                << "\"s3\":\"" << hex32(rf_before[19]) << "\","
-                << "\"s4\":\"" << hex32(rf_before[20]) << "\","
-                << "\"a0After\":\"" << hex32(rf[10]) << "\","
-                << "\"a5After\":\"" << hex32(rf[15]) << "\","
-                << "\"satp\":\"" << hex32(top->dbg_csr_satp_o) << "\","
-                << "\"stvec\":\"" << hex32(top->dbg_csr_stvec_o) << "\","
-                << "\"sepc\":\"" << hex32(top->dbg_csr_sepc_o) << "\","
-                << "\"scause\":\"" << hex32(top->dbg_csr_scause_o) << "\","
-                << "\"stval\":\"" << hex32(top->dbg_csr_stval_o) << "\","
-                << "\"robHeadPc\":\"" << hex32(top->dbg_rob_head_pc_o) << "\","
-                << "\"flush\":" << (top->backend_flush_o ? "true" : "false") << ","
-                << "\"redirect\":\"" << hex32(top->backend_redirect_pc_o) << "\"";
-        agent_log_current(cycles, "H64,H65,H66", "npc_main.cpp:late-fdt-commit",
-                          "late-fdt-progress-state", data_os.str());
-        agent_fdt_logs++;
-      }
-      // #endregion agent log
-      // #region agent log
-      if (args.linux_early_debug && agent_vmsetup_logs < 256 &&
-          ((pc >= 0xc0804600u && pc < 0xc0804d40u) ||
-           (pc >= 0xc0817570u && pc < 0xc0817590u))) {
-        uint32_t predicted_store_addr = 0;
-        uint32_t predicted_store_data = 0;
-        bool is_pgd_leaf_store = (pc == 0xc0804712u);
-        bool is_pte_leaf_store = (pc == 0xc0804780u);
-        if (is_pgd_leaf_store) {
-          predicted_store_addr = rf[19];  // s3
-          predicted_store_data = rf[9];   // s1
-        } else if (is_pte_leaf_store) {
-          predicted_store_addr = rf[19];  // s3
-          predicted_store_data = rf[14];  // a4
-        }
-        std::ostringstream data_os;
-        data_os << "\"pc\":\"" << hex32(pc) << "\","
-                << "\"inst\":\"" << hex32(inst) << "\","
-                << "\"slot\":" << i << ","
-                << "\"we\":" << (we ? "true" : "false") << ","
-                << "\"rd\":" << rd << ","
-                << "\"wdata\":\"" << hex32(data) << "\","
-                << "\"a0\":\"" << hex32(rf[10]) << "\","
-                << "\"a1\":\"" << hex32(rf[11]) << "\","
-                << "\"a2\":\"" << hex32(rf[12]) << "\","
-                << "\"a3\":\"" << hex32(rf[13]) << "\","
-                << "\"a4\":\"" << hex32(rf[14]) << "\","
-                << "\"s1\":\"" << hex32(rf[9]) << "\","
-                << "\"s2\":\"" << hex32(rf[18]) << "\","
-                << "\"s3\":\"" << hex32(rf[19]) << "\","
-                << "\"s4\":\"" << hex32(rf[20]) << "\","
-                << "\"predictedStoreAddr\":\"" << hex32(predicted_store_addr) << "\","
-                << "\"predictedStoreData\":\"" << hex32(predicted_store_data) << "\","
-                << "\"targetPte\":\"" << hex32(mem.mem.read_word(0x81002800u)) << "\","
-                << "\"inPagingInit\":" << ((pc >= 0xc0804a8eu && pc < 0xc0804d40u) ? "true" : "false") << ","
-                << "\"inCreatePgdMapping\":" << ((pc >= 0xc08046dau && pc < 0xc0804798u) ? "true" : "false") << ","
-                << "\"inCreateLinearMapping\":" << ((pc >= 0xc0804798u && pc < 0xc080483eu) ? "true" : "false") << ","
-                << "\"inCgroupEarly\":" << ((pc >= 0xc080ba7au && pc < 0xc080bb40u) ? "true" : "false") << ","
-                << "\"inLsmSetBlobSize\":" << ((pc >= 0xc0817570u && pc < 0xc0817590u) ? "true" : "false") << ","
-                << "\"hitTargetStore\":" << ((predicted_store_addr == 0x81002800u) ? "true" : "false");
-        agent_log(cycles, "H9,H10,H11,H12", "npc_main.cpp:boot-key-commit",
-                  "vmsetup-key-commit", data_os.str());
-        agent_vmsetup_logs++;
-      }
-      // #endregion agent log
-      // #region agent log
-      if (args.linux_early_debug && agent_lsm_logs < 512 &&
-          ((pc >= 0xc08175eau && pc < 0xc0817a80u) ||
-           (pc >= 0xc0818208u && pc < 0xc081862eu))) {
-        uint32_t ordered_ptr = read_linux_word(0xc0c037a4u);
-        uint32_t last_lsm = read_linux_word(0xc0c037b4u);
-        uint32_t candidate = rf[10];
-        if (pc >= 0xc08175eau && pc < 0xc08176a0u) {
-          candidate = rf[9];  // append_ordered_lsm keeps the lsm pointer in s1.
-        } else if (pc >= 0xc081793au && pc < 0xc0817a80u) {
-          candidate = rf[9];  // prepare_lsm keeps the current lsm pointer in s1.
-        } else if (pc >= 0xc08176a0u && pc < 0xc08178e0u) {
-          candidate = rf[18];  // ordered_lsm_parse iterates lsm entries with s2.
-        }
-
-        auto read_candidate_field = [&](uint32_t base, uint32_t off) {
-          if (base < 0xc0000000u) return 0u;
-          return read_linux_word(base + off);
-        };
-        auto read_ordered_entry = [&](uint32_t idx) {
-          if (ordered_ptr < 0xc0000000u) return 0u;
-          return read_linux_word(ordered_ptr + idx * 4u);
-        };
-
-        std::ostringstream data_os;
-        data_os << "\"pc\":\"" << hex32(pc) << "\","
-                << "\"slot\":" << i << ","
-                << "\"we\":" << (we ? "true" : "false") << ","
-                << "\"rd\":" << rd << ","
-                << "\"wdata\":\"" << hex32(data) << "\","
-                << "\"a0\":\"" << hex32(rf[10]) << "\","
-                << "\"a1\":\"" << hex32(rf[11]) << "\","
-                << "\"a2\":\"" << hex32(rf[12]) << "\","
-                << "\"s1\":\"" << hex32(rf[9]) << "\","
-                << "\"s2\":\"" << hex32(rf[18]) << "\","
-                << "\"s3\":\"" << hex32(rf[19]) << "\","
-                << "\"s4\":\"" << hex32(rf[20]) << "\","
-                << "\"candidate\":\"" << hex32(candidate) << "\","
-                << "\"candidateName\":\"" << hex32(read_candidate_field(candidate, 0)) << "\","
-                << "\"candidateOrder\":\"" << hex32(read_candidate_field(candidate, 4)) << "\","
-                << "\"candidateFlags\":\"" << hex32(read_candidate_field(candidate, 8)) << "\","
-                << "\"candidateEnabled\":\"" << hex32(read_candidate_field(candidate, 12)) << "\","
-                << "\"candidateInit\":\"" << hex32(read_candidate_field(candidate, 16)) << "\","
-                << "\"candidateBlobs\":\"" << hex32(read_candidate_field(candidate, 20)) << "\","
-                << "\"orderedPtr\":\"" << hex32(ordered_ptr) << "\","
-                << "\"lastLsm\":\"" << hex32(last_lsm) << "\","
-                << "\"ordered0\":\"" << hex32(read_ordered_entry(0)) << "\","
-                << "\"ordered1\":\"" << hex32(read_ordered_entry(1)) << "\","
-                << "\"ordered2\":\"" << hex32(read_ordered_entry(2)) << "\","
-                << "\"ordered3\":\"" << hex32(read_ordered_entry(3)) << "\","
-                << "\"inAppendOrdered\":" << ((pc >= 0xc08175eau && pc < 0xc08176a0u) ? "true" : "false") << ","
-                << "\"inOrderedParse\":" << ((pc >= 0xc08176a0u && pc < 0xc08178e0u) ? "true" : "false") << ","
-                << "\"inPrepareLsm\":" << ((pc >= 0xc081793au && pc < 0xc0817a80u) ? "true" : "false") << ","
-                << "\"inSecurityInit\":" << ((pc >= 0xc0818208u && pc < 0xc081862eu) ? "true" : "false");
-        agent_log(cycles, "H13,H14,H15,H16", "npc_main.cpp:lsm-order-trace",
-                  "lsm-order-state", data_os.str());
-        agent_lsm_logs++;
-      }
-      // #endregion agent log
       uint32_t satp_now = top->dbg_csr_satp_o;
       const bool satp_changed = (satp_now != last_satp_seen);
       if (satp_changed) {
         const uint32_t satp_old = last_satp_seen;
-        npc::LinuxBootStageView satp_view = make_linux_stage_view(cycles, i, pc, inst, rf);
-        satp_view.satp_old = satp_old;
-        satp_view.satp = satp_now;
-        linux_stages.on_satp_change(satp_view, mem.mem);
         last_satp_seen = satp_now;
+        if (args.linux_early_debug && !linux_stages.all_seen()) {
+          npc::LinuxBootStageView satp_view = make_linux_stage_view(cycles, i, pc, inst, rf);
+          satp_view.satp_old = satp_old;
+          satp_view.satp = satp_now;
+          linux_stages.on_satp_change(satp_view, mem.mem);
+        }
 
         if (args.linux_early_debug && linux_satp_change_logs < kLinuxSatpChangeLogLimit) {
           std::ios::fmtflags f(std::cout.flags());
@@ -751,24 +470,6 @@ int main(int argc, char **argv) {
                     << " a0=0x" << rf[10]
                     << std::dec << "\n";
           std::cout.flags(f);
-          if ((satp_now == 0x80081caau || satp_now == 0x80081002u) &&
-              agent_satp_logs < 8) {
-            uint32_t root_base = (satp_now & 0x003fffffu) << 12;
-            std::ostringstream data_os;
-            data_os << "\"pc\":\"" << hex32(pc) << "\","
-                    << "\"satpOld\":\"" << hex32(satp_old) << "\","
-                    << "\"satpNew\":\"" << hex32(satp_now) << "\","
-                    << "\"rootBase\":\"" << hex32(root_base) << "\","
-                    << "\"targetPteAddr\":\"0x81002800\","
-                    << "\"targetPte\":\"" << hex32(mem.mem.read_word(0x81002800u)) << "\","
-                    << "\"pteC000\":\"" << hex32(mem.mem.read_word(0x81002c00u)) << "\","
-                    << "\"pteEarlyTrap\":\"" << hex32(mem.mem.read_word(0x81caac00u)) << "\","
-                    << "\"sepc\":\"" << hex32(top->dbg_csr_sepc_o) << "\","
-                    << "\"stval\":\"" << hex32(top->dbg_csr_stval_o) << "\"";
-            agent_log(cycles, "H1,H3", "npc_main.cpp:satp-change",
-                      "satp-root-and-key-ptes", data_os.str());
-            agent_satp_logs++;
-          }
           linux_satp_change_logs++;
           if (satp_old != 0u) {
             uint32_t root_ppn = satp_old & 0x003fffffu;
@@ -805,7 +506,9 @@ int main(int argc, char **argv) {
           }
         }
       }
-      linux_stages.on_commit(make_linux_stage_view(cycles, i, pc, inst, rf), mem.mem);
+      if (args.linux_early_debug && !linux_stages.all_seen()) {
+        linux_stages.on_commit(make_linux_stage_view(cycles, i, pc, inst, rf), mem.mem);
+      }
       if (args.linux_early_debug) {
         if (we && rd == 3 && linux_gp_write_logs < kLinuxGpWriteLogLimit) {
           std::ios::fmtflags f(std::cout.flags());
@@ -1123,7 +826,21 @@ int main(int argc, char **argv) {
         (cycles % args.progress_interval == 0)) {
       const uint32_t last_pc = profile.last_commit_pc();
       std::ios::fmtflags f(std::cout.flags());
-      std::cout << "[progress] cycle=" << cycles
+      const double ipc = cycles ? static_cast<double>(profile.total_commits()) /
+                                      static_cast<double>(cycles)
+                                : 0.0;
+      if (!args.progress_verbose && !args.linux_early_debug) {
+        std::cout << "[progress] cycle=" << cycles
+                  << " commits=" << profile.total_commits()
+                  << " ipc=" << ipc
+                  << " no_commit=" << no_commit_cycles
+                  << " last_pc=0x" << std::hex << last_pc
+                  << " last_inst=0x" << profile.last_commit_inst()
+                  << " last_rvc=" << std::dec
+                  << static_cast<int>(profile.last_commit_is_rvc())
+                  << "\n";
+      } else {
+        std::cout << "[progress] cycle=" << cycles
                 << " commits=" << profile.total_commits()
                 << " no_commit=" << no_commit_cycles
                 << " last_pc=0x" << std::hex << last_pc
@@ -1301,6 +1018,7 @@ int main(int argc, char **argv) {
                   << std::dec << "\n";
         last_uart_tx_bytes = uart_total;
         last_fw_text_write_count = fw_writes;
+      }
       }
       std::cout.flags(f);
     }

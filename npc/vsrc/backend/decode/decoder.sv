@@ -38,13 +38,8 @@ module decoder #(
   localparam int unsigned DEC_PC_DBG_BUDGET = 1024;
   logic [31:0] dec_pc_dbg_cnt_q;
   logic dec_diag_trace_en_q;
-  integer agent49_decode_log_fd;
-  int unsigned agent49_decode_log_cnt;
   initial dec_diag_trace_en_q = $test$plusargs("npc_diag_trace");
-  initial begin
-    agent49_decode_log_fd = 0;
-    agent49_decode_log_cnt = 0;
-  end
+
 `endif
 
   // ----------------------------------------------------------------------
@@ -206,6 +201,7 @@ module decoder #(
       uop_decoded.alu_op    = ALU_NOP;
       uop_decoded.br_op     = BR_EQ;
       uop_decoded.lsu_op    = LSU_LW;
+      uop_decoded.amo_op    = AMO_NONE;
 
       uop_decoded.rs1       = instr_rtype.rs1;
       uop_decoded.rs2       = instr_rtype.rs2;
@@ -518,13 +514,76 @@ module decoder #(
                 uop_decoded.lsu_op   = LSU_SC;
               end
 
-              // AMOSWAP/ADD/XOR/AND/OR/MIN/MAX/MINU/MAXU
-              5'b00001, 5'b00000, 5'b00100, 5'b01100, 5'b01000, 5'b10000,
-              5'b10100, 5'b11000, 5'b11100: begin
+              5'b00001: begin  // AMOSWAP.W
                 uop_decoded.has_rs2  = 1'b1;
                 uop_decoded.is_load  = 1'b1;
                 uop_decoded.is_store = 1'b1;
-                uop_decoded.lsu_op   = LSU_SW;
+                uop_decoded.lsu_op   = LSU_AMO;
+                uop_decoded.amo_op   = AMO_SWAP;
+              end
+
+              5'b00000: begin  // AMOADD.W
+                uop_decoded.has_rs2  = 1'b1;
+                uop_decoded.is_load  = 1'b1;
+                uop_decoded.is_store = 1'b1;
+                uop_decoded.lsu_op   = LSU_AMO;
+                uop_decoded.amo_op   = AMO_ADD;
+              end
+
+              5'b00100: begin  // AMOXOR.W
+                uop_decoded.has_rs2  = 1'b1;
+                uop_decoded.is_load  = 1'b1;
+                uop_decoded.is_store = 1'b1;
+                uop_decoded.lsu_op   = LSU_AMO;
+                uop_decoded.amo_op   = AMO_XOR;
+              end
+
+              5'b01100: begin  // AMOAND.W
+                uop_decoded.has_rs2  = 1'b1;
+                uop_decoded.is_load  = 1'b1;
+                uop_decoded.is_store = 1'b1;
+                uop_decoded.lsu_op   = LSU_AMO;
+                uop_decoded.amo_op   = AMO_AND;
+              end
+
+              5'b01000: begin  // AMOOR.W
+                uop_decoded.has_rs2  = 1'b1;
+                uop_decoded.is_load  = 1'b1;
+                uop_decoded.is_store = 1'b1;
+                uop_decoded.lsu_op   = LSU_AMO;
+                uop_decoded.amo_op   = AMO_OR;
+              end
+
+              5'b10000: begin  // AMOMIN.W
+                uop_decoded.has_rs2  = 1'b1;
+                uop_decoded.is_load  = 1'b1;
+                uop_decoded.is_store = 1'b1;
+                uop_decoded.lsu_op   = LSU_AMO;
+                uop_decoded.amo_op   = AMO_MIN;
+              end
+
+              5'b10100: begin  // AMOMAX.W
+                uop_decoded.has_rs2  = 1'b1;
+                uop_decoded.is_load  = 1'b1;
+                uop_decoded.is_store = 1'b1;
+                uop_decoded.lsu_op   = LSU_AMO;
+                uop_decoded.amo_op   = AMO_MAX;
+              end
+
+              5'b11000: begin  // AMOMINU.W
+                uop_decoded.has_rs2  = 1'b1;
+                uop_decoded.is_load  = 1'b1;
+                uop_decoded.is_store = 1'b1;
+                uop_decoded.lsu_op   = LSU_AMO;
+                uop_decoded.amo_op   = AMO_MINU;
+              end
+
+              5'b11100: begin  // AMOMAXU.W
+                uop_decoded.has_rs2  = 1'b1;
+                uop_decoded.is_load  = 1'b1;
+                uop_decoded.is_store = 1'b1;
+                uop_decoded.lsu_op   = LSU_AMO;
+                uop_decoded.amo_op   = AMO_MAXU;
               end
 
               default: begin
@@ -692,7 +751,6 @@ module decoder #(
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       dec_pc_dbg_cnt_q <= '0;
-      agent49_decode_log_cnt <= 0;
     end else if (dec_diag_trace_en_q && ibuf2dec_valid_i && backend2dec_ready_i) begin
       logic [31:0] dec_pc_dbg_cnt_n;
       dec_pc_dbg_cnt_n = dec_pc_dbg_cnt_q;
@@ -714,30 +772,7 @@ module decoder #(
       end
       dec_pc_dbg_cnt_q <= dec_pc_dbg_cnt_n;
     end
-    // #region agent log
-    if (rst_ni && ibuf2dec_valid_i && backend2dec_ready_i &&
-        (agent49_decode_log_cnt < 64)) begin
-      for (int i = 0; i < DECODE_WIDTH; i++) begin
-        if (ibuf_slot_valid_i[i] &&
-            (ibuf_pcs_i[i] >= 32'hc0804e40) && (ibuf_pcs_i[i] <= 32'hc0804e80)) begin
-          if (agent49_decode_log_fd == 0) begin
-            agent49_decode_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-49fa23.log", "a");
-          end
-          if (agent49_decode_log_fd != 0) begin
-            $fdisplay(agent49_decode_log_fd,
-                      "{\"sessionId\":\"49fa23\",\"runId\":\"illegal-halfword-pre\",\"hypothesisId\":\"H25,H26,H27\",\"location\":\"decoder.sv:decode\",\"message\":\"misc-mem-init-decode-state\",\"data\":{\"slot\":%0d,\"pc\":\"0x%08h\",\"instr\":\"0x%08h\",\"raw\":\"0x%08h\",\"lo16\":\"0x%04h\",\"valid\":%0d,\"isRvc\":%0d,\"predNpc\":\"0x%08h\",\"illegal\":%0d,\"fu\":%0d,\"isStore\":%0d,\"lsuOp\":%0d,\"isBranch\":%0d,\"isJump\":%0d,\"ftq\":%0d,\"epoch\":%0d},\"timestamp\":0}",
-                      i, ibuf_pcs_i[i], ibuf_instrs_i[i], ibuf_raw_instrs_i[i],
-                      ibuf_instrs_i[i][15:0], dec_uops_o[i].valid, dec_uops_o[i].is_rvc,
-                      dec_uops_o[i].pred_npc, dec_uops_o[i].illegal, dec_uops_o[i].fu,
-                      dec_uops_o[i].is_store, dec_uops_o[i].lsu_op, dec_uops_o[i].is_branch,
-                      dec_uops_o[i].is_jump, dec_uops_o[i].ftq_id, dec_uops_o[i].fetch_epoch);
-            $fflush(agent49_decode_log_fd);
-            agent49_decode_log_cnt <= agent49_decode_log_cnt + 1;
-          end
-        end
-      end
-    end
-    // #endregion agent log
+
   end
 `endif
 

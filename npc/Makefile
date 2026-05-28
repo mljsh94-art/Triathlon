@@ -5,10 +5,17 @@ NPC_HOME ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 TRIATHLON_HOME ?= $(abspath $(NPC_HOME)/..)
 
 VERILATOR = verilator
-# VERILATOR_CFLAGS += -MMD --build -cc \
-# 				-O3 --x-assign fast --x-initial fast --noassert -sv
+VL_JOBS ?= $(shell nproc)
+VL_THREADS ?= 2
+VL_OPTFLAGS ?= -O3 -march=native -fno-plt
+VL_OPTLEVEL ?= -O3
 VERILATOR_CFLAGS += -MMD --build -cc \
-				-O2 -j $(shell nproc) --x-assign fast --x-initial fast --noassert -sv
+				-O3 -j $(VL_JOBS) --threads $(VL_THREADS) \
+				--x-assign fast --x-initial fast --noassert -sv \
+				--output-split 30000 --output-split-cfuncs 30000 \
+				-MAKEFLAGS OPT_FAST=$(VL_OPTLEVEL) \
+				-MAKEFLAGS OPT_SLOW=$(VL_OPTLEVEL) \
+				-MAKEFLAGS OPT_GLOBAL=$(VL_OPTLEVEL)
 VERILATOR_CFLAGS += --Wno-fatal --Wno-WIDTH
 
 BUILD_DIR = ./build
@@ -72,7 +79,11 @@ IMG ?=
 ARGS ?=
 NPC_EXE := $(strip $(ARGS) $(DIFFTEST) $(IMG))
 INCFLAGS = $(addprefix -I, $(INC_PATH))
-CXXFLAGS += $(INCFLAGS) -I$(abspath ./include) -I$(abspath ./csrc/include) -DTOP_NAME="\"V$(TOPNAME)\"" -g -std=c++17
+CXX_OPTFLAGS ?= $(VL_OPTFLAGS)
+ifeq ($(DEBUG),1)
+CXX_OPTFLAGS := -O0 -g
+endif
+CXXFLAGS += $(INCFLAGS) -I$(abspath ./include) -I$(abspath ./csrc/include) -DTOP_NAME="\"V$(TOPNAME)\"" -std=c++17 $(CXX_OPTFLAGS)
 LDFLAGS += -lreadline -ldl -pie $(LLVM_LIBS)
 
 NEED_CHECKS := $(filter-out clean clean-all help,$(MAKECMDGOALS))
@@ -111,7 +122,7 @@ gdb: $(BIN)
 	$(call git_commit, "debug RTL") # DO NOT REMOVE THIS LINE!!!
 	gdb -s $(BIN) --args $(BIN) $(NPC_EXE)
 
-.PHONY: profile-report profile-parse profile-task profile-baseline linux-smoke
+.PHONY: profile-report profile-parse profile-task profile-baseline linux-smoke bench
 
 PROFILE_TOOL_DIR := $(abspath ./tools/profiler)
 PROFILE_OUT_DIR ?=
@@ -145,6 +156,16 @@ profile-baseline:
 
 linux-smoke:
 	$(abspath ./scripts/run_linux_smoke.sh)
+
+BENCH_IMG ?= $(IMG)
+BENCH_ARGS ?= --max-cycles=10000000 --progress=0
+bench: $(BIN)
+	@if [ -z "$(BENCH_IMG)" ]; then echo "[bench] BENCH_IMG or IMG is required"; exit 1; fi
+	@echo "[bench] start"; \
+	start=$$(date +%s); \
+	$(BIN) $(BENCH_ARGS) $(DIFFTEST) $(BENCH_IMG); \
+	end=$$(date +%s); \
+	echo "[bench] elapsed=$$((end - start))s"
 
 clean:
 	rm -rf $(BUILD_DIR)

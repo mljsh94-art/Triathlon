@@ -25,3 +25,6 @@ my_lab_log/
 # Build outputs (keep local, do not track)
 **/build/
 linux_workspace/
+
+# Agent debug NDJSON logs (local only)
+debug-*.log

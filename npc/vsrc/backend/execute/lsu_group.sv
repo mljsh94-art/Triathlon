@@ -123,13 +123,7 @@ module lsu_group #(
   int unsigned lsu_stall_trace_log_cnt_q;
   logic [15:0] lsu_stall_streak_q;
   logic lsu_trace_en_q;
-  integer agent_late_fault_log_fd;
-  int unsigned agent_late_fault_log_cnt;
   initial lsu_trace_en_q = $test$plusargs("npc_diag_trace");
-  initial begin
-    agent_late_fault_log_fd = 0;
-    agent_late_fault_log_cnt = 0;
-  end
 
   function automatic logic lsu_diag_watch_pc(input logic [31:0] pc);
     begin
@@ -229,6 +223,7 @@ module lsu_group #(
 
   logic                                                        req_is_load;
   logic                                                        req_is_store;
+  logic                                                        req_is_amo;
   logic                                                        store_misaligned;
   logic                                                        store_page_fault;
   logic                                                        store_need_sq;
@@ -239,9 +234,15 @@ module lsu_group #(
   logic                                                        req_accept_fire;
   logic                                                        req_accept_ready;
   logic                                                        req_need_mmu_walk;
+  logic                                                        amo_inflight;
+  logic                                                        amo_order_clear;
+  logic                                                        req_ordered_load;
   logic                                                        translation_active;
   logic                [      Cfg.XLEN-1:0]                   req_in_eff_addr_xlen;
   logic                [      Cfg.PLEN-1:0]                   req_in_eff_addr;
+  decode_pkg::uop_t                                            selected_uop;
+  decode_pkg::uop_t                                            lane_uop;
+  logic                [      Cfg.XLEN-1:0]                   selected_rs2_data;
 
   logic                                                        pend_valid_q;
   decode_pkg::uop_t                                            pend_uop_q;
@@ -297,6 +298,13 @@ module lsu_group #(
 
   logic rsp_id_in_range;
   logic [LANE_SEL_WIDTH-1:0] rsp_lane_idx;
+  logic [N_LSU-1:0] lane_amo_valid_q;
+  decode_pkg::amo_op_e lane_amo_op_q[N_LSU];
+  logic [N_LSU-1:0][Cfg.XLEN-1:0] lane_amo_rs2_q;
+  logic [N_LSU-1:0][SB_IDX_WIDTH-1:0] lane_amo_sb_id_q;
+  logic [N_LSU-1:0][Cfg.PLEN-1:0] lane_amo_addr_q;
+  logic amo_wb_fire;
+  logic [Cfg.XLEN-1:0] amo_wb_new_data;
   function automatic logic [LANE_SEL_WIDTH-1:0] rr_next_idx(
       input logic [LANE_SEL_WIDTH-1:0] idx
   );
@@ -343,7 +351,7 @@ module lsu_group #(
             end
           end
         end
-        decode_pkg::LSU_SW, decode_pkg::LSU_SC: begin
+        decode_pkg::LSU_SW, decode_pkg::LSU_SC, decode_pkg::LSU_AMO: begin
           for (int i = 0; i < 4; i++) begin
             if ((off + i) < SQ_BE_WIDTH) begin
               mask[off+i] = 1'b1;
@@ -381,7 +389,7 @@ module lsu_group #(
             end
           end
         end
-        decode_pkg::LSU_LW, decode_pkg::LSU_LWU: begin
+        decode_pkg::LSU_LW, decode_pkg::LSU_LWU, decode_pkg::LSU_LR, decode_pkg::LSU_AMO: begin
           for (int i = 0; i < 4; i++) begin
             if ((off + i) < SQ_BE_WIDTH) begin
               mask[off+i] = 1'b1;
@@ -407,7 +415,7 @@ module lsu_group #(
       unique case (op)
         decode_pkg::LSU_SB: is_store_misaligned = 1'b0;
         decode_pkg::LSU_SH: is_store_misaligned = addr[0];
-        decode_pkg::LSU_SW, decode_pkg::LSU_SC: is_store_misaligned = |addr[1:0];
+        decode_pkg::LSU_SW, decode_pkg::LSU_SC, decode_pkg::LSU_AMO: is_store_misaligned = |addr[1:0];
         decode_pkg::LSU_SD: is_store_misaligned = |addr[2:0];
         default:            is_store_misaligned = 1'b0;
       endcase
@@ -420,7 +428,8 @@ module lsu_group #(
       unique case (op)
         decode_pkg::LSU_LB, decode_pkg::LSU_LBU: is_load_misaligned = 1'b0;
         decode_pkg::LSU_LH, decode_pkg::LSU_LHU: is_load_misaligned = addr[0];
-        decode_pkg::LSU_LW, decode_pkg::LSU_LWU: is_load_misaligned = |addr[1:0];
+        decode_pkg::LSU_LW, decode_pkg::LSU_LWU, decode_pkg::LSU_LR,
+        decode_pkg::LSU_AMO: is_load_misaligned = |addr[1:0];
         decode_pkg::LSU_LD: is_load_misaligned = |addr[2:0];
         default: is_load_misaligned = 1'b0;
       endcase
@@ -448,7 +457,7 @@ module lsu_group #(
             aligned[(8*off)+:16] = data[15:0];
           end
         end
-        decode_pkg::LSU_SW, decode_pkg::LSU_SC: begin
+        decode_pkg::LSU_SW, decode_pkg::LSU_SC, decode_pkg::LSU_AMO: begin
           if ((off + 3) < SQ_BE_WIDTH) begin
             aligned[(8*off)+:32] = data[31:0];
           end
@@ -463,6 +472,49 @@ module lsu_group #(
       store_aligned_data = aligned;
     end
   endfunction
+
+  function automatic logic [Cfg.XLEN-1:0] amo_result(input decode_pkg::amo_op_e op,
+                                                     input logic [Cfg.XLEN-1:0] old_val,
+                                                     input logic [Cfg.XLEN-1:0] operand);
+    logic signed [31:0] old_s;
+    logic signed [31:0] operand_s;
+    logic [31:0] old_w;
+    logic [31:0] operand_w;
+    logic [31:0] res_w;
+    begin
+      old_w = old_val[31:0];
+      operand_w = operand[31:0];
+      old_s = old_w;
+      operand_s = operand_w;
+      unique case (op)
+        decode_pkg::AMO_SWAP: res_w = operand_w;
+        decode_pkg::AMO_ADD:  res_w = old_w + operand_w;
+        decode_pkg::AMO_XOR:  res_w = old_w ^ operand_w;
+        decode_pkg::AMO_AND:  res_w = old_w & operand_w;
+        decode_pkg::AMO_OR:   res_w = old_w | operand_w;
+        decode_pkg::AMO_MIN:  res_w = (old_s < operand_s) ? old_w : operand_w;
+        decode_pkg::AMO_MAX:  res_w = (old_s > operand_s) ? old_w : operand_w;
+        decode_pkg::AMO_MINU: res_w = (old_w < operand_w) ? old_w : operand_w;
+        decode_pkg::AMO_MAXU: res_w = (old_w > operand_w) ? old_w : operand_w;
+        default:              res_w = old_w;
+      endcase
+      if (Cfg.XLEN == 32) begin
+        amo_result = res_w;
+      end else begin
+        amo_result = {{(Cfg.XLEN - 32) {res_w[31]}}, res_w};
+      end
+    end
+  endfunction
+
+  always_comb begin
+    selected_uop = pend_valid_q ? pend_uop_q : uop_i;
+    selected_rs2_data = pend_valid_q ? pend_rs2_data_q : rs2_data_i;
+    lane_uop = selected_uop;
+    if (lane_uop.lsu_op == decode_pkg::LSU_AMO) begin
+      lane_uop.is_load  = 1'b1;
+      lane_uop.is_store = 1'b0;
+    end
+  end
 
   assign req_in_eff_addr_xlen = rs1_data_i + uop_i.imm;
   assign req_in_eff_addr = req_in_eff_addr_xlen[Cfg.PLEN-1:0];
@@ -479,14 +531,6 @@ module lsu_group #(
                                  ((pend_valid_q && (req_is_load || req_is_store) &&
                                    !load_alloc_fire && !store_req_fire) ||
                                   (req_valid_i && (uop_i.is_load || uop_i.is_store) && !req_ready_o));
-  function automatic logic agent_watch_lsu_addr(input logic [31:0] addr);
-    begin
-      agent_watch_lsu_addr = (addr < 32'h00004000) ||
-                             ((addr >= 32'h80000000) && (addr < 32'h80000040)) ||
-                             (addr == 32'h3ffff000);
-    end
-  endfunction
-
 `endif
 
   assign pte_req_valid_o = mmu_pte_req_valid;
@@ -536,7 +580,7 @@ module lsu_group #(
 
           .req_valid_i(lane_req_valid[gi]),
           .req_ready_o(lane_req_ready[gi]),
-          .uop_i(pend_valid_q ? pend_uop_q : uop_i),
+          .uop_i(lane_uop),
           .rs1_data_i('0),
           .rs2_data_i(pend_valid_q ? pend_rs2_data_q : rs2_data_i),
           .addr_override_valid_i(1'b1),
@@ -587,8 +631,12 @@ module lsu_group #(
   assign req_addr_q = g_lanes[0].u_lane.req_addr_q;
   assign req_eff_addr_xlen = pend_valid_q ? {{(Cfg.XLEN-Cfg.PLEN){1'b0}}, pend_addr_q} : req_in_eff_addr_xlen;
   assign req_eff_addr = pend_valid_q ? pend_addr_q : req_in_eff_addr;
-  assign req_is_load = pend_valid_q ? pend_uop_q.is_load : (!req_need_mmu_walk && req_valid_i && uop_i.is_load);
-  assign req_is_store = pend_valid_q ? pend_uop_q.is_store : (!req_need_mmu_walk && req_valid_i && uop_i.is_store);
+  assign req_is_amo = selected_uop.lsu_op == decode_pkg::LSU_AMO;
+  assign req_is_load = pend_valid_q ? selected_uop.is_load :
+                       (!req_need_mmu_walk && req_valid_i && uop_i.is_load);
+  assign req_is_store = (pend_valid_q ? selected_uop.is_store :
+                        (!req_need_mmu_walk && req_valid_i && uop_i.is_store)) &&
+                        !req_is_amo;
   assign req_has_force_fault = pend_valid_q ? pend_force_fault_q : 1'b0;
   assign req_force_ecause = pend_valid_q ? pend_force_ecause_q : '0;
   assign store_misaligned = pend_valid_q ? (req_is_store && req_has_force_fault &&
@@ -597,6 +645,9 @@ module lsu_group #(
   assign store_page_fault = pend_valid_q ? (req_is_store && req_has_force_fault &&
                                             (req_force_ecause == EXC_ST_PAGE_FAULT)) : 1'b0;
   assign store_need_sq = req_is_store && !store_misaligned && !store_page_fault;
+  assign amo_inflight = |lane_amo_valid_q;
+  assign amo_order_clear = (dbg_lane_busy == '0) && lq_empty && sq_empty &&
+                           (store_wb_count_q == '0);
   assign store_wb_head_valid = (store_wb_count_q != 0);
   assign store_wb_head_rob_idx = store_wb_rob_idx_q[store_wb_head_q];
   assign store_wb_head_data = store_wb_data_q[store_wb_head_q];
@@ -627,12 +678,13 @@ module lsu_group #(
   logic is_sc;
   logic sc_success;
   logic sc_fail;
-  assign is_sc = (pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op) == decode_pkg::LSU_SC;
+  assign is_sc = selected_uop.lsu_op == decode_pkg::LSU_SC;
   assign sc_success = is_sc && res_valid_q && (res_addr_q == req_eff_addr);
   assign sc_fail = is_sc && !sc_success;
 
   logic req_is_lr;
-  assign req_is_lr = (pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op) == decode_pkg::LSU_LR;
+  assign req_is_lr = selected_uop.lsu_op == decode_pkg::LSU_LR;
+  assign req_ordered_load = req_is_lr || req_is_amo;
 
   always_comb begin
     load_req_ready = 1'b0;
@@ -640,7 +692,7 @@ module lsu_group #(
     alloc_lane_idx = '0;
     for (int i = 0; i < N_LSU; i++) begin
       if (!load_req_ready && lane_req_ready[i] && lq_alloc_ready) begin
-        if (!req_is_lr || (sq_empty && store_wb_count_q == 0)) begin
+        if ((!req_ordered_load || amo_order_clear) && (!req_is_amo || !amo_inflight)) begin
           load_req_ready = 1'b1;
           alloc_grant[i] = 1'b1;
           alloc_lane_idx = LANE_SEL_WIDTH'(i);
@@ -655,10 +707,10 @@ module lsu_group #(
                            sq_alloc_ready;
   always_comb begin
     req_ready_o = 1'b0;
-    if (pend_valid_q || (mmu_state_q != MMU_ST_IDLE)) begin
+    if (pend_valid_q || (mmu_state_q != MMU_ST_IDLE) || amo_inflight) begin
       req_ready_o = 1'b0;
     end else if (req_need_mmu_walk) begin
-      req_ready_o = 1'b1;
+      req_ready_o = (uop_i.lsu_op != decode_pkg::LSU_AMO) || amo_order_clear;
     end else if (uop_i.is_load) begin
       req_ready_o = load_req_ready;
     end else if (uop_i.is_store) begin
@@ -683,13 +735,21 @@ module lsu_group #(
     sb_ex_valid_o = store_req_fire && !store_misaligned && !store_page_fault;
     sb_ex_sb_id_o = pend_valid_q ? pend_sb_id_q : sb_id_i;
     sb_ex_addr_o = req_eff_addr;
-    sb_ex_data_o = pend_valid_q ? pend_rs2_data_q : rs2_data_i;
+    sb_ex_data_o = selected_rs2_data;
     sb_ex_op_o = sc_fail ? decode_pkg::LSU_SC_FAIL :
                  is_sc ? decode_pkg::LSU_SW : 
-                 (pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op);
+                 selected_uop.lsu_op;
     sb_ex_rob_idx_o = pend_valid_q ? pend_rob_tag_q : rob_tag_i;
     sb_load_addr_o = '0;
     sb_load_rob_idx_o = '0;
+    if (amo_wb_fire && !lane_wb_exception[wb_lane_idx]) begin
+      sb_ex_valid_o = 1'b1;
+      sb_ex_sb_id_o = lane_amo_sb_id_q[wb_lane_idx];
+      sb_ex_addr_o = lane_amo_addr_q[wb_lane_idx];
+      sb_ex_data_o = amo_wb_new_data;
+      sb_ex_op_o = decode_pkg::LSU_SW;
+      sb_ex_rob_idx_o = lane_wb_rob_idx[wb_lane_idx];
+    end
     for (int i = 0; i < N_LSU; i++) begin
       if (lane_sb_ex_valid[i] && !sb_ex_valid_o) begin
         sb_ex_valid_o = 1'b1;
@@ -799,6 +859,11 @@ module lsu_group #(
   end
 
   assign wb_fire = wb_valid_o && wb_ready_i;
+  assign amo_wb_fire = wb_fire && !wb_sel_store && wb_grant_valid &&
+                       lane_amo_valid_q[wb_lane_idx];
+  assign amo_wb_new_data = amo_result(lane_amo_op_q[wb_lane_idx],
+                                      lane_wb_data[wb_lane_idx],
+                                      lane_amo_rs2_q[wb_lane_idx]);
   assign ld_req_fire = ld_req_grant_valid && ld_req_ready_i;
   assign lq_pop_valid = wb_fire && !wb_sel_store;
   assign sq_pop_valid = wb_fire && wb_sel_store && store_wb_head_has_sq;
@@ -834,13 +899,19 @@ module lsu_group #(
       store_wb_count_q <= '0;
       wb_rr_q <= '0;
       ld_req_rr_q <= '0;
+      lane_amo_valid_q <= '0;
+      for (int i = 0; i < N_LSU; i++) begin
+        lane_amo_op_q[i] <= decode_pkg::AMO_NONE;
+        lane_amo_rs2_q[i] <= '0;
+        lane_amo_sb_id_q[i] <= '0;
+        lane_amo_addr_q[i] <= '0;
+      end
 `ifndef SYNTHESIS
       lsu_pf_log_cnt_q <= '0;
       lsu_req_trace_log_cnt_q <= '0;
       lsu_mmu_trace_log_cnt_q <= '0;
       lsu_stall_trace_log_cnt_q <= '0;
       lsu_stall_streak_q <= '0;
-      agent_late_fault_log_cnt <= 0;
 `endif
     end else if (flush_i) begin
       pend_valid_q <= 1'b0;
@@ -874,14 +945,34 @@ module lsu_group #(
       ld_req_rr_q <= '0;
       res_valid_q <= 1'b0;
       res_addr_q <= '0;
+      lane_amo_valid_q <= '0;
+      for (int i = 0; i < N_LSU; i++) begin
+        lane_amo_op_q[i] <= decode_pkg::AMO_NONE;
+        lane_amo_rs2_q[i] <= '0;
+        lane_amo_sb_id_q[i] <= '0;
+        lane_amo_addr_q[i] <= '0;
+      end
     end else begin
       if (flush_i) begin
         res_valid_q <= 1'b0;
       end else if (load_alloc_fire && (pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op) == decode_pkg::LSU_LR) begin
         res_valid_q <= 1'b1;
         res_addr_q <= req_eff_addr;
-      end else if (store_req_fire && is_sc) begin
+      end else if ((store_req_fire && (is_sc || (!store_misaligned && !store_page_fault))) ||
+                   (amo_wb_fire && !lane_wb_exception[wb_lane_idx])) begin
         res_valid_q <= 1'b0;
+      end
+
+      if (load_alloc_fire && req_is_amo) begin
+        lane_amo_valid_q[alloc_lane_idx] <= 1'b1;
+        lane_amo_op_q[alloc_lane_idx] <= selected_uop.amo_op;
+        lane_amo_rs2_q[alloc_lane_idx] <= selected_rs2_data;
+        lane_amo_sb_id_q[alloc_lane_idx] <= pend_valid_q ? pend_sb_id_q : sb_id_i;
+        lane_amo_addr_q[alloc_lane_idx] <= req_eff_addr;
+      end
+
+      if (amo_wb_fire) begin
+        lane_amo_valid_q[wb_lane_idx] <= 1'b0;
       end
 
       if (req_accept_fire) begin
@@ -967,27 +1058,7 @@ module lsu_group #(
             lsu_pf_log_cnt_q <= lsu_pf_log_cnt_q + 1'b1;
           end
         end
-        // #region agent log
-        if ((agent_late_fault_log_cnt < 128) &&
-            (mmu_resp_page_fault || agent_watch_lsu_addr(mmu_vaddr_q))) begin
-          if (agent_late_fault_log_fd == 0) begin
-            agent_late_fault_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-61e984.log", "a");
-          end
-          if (agent_late_fault_log_fd != 0) begin
-            $fdisplay(agent_late_fault_log_fd,
-                      "{\"sessionId\":\"61e984\",\"runId\":\"late-fault-trace\",\"hypothesisId\":\"H56,H57,H58,H59\",\"location\":\"lsu_group.sv:mmu-response\",\"message\":\"late-lsu-mmu-response-state\",\"data\":{\"pc\":\"0x%08h\",\"rob\":%0d,\"sb\":%0d,\"vaddr\":\"0x%08h\",\"paddr\":\"0x%08h\",\"pageFault\":%0d,\"isLoad\":%0d,\"isStore\":%0d,\"access\":%0d,\"lsuOp\":%0d,\"rs1\":%0d,\"rs2\":%0d,\"rs1Data\":\"0x%08h\",\"rs2Data\":\"0x%08h\",\"imm\":\"0x%08h\",\"satp\":\"0x%08h\",\"priv\":%0d,\"sum\":%0d,\"mxr\":%0d,\"flush\":%0d,\"pendValid\":%0d,\"robHead\":%0d,\"storeWbCount\":%0d,\"lqCount\":%0d,\"sqCount\":%0d},\"timestamp\":0}",
-                      mmu_uop_q.pc, mmu_rob_tag_q, mmu_sb_id_q, mmu_vaddr_q,
-                      mmu_resp_paddr, mmu_resp_page_fault, mmu_uop_q.is_load,
-                      mmu_uop_q.is_store, mmu_uop_q.is_store ? MMU_ACCESS_STORE : MMU_ACCESS_LOAD,
-                      mmu_uop_q.lsu_op, mmu_uop_q.rs1, mmu_uop_q.rs2,
-                      mmu_rs1_data_q, mmu_rs2_data_q, mmu_uop_q.imm,
-                      mmu_satp_i, mmu_priv_i, mmu_sum_i, mmu_mxr_i, flush_i,
-                      pend_valid_q, rob_head_i, store_wb_count_q, dbg_lq_count_o, dbg_sq_count_o);
-            $fflush(agent_late_fault_log_fd);
-            agent_late_fault_log_cnt <= agent_late_fault_log_cnt + 1;
-          end
-        end
-        // #endregion agent log
+
 `endif
       end
 

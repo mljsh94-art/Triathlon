@@ -141,14 +141,8 @@ module rob #(
   logic [31:0] rob_tag_trace_cnt_q;
   logic rob_trace_en_q;
   logic rob_tag_trace_en_q;
-  integer agent49_illegal_log_fd;
-  int unsigned agent49_illegal_log_cnt;
   initial rob_trace_en_q = $test$plusargs("npc_diag_trace");
   initial rob_tag_trace_en_q = $test$plusargs("npc_diag_robtag");
-  initial begin
-    agent49_illegal_log_fd = 0;
-    agent49_illegal_log_cnt = 0;
-  end
 
   function automatic logic watch_kernel_pc(input logic [Cfg.PLEN-1:0] pc);
     begin
@@ -584,76 +578,7 @@ module rob #(
   end
 
   always_ff @(posedge clk_i) begin
-    // #region agent log
-    if (rst_ni && (agent49_illegal_log_cnt < 96)) begin
-      for (int i = 0; i < DISPATCH_WIDTH; i++) begin
-        if (dispatch_valid_i[i] &&
-            (dispatch_pc_i[i] >= 32'hc0804e40) && (dispatch_pc_i[i] <= 32'hc0804e80)) begin
-          if (agent49_illegal_log_fd == 0) begin
-            agent49_illegal_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-49fa23.log", "a");
-          end
-          if (agent49_illegal_log_fd != 0) begin
-            $fdisplay(agent49_illegal_log_fd,
-                      "{\"sessionId\":\"49fa23\",\"runId\":\"illegal-halfword-pre\",\"hypothesisId\":\"H25,H26,H27\",\"location\":\"rob.sv:dispatch\",\"message\":\"misc-mem-init-rob-dispatch\",\"data\":{\"slot\":%0d,\"rob\":%0d,\"pc\":\"0x%08h\",\"inst\":\"0x%08h\",\"decoded\":\"0x%08h\",\"fu\":%0d,\"areg\":%0d,\"hasRd\":%0d,\"isStore\":%0d,\"isBranch\":%0d,\"isJump\":%0d,\"isRvc\":%0d,\"ftq\":%0d,\"epoch\":%0d,\"head\":%0d,\"tail\":%0d,\"count\":%0d,\"flushI\":%0d,\"flushO\":%0d},\"timestamp\":0}",
-                      i, tail_ptr_q + i[PTR_WIDTH-1:0], dispatch_pc_i[i], dispatch_inst_i[i],
-                      dispatch_decoded_inst_i[i], dispatch_fu_type_i[i], dispatch_areg_i[i],
-                      dispatch_has_rd_i[i], dispatch_is_store_i[i], dispatch_is_branch_i[i],
-                      dispatch_is_jump_i[i], dispatch_is_rvc_i[i], dispatch_ftq_id_i[i],
-                      dispatch_fetch_epoch_i[i], head_ptr_q, tail_ptr_q, count_q, flush_i, flush_o);
-            $fflush(agent49_illegal_log_fd);
-            agent49_illegal_log_cnt <= agent49_illegal_log_cnt + 1;
-          end
-        end
-      end
 
-      for (int k = 0; k < WB_WIDTH; k++) begin
-        if (wb_valid_i[k] && wb_exception_i[k] &&
-            ((wb_ecause_i[k] == 5'd2) ||
-             ((rob_ram[wb_rob_index_i[k]].pc >= 32'hc0804e40) &&
-              (rob_ram[wb_rob_index_i[k]].pc <= 32'hc0804e80)))) begin
-          if (agent49_illegal_log_fd == 0) begin
-            agent49_illegal_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-49fa23.log", "a");
-          end
-          if (agent49_illegal_log_fd != 0) begin
-            $fdisplay(agent49_illegal_log_fd,
-                      "{\"sessionId\":\"49fa23\",\"runId\":\"illegal-halfword-pre\",\"hypothesisId\":\"H27,H28\",\"location\":\"rob.sv:exception-writeback\",\"message\":\"misc-mem-init-rob-exception-wb\",\"data\":{\"lane\":%0d,\"rob\":%0d,\"pc\":\"0x%08h\",\"inst\":\"0x%08h\",\"decoded\":\"0x%08h\",\"isRvc\":%0d,\"fu\":%0d,\"valid\":%0d,\"complete\":%0d,\"oldException\":%0d,\"oldCause\":%0d,\"wbData\":\"0x%08h\",\"wbCause\":%0d,\"wbMispred\":%0d,\"wbRedirect\":\"0x%08h\",\"head\":%0d,\"tail\":%0d,\"count\":%0d,\"headPc\":\"0x%08h\",\"flushI\":%0d,\"flushO\":%0d},\"timestamp\":0}",
-                      k, wb_rob_index_i[k], rob_ram[wb_rob_index_i[k]].pc,
-                      rob_ram[wb_rob_index_i[k]].inst, rob_ram[wb_rob_index_i[k]].decoded_inst,
-                      rob_ram[wb_rob_index_i[k]].is_rvc, rob_ram[wb_rob_index_i[k]].fu_type,
-                      rob_ram[wb_rob_index_i[k]].valid, rob_ram[wb_rob_index_i[k]].complete,
-                      rob_ram[wb_rob_index_i[k]].exception, rob_ram[wb_rob_index_i[k]].ecause,
-                      wb_data_i[k], wb_ecause_i[k], wb_is_mispred_i[k], wb_redirect_pc_i[k],
-                      head_ptr_q, tail_ptr_q, count_q, rob_ram[head_ptr_q].pc, flush_i, flush_o);
-            $fflush(agent49_illegal_log_fd);
-            agent49_illegal_log_cnt <= agent49_illegal_log_cnt + 1;
-          end
-        end
-      end
-
-      for (int i = 0; i < COMMIT_WIDTH; i++) begin
-        logic [PTR_WIDTH-1:0] idx;
-        idx = head_ptr_q + i[PTR_WIDTH-1:0];
-        if ((count_q > i) && rob_ram[idx].complete && rob_ram[idx].exception &&
-            ((rob_ram[idx].ecause == 5'd2) ||
-             ((rob_ram[idx].pc >= 32'hc0804e40) && (rob_ram[idx].pc <= 32'hc0804e80)))) begin
-          if (agent49_illegal_log_fd == 0) begin
-            agent49_illegal_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-49fa23.log", "a");
-          end
-          if (agent49_illegal_log_fd != 0) begin
-            $fdisplay(agent49_illegal_log_fd,
-                      "{\"sessionId\":\"49fa23\",\"runId\":\"illegal-halfword-pre\",\"hypothesisId\":\"H27,H28\",\"location\":\"rob.sv:exception-head\",\"message\":\"misc-mem-init-rob-exception-head\",\"data\":{\"slot\":%0d,\"rob\":%0d,\"pc\":\"0x%08h\",\"inst\":\"0x%08h\",\"decoded\":\"0x%08h\",\"isRvc\":%0d,\"fu\":%0d,\"cause\":%0d,\"tval\":\"0x%08h\",\"head\":%0d,\"tail\":%0d,\"count\":%0d,\"stopCommit\":%0d,\"syncValid\":%0d,\"syncCause\":%0d,\"syncPc\":\"0x%08h\",\"syncTval\":\"0x%08h\",\"flushI\":%0d,\"flushO\":%0d,\"flushPc\":\"0x%08h\"},\"timestamp\":0}",
-                      i, idx, rob_ram[idx].pc, rob_ram[idx].inst, rob_ram[idx].decoded_inst,
-                      rob_ram[idx].is_rvc, rob_ram[idx].fu_type, rob_ram[idx].ecause,
-                      rob_ram[idx].data, head_ptr_q, tail_ptr_q, count_q, stop_commit,
-                      sync_exception_valid_o, sync_exception_cause_o, sync_exception_pc_o,
-                      sync_exception_tval_o, flush_i, flush_o, flush_pc_o);
-            $fflush(agent49_illegal_log_fd);
-            agent49_illegal_log_cnt <= agent49_illegal_log_cnt + 1;
-          end
-        end
-      end
-    end
-    // #endregion agent log
   end
 `endif
 

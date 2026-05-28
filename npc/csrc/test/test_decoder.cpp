@@ -53,7 +53,24 @@ enum LsuOp {
   LSU_SB,
   LSU_SH,
   LSU_SW,
-  LSU_SD
+  LSU_SD,
+  LSU_LR,
+  LSU_SC,
+  LSU_SC_FAIL,
+  LSU_AMO
+};
+
+enum AmoOp {
+  AMO_NONE = 0,
+  AMO_SWAP,
+  AMO_ADD,
+  AMO_XOR,
+  AMO_AND,
+  AMO_OR,
+  AMO_MIN,
+  AMO_MAX,
+  AMO_MINU,
+  AMO_MAXU
 };
 
 // ============================================================================
@@ -66,6 +83,7 @@ struct GoldenInfo {
   uint32_t imm;
   int alu_op;
   int lsu_op;
+  int amo_op;
   int br_op;
   int fu_type;
   int rs1, rs2, rd;
@@ -84,6 +102,7 @@ struct DirectedCase {
   bool is_load;
   bool is_store;
   int lsu_op;
+  int amo_op;
 };
 
 uint32_t encode_amo_w(uint32_t funct5, uint32_t rd, uint32_t rs1, uint32_t rs2,
@@ -115,6 +134,8 @@ void run_directed_case(Vtb_decoder *top, const DirectedCase &tc) {
     mismatch = true;
   if ((tc.is_load || tc.is_store) && top->check_lsu_op != tc.lsu_op)
     mismatch = true;
+  if ((tc.is_load && tc.is_store) && top->check_amo_op != tc.amo_op)
+    mismatch = true;
 
   if (mismatch) {
     std::cout << "[DIRECTED][FAIL] " << tc.name << " inst=0x" << std::hex
@@ -133,6 +154,8 @@ void run_directed_case(Vtb_decoder *top, const DirectedCase &tc) {
               << " got=" << (int)top->check_is_store << std::endl;
     std::cout << "  lsu_op: expect=" << tc.lsu_op
               << " got=" << top->check_lsu_op << std::endl;
+    std::cout << "  amo_op: expect=" << tc.amo_op
+              << " got=" << top->check_amo_op << std::endl;
     assert(false);
   }
 }
@@ -152,6 +175,7 @@ GoldenInfo decode_reference(uint32_t inst, uint32_t pc) {
   info.illegal = false;
   info.alu_op = ALU_NOP;
   info.lsu_op = LSU_LW; // 默认值，防止未初始化
+  info.amo_op = AMO_NONE;
   info.br_op = BR_EQ;   // 默认值
   info.fu_type = FU_ALU;
 
@@ -563,27 +587,76 @@ GoldenInfo decode_reference(uint32_t inst, uint32_t pc) {
         info.illegal = true;
       } else {
         info.is_load = true;
-        info.lsu_op = LSU_LW;
+        info.lsu_op = LSU_LR;
       }
       break;
     case 0x03: // SC.W
       info.has_rs2 = true;
       info.is_store = true;
-      info.lsu_op = LSU_SW;
+      info.lsu_op = LSU_SC;
       break;
     case 0x01: // AMOSWAP.W
+      info.has_rs2 = true;
+      info.is_load = true;
+      info.is_store = true;
+      info.lsu_op = LSU_AMO;
+      info.amo_op = AMO_SWAP;
+      break;
     case 0x00: // AMOADD.W
+      info.has_rs2 = true;
+      info.is_load = true;
+      info.is_store = true;
+      info.lsu_op = LSU_AMO;
+      info.amo_op = AMO_ADD;
+      break;
     case 0x04: // AMOXOR.W
+      info.has_rs2 = true;
+      info.is_load = true;
+      info.is_store = true;
+      info.lsu_op = LSU_AMO;
+      info.amo_op = AMO_XOR;
+      break;
     case 0x0C: // AMOAND.W
+      info.has_rs2 = true;
+      info.is_load = true;
+      info.is_store = true;
+      info.lsu_op = LSU_AMO;
+      info.amo_op = AMO_AND;
+      break;
     case 0x08: // AMOOR.W
+      info.has_rs2 = true;
+      info.is_load = true;
+      info.is_store = true;
+      info.lsu_op = LSU_AMO;
+      info.amo_op = AMO_OR;
+      break;
     case 0x10: // AMOMIN.W
+      info.has_rs2 = true;
+      info.is_load = true;
+      info.is_store = true;
+      info.lsu_op = LSU_AMO;
+      info.amo_op = AMO_MIN;
+      break;
     case 0x14: // AMOMAX.W
+      info.has_rs2 = true;
+      info.is_load = true;
+      info.is_store = true;
+      info.lsu_op = LSU_AMO;
+      info.amo_op = AMO_MAX;
+      break;
     case 0x18: // AMOMINU.W
+      info.has_rs2 = true;
+      info.is_load = true;
+      info.is_store = true;
+      info.lsu_op = LSU_AMO;
+      info.amo_op = AMO_MINU;
+      break;
     case 0x1C: // AMOMAXU.W
       info.has_rs2 = true;
       info.is_load = true;
       info.is_store = true;
-      info.lsu_op = LSU_SW;
+      info.lsu_op = LSU_AMO;
+      info.amo_op = AMO_MAXU;
       break;
     default:
       info.illegal = true;
@@ -762,21 +835,29 @@ int main(int argc, char **argv) {
 
   std::vector<DirectedCase> directed_cases = {
       {"LR.W legal", encode_amo_w(0x02, 10, 11, 0), false, FU_LSU, false,
-       false, true, false, LSU_LW},
+       false, true, false, LSU_LR, AMO_NONE},
       {"SC.W legal", encode_amo_w(0x03, 5, 6, 7), false, FU_LSU, false, false,
-       false, true, LSU_SW},
+       false, true, LSU_SC, AMO_NONE},
+      {"LR.W rs2 illegal", encode_amo_w(0x02, 10, 11, 1), true, FU_CSR, false,
+       false, false, false, LSU_LW, AMO_NONE},
       {"AMOSWAP.W legal", encode_amo_w(0x01, 3, 4, 8), false, FU_LSU, false,
-       false, true, true, LSU_SW},
+       false, true, true, LSU_AMO, AMO_SWAP},
+      {"AMOADD.W aqrl legal", encode_amo_w(0x00, 3, 4, 8, 1, 1), false, FU_LSU,
+       false, false, true, true, LSU_AMO, AMO_ADD},
+      {"AMOMAXU.W legal", encode_amo_w(0x1C, 3, 4, 8), false, FU_LSU, false,
+       false, true, true, LSU_AMO, AMO_MAXU},
+      {"AMO bad funct3 illegal", encode_amo_w(0x00, 3, 4, 8) ^ (1u << 12), true,
+       FU_CSR, false, false, false, false, LSU_LW, AMO_NONE},
       {"FENCE.I marker", (0x001u << 12) | 0x0Fu, false, FU_ALU, true, false,
-       false, false, LSU_LW},
+       false, false, LSU_LW, AMO_NONE},
       {"ECALL as CSR-FU", 0x00000073u, false, FU_CSR, false, false, false,
-       false, LSU_LW},
+       false, LSU_LW, AMO_NONE},
       {"MRET as CSR-FU", 0x30200073u, false, FU_CSR, false, false, false,
-       false, LSU_LW},
+       false, LSU_LW, AMO_NONE},
       {"WFI as CSR-FU", 0x10500073u, false, FU_CSR, false, false, false,
-       false, LSU_LW},
+       false, LSU_LW, AMO_NONE},
       {"SFENCE.VMA as CSR-FU", 0x12000073u, false, FU_CSR, false, true, false,
-       false, LSU_LW},
+       false, LSU_LW, AMO_NONE},
   };
 
   for (const auto &tc : directed_cases) {
@@ -873,6 +954,11 @@ int main(int argc, char **argv) {
       if ((ref.is_load || ref.is_store) && top->check_lsu_op != ref.lsu_op) {
         std::cout << "[ERROR] LSU_OP mismatch! Ref=" << std::dec << ref.lsu_op
                   << " DUT=" << top->check_lsu_op << std::endl;
+        mismatch = true;
+      }
+      if ((ref.is_load && ref.is_store) && top->check_amo_op != ref.amo_op) {
+        std::cout << "[ERROR] AMO_OP mismatch! Ref=" << std::dec << ref.amo_op
+                  << " DUT=" << top->check_amo_op << std::endl;
         mismatch = true;
       }
       if (ref.is_branch && top->check_br_op != ref.br_op) {

@@ -35,6 +35,7 @@ static void set_defaults(Vtb_lsu *top) {
   top->is_load_i = 0;
   top->is_store_i = 0;
   top->lsu_op_i = 0;
+  top->amo_op_i = 0;
   top->imm_i = 0;
   top->rs1_data_i = 0;
   top->rs2_data_i = 0;
@@ -96,7 +97,24 @@ enum {
   LSU_SB = 7,
   LSU_SH = 8,
   LSU_SW = 9,
-  LSU_SD = 10
+  LSU_SD = 10,
+  LSU_LR = 11,
+  LSU_SC = 12,
+  LSU_SC_FAIL = 13,
+  LSU_AMO = 14
+};
+
+enum {
+  AMO_NONE = 0,
+  AMO_SWAP = 1,
+  AMO_ADD = 2,
+  AMO_XOR = 3,
+  AMO_AND = 4,
+  AMO_OR = 5,
+  AMO_MIN = 6,
+  AMO_MAX = 7,
+  AMO_MINU = 8,
+  AMO_MAXU = 9
 };
 
 static constexpr uint32_t kPrivU = 0;
@@ -1302,6 +1320,187 @@ static void test_sq_queue_ordered_dequeue_contract(Vtb_lsu *top) {
   expect(top->sq_test_head_valid_o == 0, "SQ queue: head invalid when empty");
 }
 
+static uint32_t amo_expected(uint32_t op, uint32_t old_val, uint32_t operand) {
+  switch (op) {
+  case AMO_SWAP:
+    return operand;
+  case AMO_ADD:
+    return old_val + operand;
+  case AMO_XOR:
+    return old_val ^ operand;
+  case AMO_AND:
+    return old_val & operand;
+  case AMO_OR:
+    return old_val | operand;
+  case AMO_MIN:
+    return (static_cast<int32_t>(old_val) < static_cast<int32_t>(operand)) ? old_val
+                                                                           : operand;
+  case AMO_MAX:
+    return (static_cast<int32_t>(old_val) > static_cast<int32_t>(operand)) ? old_val
+                                                                           : operand;
+  case AMO_MINU:
+    return (old_val < operand) ? old_val : operand;
+  case AMO_MAXU:
+    return (old_val > operand) ? old_val : operand;
+  default:
+    return old_val;
+  }
+}
+
+static void run_amo_forward_case(Vtb_lsu *top, uint32_t amo_op, uint32_t old_val,
+                                 uint32_t operand, const char *msg) {
+  set_defaults(top);
+
+  top->req_valid_i = 1;
+  top->is_load_i = 1;
+  top->is_store_i = 1;
+  top->lsu_op_i = LSU_AMO;
+  top->amo_op_i = amo_op;
+  top->rs1_data_i = 0xF000;
+  top->imm_i = 0;
+  top->rs2_data_i = operand;
+  top->rob_tag_i = 0x2A;
+  top->sb_id_i = 0x4;
+  top->sb_load_hit_i = 1;
+  top->sb_load_data_i = old_val;
+
+  eval_comb(top);
+  expect(top->req_ready_o == 1, msg);
+  expect(top->sb_load_addr_o == 0xF000, "AMO fwd: queries forwarding at AMO address");
+  tick(top);
+  top->req_valid_i = 0;
+
+  eval_comb(top);
+  expect(top->wb_valid_o == 1, "AMO fwd: writeback valid");
+  expect(top->wb_rob_idx_o == 0x2A, "AMO fwd: writeback tag");
+  expect(top->wb_data_o == old_val, "AMO fwd: writeback returns old value");
+  expect(top->sb_ex_valid_o == 1, "AMO fwd: store buffer write valid");
+  expect(top->sb_ex_sb_id_o == 0x4, "AMO fwd: store buffer id");
+  expect(top->sb_ex_op_o == LSU_SW, "AMO fwd: store buffer op is SW");
+  expect(top->sb_ex_data_o == amo_expected(amo_op, old_val, operand),
+         "AMO fwd: store buffer receives computed new value");
+  tick(top);
+}
+
+static void test_amo_forward_all_ops(Vtb_lsu *top) {
+  run_amo_forward_case(top, AMO_SWAP, 0x80000001u, 0x00000005u, "AMOSWAP fwd: accepted");
+  run_amo_forward_case(top, AMO_ADD, 0x00000010u, 0x00000005u, "AMOADD fwd: accepted");
+  run_amo_forward_case(top, AMO_XOR, 0x00FF00FFu, 0x0F0F0000u, "AMOXOR fwd: accepted");
+  run_amo_forward_case(top, AMO_AND, 0x00FF00FFu, 0x0F0F0000u, "AMOAND fwd: accepted");
+  run_amo_forward_case(top, AMO_OR, 0x00FF00FFu, 0x0F0F0000u, "AMOOR fwd: accepted");
+  run_amo_forward_case(top, AMO_MIN, 0x80000000u, 0x00000001u, "AMOMIN fwd: accepted");
+  run_amo_forward_case(top, AMO_MAX, 0x80000000u, 0x00000001u, "AMOMAX fwd: accepted");
+  run_amo_forward_case(top, AMO_MINU, 0x80000000u, 0x00000001u, "AMOMINU fwd: accepted");
+  run_amo_forward_case(top, AMO_MAXU, 0x80000000u, 0x00000001u, "AMOMAXU fwd: accepted");
+}
+
+static void test_amo_dcache_rmw_path(Vtb_lsu *top) {
+  set_defaults(top);
+
+  top->req_valid_i = 1;
+  top->is_load_i = 1;
+  top->is_store_i = 1;
+  top->lsu_op_i = LSU_AMO;
+  top->amo_op_i = AMO_ADD;
+  top->rs1_data_i = 0xF100;
+  top->imm_i = 4;
+  top->rs2_data_i = 0x00000007;
+  top->rob_tag_i = 0x2B;
+  top->sb_id_i = 0x5;
+
+  eval_comb(top);
+  expect(top->req_ready_o == 1, "AMO dcache: accepted");
+  tick(top);
+  top->req_valid_i = 0;
+
+  top->ld_req_ready_i = 1;
+  eval_comb(top);
+  expect(top->ld_req_valid_o == 1, "AMO dcache: load request valid");
+  expect(top->ld_req_addr_o == 0xF104, "AMO dcache: load request addr");
+  expect(top->ld_req_op_o == LSU_AMO, "AMO dcache: load op tags AMO");
+  tick(top);
+  top->ld_req_ready_i = 0;
+
+  top->ld_rsp_valid_i = 1;
+  top->ld_rsp_id_i = 0;
+  top->ld_rsp_data_i = 0x00000020;
+  top->ld_rsp_err_i = 0;
+  eval_comb(top);
+  expect(top->wb_valid_o == 1, "AMO dcache: writeback valid on response");
+  expect(top->wb_rob_idx_o == 0x2B, "AMO dcache: writeback tag");
+  expect(top->wb_data_o == 0x00000020, "AMO dcache: writeback old value");
+  expect(top->sb_ex_valid_o == 1, "AMO dcache: store buffer write valid");
+  expect(top->sb_ex_addr_o == 0xF104, "AMO dcache: store address");
+  expect(top->sb_ex_data_o == 0x00000027, "AMO dcache: store new value");
+  expect(top->sb_ex_op_o == LSU_SW, "AMO dcache: store op is SW");
+  tick(top);
+  top->ld_rsp_valid_i = 0;
+}
+
+static void test_amo_misaligned_reports_store_exception(Vtb_lsu *top) {
+  set_defaults(top);
+
+  top->req_valid_i = 1;
+  top->is_load_i = 1;
+  top->is_store_i = 1;
+  top->lsu_op_i = LSU_AMO;
+  top->amo_op_i = AMO_ADD;
+  top->rs1_data_i = 0xF200;
+  top->imm_i = 2;
+  top->rs2_data_i = 1;
+  top->rob_tag_i = 0x2C;
+
+  eval_comb(top);
+  expect(top->req_ready_o == 1, "AMO misaligned: accepted");
+  tick(top);
+  top->req_valid_i = 0;
+
+  eval_comb(top);
+  expect(top->wb_valid_o == 1, "AMO misaligned: writeback valid");
+  expect(top->wb_exception_o == 1, "AMO misaligned: exception");
+  expect(top->wb_ecause_o == 6, "AMO misaligned: store/AMO address misaligned");
+  expect(top->sb_ex_valid_o == 0, "AMO misaligned: no store buffer write");
+  tick(top);
+}
+
+static void test_amo_blocks_younger_lsu_until_rmw_finishes(Vtb_lsu *top) {
+  set_defaults(top);
+
+  top->req_valid_i = 1;
+  top->is_load_i = 1;
+  top->is_store_i = 1;
+  top->lsu_op_i = LSU_AMO;
+  top->amo_op_i = AMO_OR;
+  top->rs1_data_i = 0xF300;
+  top->imm_i = 0;
+  top->rs2_data_i = 0x10;
+  top->rob_tag_i = 0x2D;
+  top->sb_id_i = 0x6;
+  eval_comb(top);
+  expect(top->req_ready_o == 1, "AMO ordering: AMO accepted");
+  tick(top);
+
+  top->is_store_i = 0;
+  top->is_load_i = 1;
+  top->lsu_op_i = LSU_LW;
+  top->amo_op_i = AMO_NONE;
+  top->rs1_data_i = 0xF304;
+  top->rob_tag_i = 0x2E;
+  eval_comb(top);
+  expect(top->req_ready_o == 0, "AMO ordering: younger LSU blocked while AMO waits");
+
+  top->req_valid_i = 0;
+  top->ld_req_ready_i = 1;
+  tick(top);
+  top->ld_req_ready_i = 0;
+  top->ld_rsp_valid_i = 1;
+  top->ld_rsp_id_i = 0;
+  top->ld_rsp_data_i = 0x20;
+  top->ld_rsp_err_i = 0;
+  tick(top);
+  top->ld_rsp_valid_i = 0;
+}
+
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   Vtb_lsu *top = new Vtb_lsu;
@@ -1334,6 +1533,10 @@ int main(int argc, char **argv) {
   test_group_ldreq_round_robin_prefers_waiting_lane(top);
   test_lq_queue_occupancy_four_entries(top);
   test_sq_queue_ordered_dequeue_contract(top);
+  test_amo_forward_all_ops(top);
+  test_amo_dcache_rmw_path(top);
+  test_amo_misaligned_reports_store_exception(top);
+  test_amo_blocks_younger_lsu_until_rmw_finishes(top);
 
   std::cout << ANSI_RES_GRN << "--- [ALL LSU TESTS PASSED] ---" << ANSI_RES_RST << std::endl;
 

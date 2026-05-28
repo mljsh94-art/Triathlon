@@ -84,7 +84,8 @@ module dcache #(
   // ---------------------------------------------------------------------------
   function automatic logic is_load_op(input decode_pkg::lsu_op_e op);
     unique case (op)
-      LSU_LB, LSU_LH, LSU_LW, LSU_LD, LSU_LBU, LSU_LHU, LSU_LWU: is_load_op = 1'b1;
+      LSU_LB, LSU_LH, LSU_LW, LSU_LD, LSU_LBU, LSU_LHU, LSU_LWU, LSU_LR,
+      LSU_AMO: is_load_op = 1'b1;
       default: is_load_op = 1'b0;
     endcase
   endfunction
@@ -100,7 +101,7 @@ module dcache #(
     unique case (op)
       LSU_LB, LSU_LBU, LSU_SB: op_size_bytes = 1;
       LSU_LH, LSU_LHU, LSU_SH: op_size_bytes = 2;
-      LSU_LW, LSU_LWU, LSU_SW: op_size_bytes = 4;
+      LSU_LW, LSU_LWU, LSU_SW, LSU_LR, LSU_SC, LSU_AMO: op_size_bytes = 4;
       LSU_LD, LSU_SD:          op_size_bytes = 8;
       default:                 op_size_bytes = 4;
     endcase
@@ -111,7 +112,7 @@ module dcache #(
     unique case (op)
       LSU_LB, LSU_LBU, LSU_SB: is_misaligned = 1'b0;
       LSU_LH, LSU_LHU, LSU_SH: is_misaligned = addr[0];
-      LSU_LW, LSU_LWU, LSU_SW: is_misaligned = |addr[1:0];
+      LSU_LW, LSU_LWU, LSU_SW, LSU_LR, LSU_SC, LSU_AMO: is_misaligned = |addr[1:0];
       LSU_LD, LSU_SD:          is_misaligned = |addr[2:0];
       default:                 is_misaligned = 1'b0;
     endcase
@@ -162,7 +163,7 @@ module dcache #(
       LSU_LHU: begin
         res = {{(Cfg.XLEN - 16) {1'b0}}, line[bit_idx+:16]};
       end
-      LSU_LW, LSU_LR: begin
+      LSU_LW, LSU_LR, LSU_AMO: begin
         if (Cfg.XLEN == 32) begin
           res = line[bit_idx+:32];
         end else begin

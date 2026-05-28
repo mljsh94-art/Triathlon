@@ -63,8 +63,22 @@ package decode_pkg;
     LSU_SD,
     LSU_LR,
     LSU_SC,
-    LSU_SC_FAIL
+    LSU_SC_FAIL,
+    LSU_AMO
   } lsu_op_e;
+
+  typedef enum logic [3:0] {
+    AMO_NONE,
+    AMO_SWAP,
+    AMO_ADD,
+    AMO_XOR,
+    AMO_AND,
+    AMO_OR,
+    AMO_MIN,
+    AMO_MAX,
+    AMO_MINU,
+    AMO_MAXU
+  } amo_op_e;
 
   typedef enum logic [2:0] {
     CSR_RW,
@@ -84,6 +98,7 @@ package decode_pkg;
     alu_op_e    alu_op;
     branch_op_e br_op;
     lsu_op_e    lsu_op;
+    amo_op_e    amo_op;
 
     // 寄存器号（逻辑）
     logic [4:0] rs1;

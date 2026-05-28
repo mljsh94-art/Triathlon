@@ -90,7 +90,7 @@ module lsu_lane #(
     unique case (op)
       LSU_LB, LSU_LBU, LSU_SB: is_misaligned = 1'b0;
       LSU_LH, LSU_LHU, LSU_SH: is_misaligned = addr[0];
-      LSU_LW, LSU_LWU, LSU_SW: is_misaligned = |addr[1:0];
+      LSU_LW, LSU_LWU, LSU_SW, LSU_LR, LSU_SC, LSU_AMO: is_misaligned = |addr[1:0];
       LSU_LD, LSU_SD:          is_misaligned = |addr[2:0];
       default:                 is_misaligned = 1'b0;
     endcase
@@ -117,7 +117,7 @@ module lsu_lane #(
         LSU_LHU: begin
           extract_fwd = {{(Cfg.XLEN - 16) {1'b0}}, data[15:0]};
         end
-        LSU_LW, LSU_LR: begin
+        LSU_LW, LSU_LR, LSU_AMO: begin
           if (Cfg.XLEN == 32) begin
             extract_fwd = data[31:0];
           end else begin
@@ -154,9 +154,11 @@ module lsu_lane #(
   logic handoff_from_resp_w;
   logic handoff_from_ld_rsp_w;
   logic req_fire_w;
+  logic is_amo;
 
   assign is_load       = uop_i.is_load;
   assign is_store      = uop_i.is_store;
+  assign is_amo        = (uop_i.lsu_op == decode_pkg::LSU_AMO);
 
   assign eff_addr_xlen = rs1_data_i + uop_i.imm;
   assign eff_addr      = addr_override_valid_i ? addr_override_i : eff_addr_xlen[Cfg.PLEN-1:0];
@@ -355,7 +357,7 @@ module lsu_lane #(
             if (misaligned) begin
               resp_data_q   <= eff_addr_tval;
               resp_exc_q    <= 1'b1;
-              resp_ecause_q <= EXC_LD_ADDR_MISALIGNED;
+              resp_ecause_q <= is_amo ? EXC_ST_ADDR_MISALIGNED : EXC_LD_ADDR_MISALIGNED;
             end else if (force_exception_i) begin
               resp_data_q   <= eff_addr_tval;
               resp_exc_q    <= 1'b1;

@@ -22,6 +22,7 @@ module tb_lsu #(
     input  logic is_load_i,
     input  logic is_store_i,
     input  logic [3:0] lsu_op_i,
+    input  logic [3:0] amo_op_i,
     input  logic [global_config_pkg::Cfg.XLEN-1:0] imm_i,
     input  logic [global_config_pkg::Cfg.XLEN-1:0] rs1_data_i,
     input  logic [global_config_pkg::Cfg.XLEN-1:0] rs2_data_i,
@@ -104,6 +105,7 @@ module tb_lsu #(
     uop.is_load  = is_load_i;
     uop.is_store = is_store_i;
     uop.lsu_op   = decode_pkg::lsu_op_e'(lsu_op_i);
+    uop.amo_op   = decode_pkg::amo_op_e'(amo_op_i);
     uop.imm      = imm_i;
   end
 

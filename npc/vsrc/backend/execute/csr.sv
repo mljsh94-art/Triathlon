@@ -102,6 +102,9 @@ module execute_csr #(
   localparam int unsigned MIP_MEIP_BIT = 11;
   localparam int unsigned MIP_MTIP_BIT = 7;
   localparam logic [XLEN-1:0] CSR_MISA_VALUE = XLEN'(32'h40141105);
+  localparam logic [XLEN-1:0] SATP_MODE_MASK = XLEN'(32'h8000_0000);
+  localparam logic [XLEN-1:0] SATP_PPN_MASK = XLEN'(32'h003f_ffff);
+  localparam logic [XLEN-1:0] SATP_SUPPORTED_MASK = SATP_MODE_MASK | SATP_PPN_MASK;
 
   logic [XLEN-1:0] csr_sie;
   logic [XLEN-1:0] csr_scounteren;
@@ -184,6 +187,13 @@ module execute_csr #(
                    addr == CSR_MCONFIGPTR || addr == CSR_MENVCFG) begin
         csr_probe_read_as_zero = 1'b1;
       end
+    end
+  endfunction
+
+  function automatic logic [XLEN-1:0] sanitize_satp(input logic [XLEN-1:0] value);
+    begin
+      // Current SV32 MMU/TLB does not tag entries by ASID, so expose ASIDLEN=0.
+      sanitize_satp = value & SATP_SUPPORTED_MASK;
     end
   endfunction
 
@@ -492,7 +502,7 @@ module execute_csr #(
           CSR_MCAUSE: csr_mcause <= csr_write_val;
           CSR_MTVAL: csr_mtval <= csr_write_val;
           CSR_MIP: ;
-          CSR_SATP: csr_satp <= csr_write_val;
+          CSR_SATP: csr_satp <= sanitize_satp(csr_write_val);
           default: ;
         endcase
       end
@@ -562,6 +572,7 @@ module execute_csr #(
                uop_i.pc, uop_i.csr_addr, uop_i.csr_op, current_priv, csr_addr_known,
                csr_addr_valid, csr_illegal_exception, trap_take, trap_to_s_mode);
     end
+
   end
 `endif
 

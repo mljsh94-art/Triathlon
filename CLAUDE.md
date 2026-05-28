@@ -66,7 +66,7 @@ Triathlon/
 │   │   └── riscv_pkg.sv             # RISC-V ISA constants
 │   ├── test/                        # Testbenches (tb_*.sv)
 │   ├── mmu/
-│   │   └── sv32_mmu.sv              # RISC-V SV32 Paging MMU
+│   │   └── sv32_mmu.sv              # RISC-V SV32 Paging MMU with TLB/context flush handling
 │   ├── platform/
 │   │   ├── plic.sv                  # Platform-Level Interrupt Controller
 │   │   └── virtio_blk.sv            # VirtIO Block Device Simulation
@@ -154,11 +154,11 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 - **ALU0-ALU3** (`execute_alu`): Single-cycle integer ALU. Operations: ADD, SUB, SLT, SLTU, XOR, OR, AND, SLL, SRL, SRA, LUI, AUIPC
 - **BRU** (uses `execute_alu`): Branch resolution (BEQ/BNE/BLT/BGE/BLTU/BGEU/JAL/JALR). Checks predictions and triggers backend flush on mispredict.
 - **LSU Group** (`lsu_group.sv` & `lsu_lane.sv`): Advanced Out-of-Order Load/Store Unit.
-  - **MMU**: Incorporates SV32 D-TLB and page walk logic.
+  - **MMU**: Incorporates SV32 D-TLB and page walk logic; SATP/SFENCE.VMA changes invalidate TLB state and abort in-flight walks. Routine non-synthesis page-fault diagnostics (`[mmu-pf-l0]`, `[mmu-pf-l1]`, `[mmu-pf-tlb]`) are disabled to avoid flooding Linux boot logs.
   - **Load Queue (LQ) & Store Queue (SQ)**: Tracks in-flight memory operations for OOO execution, memory disambiguation, and load-store forwarding.
   - **Memory Dependence Predictor (MDP)**: Predicts memory aliasing to prevent load-store ordering violations.
-  - Supports RISC-V A Extension (`LR`/`SC`) atomic operations.
-- **CSR** (`csr.sv`): CSR read/modify/write and exception/interrupt handling. Single-issue, ROB-head ordered. CSR/system exceptions are reported to the ROB first, then applied through the commit-time trap injection path so trap CSRs and `mstatus.MPP`/`SPP` are updated precisely once.
+  - Supports RV32A word atomic operations (`LR.W`/`SC.W`, `AMOSWAP.W`, `AMOADD.W`, `AMOXOR.W`, `AMOAND.W`, `AMOOR.W`, `AMOMIN.W`, `AMOMAX.W`, `AMOMINU.W`, `AMOMAXU.W`) through a conservative LSU read-modify-write sequence.
+- **CSR** (`csr.sv`): CSR read/modify/write and exception/interrupt handling. Single-issue, ROB-head ordered. CSR/system exceptions are reported to the ROB first, then applied through the commit-time trap injection path so trap CSRs and `mstatus.MPP`/`SPP` are updated precisely once. `satp` exposes SV32 mode and PPN fields with ASIDLEN=0; ASID bits are WARL-masked to zero because the current TLB is not ASID-tagged.
 
 #### Writeback & CDB
 - **Writeback Arbiter** (`writeback.sv`): 7 FU inputs -> 4 CDB ports. Priority arbitration broadcasts execution results.
@@ -210,6 +210,7 @@ struct packed {
   alu_op_e alu_op;
   branch_op_e br_op;
   lsu_op_e lsu_op;
+  amo_op_e amo_op;
   logic [4:0] rs1, rs2, rd;    // Logical register numbers
   logic has_rs1, has_rs2, has_rd;
   logic [XLEN-1:0] imm;
@@ -249,6 +250,7 @@ Backend -> Frontend:
 | `profile-task` | `make profile-task` | 一键执行：先运行性能分析，再解析生成对应的报告（存放在指定 tag 目录下）。|
 | `profile-baseline` | `make profile-baseline` | 以 `baseline` 为 tag 运行一键性能分析和解析，生成基准测试报告。 |
 | `linux-smoke` | `make linux-smoke` | 运行 Linux 冒烟测试脚本 `run_linux_smoke.sh`。 |
+| `bench` | `make bench BENCH_IMG=...` | 使用当前仿真器执行固定镜像并打印墙钟耗时，便于对比仿真速度。 |
 | `clean` | `make clean` | 清理编译生成目录，删除整个 `build` 文件夹。 |
 
 ### 2. 常用控制参数/变量 (Configuration Variables)
@@ -261,6 +263,13 @@ Backend -> Frontend:
 | `IMG` | *(空)* | 待运行的程序镜像路径（例如编译好的 RISC-V 测试 bin/elf 文件）。 |
 | `ARGS` | *(空)* | 传给仿真器的扩展参数，详见 **§4**。 |
 | `DIFFTEST_SO` | `$(NPC_HOME)/ref/riscv32-nemu-interpreter-so` | DiffTest 动态链接库的路径，用于与 NEMU 进行协同仿真比对。 |
+| `VL_THREADS` | `2` | Verilator 多线程仿真线程数；当前设计在 Verilator 5.008 下 4 线程会出现 `UNOPTTHREADS`，需要时可手动调整。 |
+| `VL_JOBS` | `$(nproc)` | Verilator/host C++ 并行编译任务数。 |
+| `VL_OPTFLAGS` | `-O3 -march=native -fno-plt` | 传给 Verilator generated make 的 `OPT_FAST` / `OPT_SLOW` / `OPT_GLOBAL` 与 host C++ 的默认优化参数。 |
+| `VL_OPTLEVEL` | `-O3` | 通过 Verilator `-MAKEFLAGS` 覆盖 generated make 的默认 `-Os`，确保 generated C++ 以 `-O3` 编译。 |
+| `DEBUG` | `0` | 设为 `1` 时使用 `-O0 -g` 编译 host 仿真器，默认使用 `-O3 -march=native`。 |
+| `BENCH_IMG` | `$(IMG)` | `bench` 目标运行的镜像路径。 |
+| `BENCH_ARGS` | `--max-cycles=10000000 --progress=0` | `bench` 目标传给仿真器的参数。 |
 
 ### 3. 典型使用示例
 
@@ -304,7 +313,8 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 | `<IMG>` | — | 待加载二进制镜像路径（positional，必需） |
 | `--max-cycles N` / `--max-cycles=N` | `600000000` | 最大仿真周期；超出后打印 `TIMEOUT after N cycles` 并以退出码 1 结束 |
 | `-d REF_SO` / `--difftest=REF_SO` | Makefile 自动注入 | NEMU DiffTest 共享库；`DIFFTEST_SO=` 或 `DIFFTEST=` 可禁用 |
-| `--progress [N]` / `--progress=N` | 禁用；仅 `--progress` 时 `N=1000000` | 每 `N` 周期打印 `[progress]` 心跳（commits、last_pc、ROB、Store Buffer、LSU、DCache MSHR 等） |
+| `--progress [N]` / `--progress=N` | 禁用；仅 `--progress` 时 `N=1000000` | 每 `N` 周期打印轻量 `[progress]` 心跳（cycles、commits、IPC、last_pc 等） |
+| `--progress-verbose` | 禁用 | 将 `[progress]` 扩展为详细快照（ROB、Store Buffer、LSU、DCache MSHR 等）；`--linux-early-debug` 也会启用详细进度输出。 |
 | `--trace [path]` / `--trace=path` | 默认 `npc.vcd` | 生成 VCD 波形；需编译时定义 `VM_TRACE`，否则忽略并打印 `[warn]` |
 | `--commit-trace [窗口]` | 禁用 | 启用 commit 级 trace 与仿真结束 profile 汇总（见下文「输出 Tag」） |
 | `--commit-trace=START:END` | — | 等价于 `--commit-trace START:END` |
@@ -314,7 +324,7 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 | `--fe-trace` | 禁用 | 取指校验：前端 bundle 与内存指令不一致，或 slot_valid 不完整时打印 `[fe]` |
 | `--stall-trace [N]` / `--stall-trace=N` | 禁用；`N=200` | 连续 `N` 周期无 commit 时打印 `[stall]`，之后每再 stall `N` 周期重复打印 |
 | `--boot-handoff` | 禁用 | Boot ROM handoff 启动链（见下文） |
-| `--dtb <path>` / `--dtb=path` | 内置最小 FDT | `--boot-handoff` 下加载外部 DTB；省略则在 `0x87F00000` 写入占位 FDT |
+| `--dtb <path>` / `--dtb=path` | 内置最小 FDT | `--boot-handoff` 下加载外部 DTB；省略则在 `0x83F00000` 写入占位 FDT |
 | `--firmware-load-base <addr>` / `=addr` | `0x80020000`（OpenSBI 区） | `--boot-handoff` 下固件加载基址；须 **4MiB 对齐**（RV32 Linux `setup_vm()` 要求），推荐 `0x80400000`；不得与复位 PC `0x80000000` 重叠 |
 | `--virtio-blk-image <path>` / `=path` | 无 | VirtIO block 后端磁盘镜像 |
 | `--linux-early-debug` | 禁用 | Linux/OpenSBI 早期启动调试：一次性 `[linux-stage]` 里程碑 + 条件 `[debug][...]` 细粒度日志 |
@@ -405,7 +415,7 @@ make -C npc sim IMG=.../test.bin ARGS='--trace wave.vcd --max-cycles=50000'
 
 ### 5. OpenSBI + Linux 镜像合并与全系统仿真
 
-`merge.py` 生成的是 **OpenSBI + Linux Kernel Image + DTB** 组合镜像，**不是** `echo_payload/payload.bin`。OpenSBI 通过 `FW_JUMP_ADDR=0x80400000` 跳转到 S-mode Linux 入口，并通过 `FW_JUMP_FDT_ADDR=0x87F00000` 将 DTB 地址传给 Linux 的 `a1`。
+`merge.py` 生成的是 **OpenSBI + Linux Kernel Image + DTB** 组合镜像，**不是** `echo_payload/payload.bin`。OpenSBI 通过 `FW_JUMP_ADDR=0x80400000` 跳转到 S-mode Linux 入口，并通过 `FW_JUMP_FDT_ADDR=0x83F00000` 将 DTB 地址传给 Linux 的 `a1`。设备树当前向 Linux 报告 64MB 可见内存（`0x80000000`–`0x83FFFFFF`），用于降低全系统仿真的 early memory/per-CPU 初始化成本。
 
 #### 内存布局（`fw_combined.bin`）
 
@@ -413,9 +423,9 @@ make -C npc sim IMG=.../test.bin ARGS='--trace wave.vcd --max-cycles=50000'
 | :--- | :--- | :--- |
 | OpenSBI (`fw_jump.bin`) | `0x80000000` | `opensbi/build/platform/triathlon/firmware/fw_jump.bin` |
 | Linux Kernel Image | `0x80400000` | `linux_workspace/linux/arch/riscv/boot/Image` |
-| DTB | `0x87F00000` | `build/triathlon.dtb`（由 `merge.py` 生成） |
+| DTB | `0x83F00000` | `build/triathlon.dtb`（由 `merge.py` 生成） |
 
-仿真器将 `fw_combined.bin` 加载到 `0x80000000`（`npc/csrc/include/platform_contract.h` 中 `kPmemBase`）。OpenSBI 启动 banner 中应出现 `Domain0 Next Arg1 : 0x87f00000`（即 Linux 的 `a1`）。
+仿真器将 `fw_combined.bin` 加载到 `0x80000000`（`npc/csrc/include/platform_contract.h` 中 `kPmemBase`）。OpenSBI 启动 banner 中应出现 `Domain0 Next Arg1 : 0x83f00000`（即 Linux 的 `a1`）。
 
 #### OpenSBI 平台配置（`opensbi/platform/triathlon/`）
 
@@ -426,17 +436,19 @@ make -C npc sim IMG=.../test.bin ARGS='--trace wave.vcd --max-cycles=50000'
 | `triathlon.dts` | 设备树源文件（memory、cpu、clint、plic、uart） |
 | `configs/defconfig` | Kconfig：`CONFIG_PLATFORM_TRIATHLON=y` |
 
+设备树中的 PLIC 仅向 Linux 暴露 S-mode external interrupt context（`interrupts-extended = <&cpu0_intc 9>`），与仿真平台当前单 context PLIC MMIO 布局保持一致。
+
 `objects.mk` 当前关键配置：
 
 ```makefile
 PLATFORM_RISCV_XLEN = 32
 PLATFORM_RISCV_ABI = ilp32
-PLATFORM_RISCV_ISA = rv32ima
+PLATFORM_RISCV_ISA = rv32imac
 PLATFORM_RISCV_CODE_MODEL = medlow
 
 FW_JUMP=y
 FW_JUMP_ADDR=0x80400000      # OpenSBI 跳转到 Linux 入口
-FW_JUMP_FDT_ADDR=0x87F00000  # OpenSBI 传给 Linux 的 a1（DTB 物理地址）
+FW_JUMP_FDT_ADDR=0x83F00000  # OpenSBI 传给 Linux 的 a1（DTB 物理地址）
 ```
 
 修改 `FW_JUMP_FDT_ADDR` 或 `FW_JUMP_ADDR` 后，必须重新编译 OpenSBI 并重新运行 `merge.py`。
@@ -450,7 +462,34 @@ FW_JUMP_FDT_ADDR=0x87F00000  # OpenSBI 传给 Linux 的 a1（DTB 物理地址）
 | **Verilator 仿真** | 宿主机 `g++` + Verilator 5.008 | 见 `npc/Makefile`；与 OpenSBI 交叉编译无关 |
 | **DTB 编译（可选）** | `dtc`（device-tree-compiler） | 有则优先从 `triathlon.dts` 生成 DTB；无则 `merge.py` 使用内置等价 DTB |
 
-OpenSBI 编译示例（WSL）：
+编译命令与参数见下方 **OpenSBI / Linux 编译流程与参数**。
+
+#### OpenSBI / Linux 编译流程与参数
+
+全系统镜像由三路输入经 `merge.py` 合并后交给 Verilator 仿真：
+
+```
+OpenSBI (fw_jump.bin) ──┐
+Linux   (Image)       ──┼── merge.py ── fw_combined.bin ── make -C npc sim
+DTB     (triathlon.dts)─┘
+```
+
+##### 何时需要重编
+
+| 修改内容 | 需要重编 | 需要重跑 merge.py |
+| :--- | :--- | :--- |
+| `opensbi/platform/triathlon/objects.mk` | OpenSBI | 是 |
+| `opensbi/platform/triathlon/triathlon.dts` | 否（merge 时编 DTB） | 是 |
+| `opensbi/platform/triathlon/platform.c` | OpenSBI | 是 |
+| Linux 源码 / `.config` / 临时验证补丁 | Linux `Image` | 是 |
+| RTL / `npc/csrc` / 仿真参数 | `make -C npc` | 否 |
+
+##### OpenSBI 编译
+
+| Make 变量 | 值 | 说明 |
+| :--- | :--- | :--- |
+| `PLATFORM` | `triathlon` | 平台目录 `opensbi/platform/triathlon/` |
+| `CROSS_COMPILE` | `riscv64-linux-gnu-` | 工具链前缀；目标 XLEN 由 `objects.mk` 中 `PLATFORM_RISCV_XLEN=32` 决定 |
 
 ```bash
 make -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-
@@ -460,11 +499,90 @@ make -B -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-
 
 输出：`opensbi/build/platform/triathlon/firmware/fw_jump.bin`
 
-#### 前置条件
+##### Linux 内核编译
 
-- OpenSBI：已用 `riscv64-linux-gnu-` 编译 `fw_jump.bin`（见上）
-- Linux：`linux_workspace/linux/arch/riscv/boot/Image` 已编译（`linux_workspace/` 在 `.gitignore` 中）
-- DTB：`merge.py` 生成 `build/triathlon.dtb`（优先 `dtc` 编译 `triathlon.dts`，否则脚本内置 DTB）
+Linux 工作树位于 `linux_workspace/linux/`（`.gitignore` 中）。工具链前缀为 `riscv64-linux-gnu-`，但内核配置为 **RV32**（`CONFIG_32BIT=y`），与 Triathlon RTL 的 32 位 ISA 一致；banner 中出现 `riscv64-linux-gnu-gcc` 不代表 64 位内核。
+
+| Make 变量 | 值 | 说明 |
+| :--- | :--- | :--- |
+| `ARCH` | `riscv` | 必传 |
+| `CROSS_COMPILE` | `riscv64-linux-gnu-` | 与 OpenSBI 相同前缀 |
+| 目标 | `Image` | 输出裸内核镜像，非 `vmlinux` ELF |
+
+```bash
+# 首次配置（可选起点：arch/riscv/configs/rv32_defconfig）
+make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- rv32_defconfig
+make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- menuconfig
+
+# 编译内核镜像
+make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(nproc) Image
+```
+
+输出：`linux_workspace/linux/arch/riscv/boot/Image`
+
+关键 Kconfig（须与 Triathlon RV32 + SV32 对齐）：
+
+| 选项 | 典型值 | 说明 |
+| :--- | :--- | :--- |
+| `CONFIG_32BIT` | `y` | 32 位 RISC-V 内核 |
+| `CONFIG_ARCH_RV32I` | `y` | RV32I 基座 |
+| `CONFIG_PAGE_OFFSET` | `0xC0000000` | 内核虚拟地址起点 |
+| `CONFIG_RISCV_ISA_C` | `y` | 压缩指令（与 RTL 一致） |
+| `CONFIG_INITRAMFS_SOURCE` | `../rootfs` | 内置 initramfs 根文件系统 |
+| `CONFIG_INITRAMFS_COMPRESSION_NONE` | `y` | initramfs 不压缩，减少 gzip 解压热点在 RTL 仿真中的启动开销 |
+
+启动命令行（`CONFIG_CMDLINE` 或 bootargs）常用：`earlycon=sbi console=ttyS0 root=/dev/ram0`（initramfs 根文件系统）。
+
+精简配置原则：单核 RV32、SBI、PLIC、RISC-V timer、OF/DT、8250/SBI earlycon、initramfs、`proc`/`sysfs`/`tmpfs`；关闭通用 RISC-V 板卡驱动、块设备驱动、图形/输入/USB/MMC/RTC、非必要文件系统以及 debug/trace 开销。当前 `build_kernel.sh` 使用 `allnoconfig` + `.triathlon_min.config` 最小配置片段生成内核配置，只保留 RV32/SV32、SBI、DT、8250 控制台、内置 initramfs、ELF/script 执行和 `proc`/`sysfs`/`devtmpfs`/`tmpfs`；脚本末尾会检查并拒绝 `NET`、`BLOCK`、`PCI`、`CGROUPS`、`BPF`、`PERF`、`KALLSYMS`、`FTRACE`、`CRYPTO`、`INPUT`、`PINCTRL`、`USB`、`MMC`、`RTC`、`THERMAL`、`VIRTIO`、`FW_LOADER`、`PM`、`IO_URING` 等无关子系统被重新选中。`CONFIG_DEBUG_KERNEL` 是调试菜单总开关，`allnoconfig` 下可能保持为 `y`，但具体 debug/ftrace/debug-info 子项保持关闭。
+
+##### merge.py 参数
+
+脚本顶部常量（须与 `objects.mk` 中 `FW_JUMP_*` 保持一致）：
+
+| 变量 | 值 | 说明 |
+| :--- | :--- | :--- |
+| `PMEM_BASE` | `0x80000000` | 仿真器加载 `fw_combined.bin` 的物理基址 |
+| `PMEM_SIZE` | `0x08000000` | 物理内存窗口大小（128MB） |
+| `LINUX_LOAD_ADDR` | `0x80400000` | 对应 `FW_JUMP_ADDR` |
+| `DTB_LOAD_ADDR` | `0x83F00000` | 对应 `FW_JUMP_FDT_ADDR` |
+| `LINUX_VISIBLE_MEM_SIZE` | `0x04000000` | DTB 向 Linux 报告的可见内存（64MB） |
+
+输入/输出路径：
+
+| 路径 | 角色 |
+| :--- | :--- |
+| `opensbi/build/platform/triathlon/firmware/fw_jump.bin` | OpenSBI 输入 |
+| `linux_workspace/linux/arch/riscv/boot/Image` | Linux 输入 |
+| `opensbi/platform/triathlon/triathlon.dts` | DTB 源（有 `dtc` 时编译） |
+| `build/triathlon.dtb` | 生成的 DTB |
+| `fw_combined.bin` | 合并输出 |
+
+```bash
+python3 merge.py
+```
+
+##### 完整构建示例（WSL）
+
+```bash
+# 1. OpenSBI
+make -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-
+
+# 2. Linux
+make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(nproc) Image
+
+# 3. 合并
+python3 merge.py
+
+# 4. 仿真
+make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
+  ARGS='--max-cycles=100000000 --progress=1000000 --linux-early-debug'
+```
+
+#### Linux 非对齐访问探测临时补丁
+
+当前 RTL 能对非对齐 load/store 产生异常，但 Linux 早期启动中的 `check_unaligned_access()` 会主动执行非对齐 word copy 来探测硬件能力；现阶段该探测会触发 `load address misaligned` panic，阻塞后续 boot 验证。Linux 工作树可在 `linux_workspace/linux/arch/riscv/kernel/cpufeature.c` 中临时关闭该探测：`check_unaligned_access()` 直接将 `misaligned_access_speed` 标记为 `RISCV_HWPROBE_MISALIGNED_SLOW` 并返回，不再调用 `__riscv_copy_words_unaligned()`。
+
+该补丁仅用于绕过启动阶段的硬件能力 probe。RTL LSU 支持非对齐访存，或 Linux 异常路径能稳定模拟/恢复非对齐访问后，应恢复原始 `check_unaligned_access()` 探测逻辑，并重新编译 `Image`。
 
 #### 合并与仿真示例
 
@@ -472,8 +590,11 @@ make -B -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-
 # 1. 重建 OpenSBI（修改 objects.mk 后必做）
 wsl bash -c "make -C /mnt/e/vivado_project/OOOcpu_design/Triathlon/opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-"
 
-# 2. 合并镜像并仿真
-wsl bash -c "cd /mnt/e/vivado_project/OOOcpu_design/Triathlon && python3 merge.py && make -C npc sim IMG=/mnt/e/vivado_project/OOOcpu_design/Triathlon/fw_combined.bin DIFFTEST_SO= ARGS='--max-cycles=2000000 --progress=500000 --linux-early-debug' > npc/sim_final_verify.log 2>&1"
+# 2. 重建 Linux（修改内核源码/.config/临时补丁后必做）
+wsl bash -c "make -C /mnt/e/vivado_project/OOOcpu_design/Triathlon/linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(nproc) Image"
+
+# 3. 合并镜像并仿真
+wsl bash -c "cd /mnt/e/vivado_project/OOOcpu_design/Triathlon && python3 merge.py && make -C npc sim IMG=/mnt/e/vivado_project/OOOcpu_design/Triathlon/fw_combined.bin DIFFTEST_SO= ARGS='--max-cycles=100000000 --progress=1000000 --linux-early-debug' > npc/sim_final_verify.log 2>&1"
 ```
 
 #### 流程步骤
@@ -481,12 +602,15 @@ wsl bash -c "cd /mnt/e/vivado_project/OOOcpu_design/Triathlon && python3 merge.p
 1. **编译 OpenSBI**
    - `make -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-`
    - 确认 `objects.mk` 中 `FW_JUMP_ADDR` / `FW_JUMP_FDT_ADDR` 与 `merge.py` 中 `LINUX_LOAD_ADDR` / `DTB_LOAD_ADDR` 一致
-2. **合并镜像 (`python3 merge.py`)**
+2. **编译 Linux**
+   - `make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(nproc) Image`
+   - 确认 `.config` 中 `CONFIG_32BIT=y`（RV32 内核，非 64 位）
+3. **合并镜像 (`python3 merge.py`)**
    - 读取 `opensbi/build/platform/triathlon/firmware/fw_jump.bin`
    - 读取 `linux_workspace/linux/arch/riscv/boot/Image`
    - 生成 `build/triathlon.dtb`（优先 `dtc` + `triathlon.dts`，否则内置 DTB）
    - 输出 `fw_combined.bin`（布局见上表）
-3. **启动 Verilator 仿真 (`make -C npc sim ...`)**
+4. **启动 Verilator 仿真 (`make -C npc sim ...`)**
    - **`IMG=...`**: 加载 `fw_combined.bin` 到 `0x80000000`
    - **`DIFFTEST_SO=`**: 置空以禁用 DiffTest（OpenSBI/Linux 涉及 SV32 MMU、特权级 CSR 与外设，bare-metal NEMU 无法对齐）
    - 仿真扩展参数见 **§4 仿真器命令行扩展参数**（常用：`--max-cycles`、`--progress`、`--linux-early-debug`、`--commit-trace` 等）

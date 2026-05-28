@@ -285,12 +285,7 @@ module bpu #(
   logic [Cfg.INSTR_PER_FETCH-1:0][1:0] cond_selected_provider_w;
   logic [Cfg.INSTR_PER_FETCH-1:0] cond_selected_taken_w;
 `ifndef SYNTHESIS
-  integer agent49_bpu_log_fd;
-  int unsigned agent49_bpu_log_cnt;
-  initial begin
-    agent49_bpu_log_fd = 0;
-    agent49_bpu_log_cnt = 0;
-  end
+
 `endif
 
   assign ghr_q = spec_ghr_q;
@@ -640,7 +635,6 @@ module bpu #(
       cond_track_tail_q <= '0;
       cond_track_count_q <= '0;
 `ifndef SYNTHESIS
-      agent49_bpu_log_cnt <= 0;
 `endif
       for (int i = 0; i < BHT_ENTRIES; i++) begin
         local_bht_q[i] <= 2'b01;
@@ -1124,34 +1118,7 @@ module bpu #(
         pred_event_pc_q <= pred_slot_pc_w;
       end
 `ifndef SYNTHESIS
-      // #region agent log
-      if ((agent49_bpu_log_cnt < 128) &&
-          ((ifu_to_bpu_handshake_i.ready &&
-            ((ifu_to_bpu_i.pc >= 32'hc0804e40) && (ifu_to_bpu_i.pc <= 32'hc0804e80))) ||
-           (pred_fire_w &&
-            (((pred_slot_pc_w >= 32'hc0804e40) && (pred_slot_pc_w <= 32'hc0804e80)) ||
-             ((pred_npc_w >= 32'hc0804e40) && (pred_npc_w <= 32'hc0804e80)) ||
-             ((pred_slot_target_w >= 32'hc0804e40) && (pred_slot_target_w <= 32'hc0804e80)))) ||
-           (update_valid_i &&
-            (((update_pc_i >= 32'hc0804e40) && (update_pc_i <= 32'hc0804e80)) ||
-             ((update_target_i >= 32'hc0804e40) && (update_target_i <= 32'hc0804e80)))))) begin
-        if (agent49_bpu_log_fd == 0) begin
-          agent49_bpu_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-49fa23.log", "a");
-        end
-        if (agent49_bpu_log_fd != 0) begin
-          $fdisplay(agent49_bpu_log_fd,
-                    "{\"sessionId\":\"49fa23\",\"runId\":\"illegal-halfword-source-pre\",\"hypothesisId\":\"H29,H30,H31\",\"location\":\"bpu.sv:predict-update\",\"message\":\"misc-mem-init-bpu-state\",\"data\":{\"queryReady\":%0d,\"queryPc\":\"0x%08h\",\"predFire\":%0d,\"predNpc\":\"0x%08h\",\"slotValid\":%0d,\"slotIdx\":%0d,\"slotPc\":\"0x%08h\",\"slotTarget\":\"0x%08h\",\"slotTaken\":%0d,\"slotCond\":%0d,\"slotCall\":%0d,\"slotRet\":%0d,\"slotRvc\":%0d,\"updateValid\":%0d,\"updatePc\":\"0x%08h\",\"updateTaken\":%0d,\"updateTarget\":\"0x%08h\",\"updateCond\":%0d,\"updateCall\":%0d,\"updateRet\":%0d,\"updateRvc\":%0d},\"timestamp\":0}",
-                    ifu_to_bpu_handshake_i.ready, ifu_to_bpu_i.pc, pred_fire_w, pred_npc_w,
-                    pred_slot_valid_w, pred_slot_idx_w, pred_slot_pc_w, pred_slot_target_w,
-                    pred_slot_taken_w, pred_slot_is_cond_w, pred_slot_is_call_w,
-                    pred_slot_is_ret_w, pred_slot_is_rvc_w, update_valid_i, update_pc_i,
-                    update_taken_i, update_target_i, update_is_cond_i, update_is_call_i,
-                    update_is_ret_i, update_is_rvc_i);
-          $fflush(agent49_bpu_log_fd);
-          agent49_bpu_log_cnt <= agent49_bpu_log_cnt + 1;
-        end
-      end
-      // #endregion agent log
+
 `endif
       tage_track_head_q <= tage_head_n;
       tage_track_tail_q <= tage_tail_n;

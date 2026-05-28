@@ -29,7 +29,7 @@
 
 	memory@80000000 {
 		device_type = "memory";
-		reg = <0x80000000 0x08000000>; /* 128MB */
+		reg = <0x80000000 0x04000000>; /* 64MB */
 	};
 
 	soc {
@@ -50,7 +50,7 @@
 			#interrupt-cells = <1>;
 			reg = <0x0c000000 0x4000000>;
 			riscv,ndev = <31>;
-			interrupts-extended = <&cpu0_intc 11 &cpu0_intc 9>;
+			interrupts-extended = <&cpu0_intc 9>;
 		};
 
 		uart@a00003f8 {

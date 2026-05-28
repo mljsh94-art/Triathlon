@@ -8,7 +8,8 @@ ROOT = Path(__file__).resolve().parent
 PMEM_BASE = 0x80000000
 PMEM_SIZE = 0x08000000
 LINUX_LOAD_ADDR = 0x80400000
-DTB_LOAD_ADDR = 0x87F00000
+LINUX_VISIBLE_MEM_SIZE = 0x04000000
+DTB_LOAD_ADDR = 0x83F00000
 
 FW_JUMP_BIN = ROOT / "opensbi/build/platform/triathlon/firmware/fw_jump.bin"
 LINUX_IMAGE = ROOT / "linux_workspace/linux/arch/riscv/boot/Image"
@@ -123,7 +124,7 @@ def make_builtin_dtb() -> bytes:
 
     begin_node("memory@80000000")
     prop_string("device_type", "memory")
-    prop_cells("reg", 0x80000000, 0x08000000)
+    prop_cells("reg", PMEM_BASE, LINUX_VISIBLE_MEM_SIZE)
     end_node()
 
     begin_node("soc")
@@ -144,7 +145,7 @@ def make_builtin_dtb() -> bytes:
     prop_cells("#interrupt-cells", 1)
     prop_cells("reg", 0x0C000000, 0x04000000)
     prop_cells("riscv,ndev", 31)
-    prop_cells("interrupts-extended", 1, 11, 1, 9)
+    prop_cells("interrupts-extended", 1, 9)
     prop_cells("phandle", 2)
     end_node()
 

@@ -99,6 +99,7 @@ module ifu #(
 
   logic [Cfg.PLEN-1:0] pc_reg;
   logic [Cfg.PLEN-1:0] bpu_query_pc_w;
+  logic [Cfg.PLEN-1:0] local_mmu_replay_pc_w;
   logic [EPOCH_W-1:0] fetch_epoch_q;
   logic [EPOCH_W-1:0] flush_next_epoch_w;
 
@@ -222,14 +223,9 @@ module ifu #(
   logic aa_inf_watch_w;
   logic ifu_diag_trace_en_q;
   logic ifu_bsearch_trace_en_q;
-  integer agent49_ifu_src_log_fd;
-  int unsigned agent49_ifu_src_log_cnt;
   initial ifu_diag_trace_en_q = $test$plusargs("npc_diag_trace");
   initial ifu_bsearch_trace_en_q = $test$plusargs("npc_diag_bsearch");
-  initial begin
-    agent49_ifu_src_log_fd = 0;
-    agent49_ifu_src_log_cnt = 0;
-  end
+
 `endif
 
   logic fault_pending_q;
@@ -279,6 +275,9 @@ module ifu #(
   assign satp_changed_w = (mmu_satp_i != mmu_satp_prev_q);
   assign local_mmu_flush_w = satp_changed_w || mmu_sfence_vma_i;
   assign ifu_flush_w = flush_i || local_mmu_flush_w;
+  assign local_mmu_replay_pc_w =
+      !inf_fifo_empty_w ? inf_head_pc_w :
+      (!req_fifo_empty_w ? req_head_pc_w : pc_reg);
 
   // BPU side: enqueue requests into pending FIFO when space is available.
   assign bpu_query_pc_w = flush_i ? redirect_pc_i : pc_reg;
@@ -494,7 +493,6 @@ module ifu #(
 `ifndef SYNTHESIS
       ifu_pc_dbg_cnt_q <= '0;
       ifu_aa_dbg_cnt_q <= '0;
-      agent49_ifu_src_log_cnt <= 0;
 `endif
 
     end else begin
@@ -531,7 +529,10 @@ module ifu #(
         fault_tval_q <= '0;
       end else if (local_mmu_flush_w) begin
         // Drop stale fetch requests/responses when SATP or SFENCE.VMA changes translation context.
+        // Replay the oldest outstanding virtual PC; keeping speculative pc_reg can
+        // restart mid-instruction after the queue contents carrying RVC state are dropped.
         fetch_epoch_q <= flush_next_epoch_w;
+        pc_reg <= local_mmu_replay_pc_w;
         req_head_q <= '0;
         req_tail_q <= '0;
         req_count_q <= '0;
@@ -636,39 +637,6 @@ module ifu #(
     $display("\n");
 `endif
 `ifndef SYNTHESIS
-    // #region agent log
-    if ((agent49_ifu_src_log_cnt < 128) &&
-        ((req_enq_fire_w &&
-          ((bpu_query_pc_w >= 32'hc0804e40) && (bpu_query_pc_w <= 32'hc0804e80))) ||
-         (req_issue_fire_w &&
-          ((req_head_pc_w >= 32'hc0804e40) && (req_head_pc_w <= 32'hc0804e80))) ||
-         (rsp_capture_w &&
-          ((inf_head_pc_w >= 32'hc0804e40) && (inf_head_pc_w <= 32'hc0804e80))) ||
-         (ibuf_pop_w &&
-          ((ifu_ibuffer_rsp_pc_o >= 32'hc0804e40) && (ifu_ibuffer_rsp_pc_o <= 32'hc0804e80))) ||
-         (flush_i &&
-          (((redirect_pc_i >= 32'hc0804e40) && (redirect_pc_i <= 32'hc0804e80)) ||
-           ((pc_reg >= 32'hc0804e40) && (pc_reg <= 32'hc0804e80)))))) begin
-      if (agent49_ifu_src_log_fd == 0) begin
-        agent49_ifu_src_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-49fa23.log", "a");
-      end
-      if (agent49_ifu_src_log_fd != 0) begin
-        $fdisplay(agent49_ifu_src_log_fd,
-                  "{\"sessionId\":\"49fa23\",\"runId\":\"illegal-halfword-source-pre\",\"hypothesisId\":\"H29,H30,H31\",\"location\":\"ifu.sv:pc-source\",\"message\":\"misc-mem-init-ifu-source\",\"data\":{\"flush\":%0d,\"redirect\":\"0x%08h\",\"pcReg\":\"0x%08h\",\"bpuQuery\":\"0x%08h\",\"bpuNpc\":\"0x%08h\",\"bpuSlotValid\":%0d,\"bpuSlotIdx\":%0d,\"bpuTarget\":\"0x%08h\",\"enq\":%0d,\"issue\":%0d,\"issuePc\":\"0x%08h\",\"issuePaddr\":\"0x%08h\",\"rspCapture\":%0d,\"infPc\":\"0x%08h\",\"ibufPop\":%0d,\"outPc\":\"0x%08h\",\"reqCount\":%0d,\"infCount\":%0d,\"fqCount\":%0d,\"fetchEpoch\":%0d,\"reqHeadEpoch\":%0d,\"infHeadEpoch\":%0d,\"slotValid\":\"0x%0h\",\"rsp0\":\"0x%08h\",\"rsp1\":\"0x%08h\",\"rsp2\":\"0x%08h\",\"rsp3\":\"0x%08h\",\"pred0\":\"0x%08h\",\"pred1\":\"0x%08h\",\"pred2\":\"0x%08h\",\"pred3\":\"0x%08h\"},\"timestamp\":0}",
-                  flush_i, redirect_pc_i, pc_reg, bpu_query_pc_w, bpu2ifu_predicted_pc_i,
-                  bpu2ifu_pred_slot_valid_i, bpu2ifu_pred_slot_idx_i, bpu2ifu_pred_target_i,
-                  req_enq_fire_w, req_issue_fire_w, req_head_pc_w, issue_paddr_w,
-                  rsp_capture_w, inf_head_pc_w, ibuf_pop_w, ifu_ibuffer_rsp_pc_o,
-                  req_count_q, inf_count_q, fq_count_q, fetch_epoch_q, req_head_epoch_w,
-                  inf_head_epoch_w, rsp_slot_valid_w, icache2ifu_rsp_data_i[0],
-                  icache2ifu_rsp_data_i[1], icache2ifu_rsp_data_i[2],
-                  icache2ifu_rsp_data_i[3], rsp_pred_npc_w[0], rsp_pred_npc_w[1],
-                  rsp_pred_npc_w[2], rsp_pred_npc_w[3]);
-        $fflush(agent49_ifu_src_log_fd);
-        agent49_ifu_src_log_cnt <= agent49_ifu_src_log_cnt + 1;
-      end
-    end
-    // #endregion agent log
 
     if (ifu_diag_trace_en_q && req_issue_fire_w && (ifu_pc_dbg_cnt_q < IFU_PC_DBG_BUDGET) && (
         ((req_head_pc_w & 32'hfffff000) == 32'hc0800000) ||

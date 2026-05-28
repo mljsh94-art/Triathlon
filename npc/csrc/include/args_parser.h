@@ -23,6 +23,7 @@ struct SimArgs {
   bool stall_trace = false;
   uint64_t stall_threshold = 200;
   uint64_t progress_interval = 0;
+  bool progress_verbose = false;
   bool linux_early_debug = false;
 };
 

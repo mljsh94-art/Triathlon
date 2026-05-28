@@ -70,6 +70,8 @@ module sv32_mmu #(
   logic [31:0] upd_fill_pte_q;
   logic [31:0] upd_fill_pte_addr_q;
   logic [31:0] upd_fill_vaddr_q;
+  logic [31:0] satp_prev_q;
+  logic        satp_context_flush_w;
 
   logic [TLB_ENTRIES-1:0]       tlb_valid_q;
   logic [TLB_ENTRIES-1:0]       tlb_super_q;
@@ -93,8 +95,7 @@ module sv32_mmu #(
   logic [31:0] l0_pte_addr_w;
   logic [31:0] leaf_pte_updated_w;
 `ifndef SYNTHESIS
-  localparam int unsigned MMU_PF_LOG_BUDGET = 128;
-  int unsigned mmu_pf_log_cnt_q;
+
 `endif
 
   function automatic logic pte_invalid(input logic [31:0] pte);
@@ -184,16 +185,17 @@ module sv32_mmu #(
   assign l1_pte_addr_w = {root_ppn_q, 12'b0} + {20'b0, req_vaddr_q[31:22], 2'b00};
   assign l0_pte_addr_w = {next_ppn_q, 12'b0} + {20'b0, req_vaddr_q[21:12], 2'b00};
 
-  assign req_ready_o = (state_q == ST_IDLE);
-  assign pte_req_valid_o = (state_q == ST_WALK_L1) || (state_q == ST_WALK_L0);
+  assign req_ready_o = (state_q == ST_IDLE) && !satp_context_flush_w;
+  assign pte_req_valid_o = !satp_context_flush_w && ((state_q == ST_WALK_L1) || (state_q == ST_WALK_L0));
   assign pte_req_paddr_o = (state_q == ST_WALK_L0) ? l0_pte_addr_w : l1_pte_addr_w;
-  assign pte_upd_valid_o = (state_q == ST_PTE_UPDATE);
+  assign pte_upd_valid_o = !satp_context_flush_w && (state_q == ST_PTE_UPDATE);
   assign pte_upd_paddr_o = upd_pte_addr_q;
   assign pte_upd_data_o = upd_pte_data_q;
 
   assign resp_valid_o = resp_valid_q;
   assign resp_paddr_o = resp_paddr_q;
   assign resp_page_fault_o = resp_page_fault_q;
+  assign satp_context_flush_w = sfence_vma_i || (satp_i != satp_prev_q);
 
   always_comb begin
     tlb_hit_w = 1'b0;
@@ -256,6 +258,7 @@ module sv32_mmu #(
       upd_fill_pte_q <= '0;
       upd_fill_pte_addr_q <= '0;
       upd_fill_vaddr_q <= '0;
+      satp_prev_q <= '0;
 
       tlb_valid_q <= '0;
       tlb_super_q <= '0;
@@ -265,18 +268,42 @@ module sv32_mmu #(
       tlb_pte_addr_q <= '0;
       tlb_repl_ptr_q <= '0;
 `ifndef SYNTHESIS
-      mmu_pf_log_cnt_q <= '0;
 `endif
     end else begin
       pte = pte_rsp_data_i;
       hit_pte_updated = pte_with_ad(tlb_hit_pte_w, req_access_i);
       resp_valid_q <= 1'b0;
+      satp_prev_q <= satp_i;
 
-      if (sfence_vma_i) begin
+      if (satp_context_flush_w) begin
         tlb_valid_q <= '0;
       end
 
-      unique case (state_q)
+`ifndef SYNTHESIS
+
+`endif
+
+      if (satp_context_flush_w) begin
+        // Drop any walk/update that was started under the previous translation context.
+        state_q <= ST_IDLE;
+        req_vaddr_q <= '0;
+        req_access_q <= '0;
+        req_priv_q <= '0;
+        req_sum_q <= 1'b0;
+        req_mxr_q <= 1'b0;
+        root_ppn_q <= satp_i[21:0];
+        next_ppn_q <= '0;
+        upd_pte_addr_q <= '0;
+        upd_pte_data_q <= '0;
+        upd_resp_paddr_q <= '0;
+        upd_from_tlb_hit_q <= 1'b0;
+        upd_tlb_hit_idx_q <= '0;
+        upd_fill_super_q <= 1'b0;
+        upd_fill_pte_q <= '0;
+        upd_fill_pte_addr_q <= '0;
+        upd_fill_vaddr_q <= '0;
+      end else begin
+        unique case (state_q)
         ST_IDLE: begin
           if (req_valid_i) begin
             if (satp_i[31] == 1'b0 || req_priv_i == PRIV_LVL_M) begin
@@ -285,11 +312,6 @@ module sv32_mmu #(
               resp_paddr_q <= req_vaddr_i;
             end else if (tlb_hit_w && !sfence_vma_i) begin
               if (!pte_perm_ok(tlb_hit_pte_w, req_access_i, req_priv_i, req_sum_i, req_mxr_i)) begin
-`ifndef SYNTHESIS
-                $display("[mmu-pf-tlb] vaddr=%h pte=%h pte_addr=%h access=%0d priv=%0d sum=%0d mxr=%0d",
-                         req_vaddr_i, tlb_hit_pte_w, tlb_hit_pte_addr_w, req_access_i,
-                         req_priv_i, req_sum_i, req_mxr_i);
-`endif
                 resp_valid_q <= 1'b1;
                 resp_page_fault_q <= 1'b1;
                 resp_paddr_q <= '0;
@@ -331,14 +353,6 @@ module sv32_mmu #(
             end
 `endif
             if (pte_invalid(pte)) begin
-`ifndef SYNTHESIS
-              // Suppress noisy wrong-path L1 invalid page-fault prints during Linux boot.
-              // if (mmu_pf_log_cnt_q < MMU_PF_LOG_BUDGET) begin
-              //   $display("[mmu-pf-l1] reason=invalid vaddr=%h pte_addr=%h pte=%h access=%0d priv=%0d sum=%0d mxr=%0d",
-              //            req_vaddr_q, l1_pte_addr_w, pte, req_access_q, req_priv_q, req_sum_q, req_mxr_q);
-              //   mmu_pf_log_cnt_q <= mmu_pf_log_cnt_q + 1'b1;
-              // end
-`endif
               state_q <= ST_IDLE;
               resp_valid_q <= 1'b1;
               resp_page_fault_q <= 1'b1;
@@ -346,15 +360,6 @@ module sv32_mmu #(
             end else if (pte_is_leaf(pte)) begin
               if ((pte[19:10] != 10'b0) ||
                   !pte_perm_ok(pte, req_access_q, req_priv_q, req_sum_q, req_mxr_q)) begin
-`ifndef SYNTHESIS
-                if (mmu_pf_log_cnt_q < MMU_PF_LOG_BUDGET) begin
-                  $display("[mmu-pf-l1] reason=leaf-check vaddr=%h pte_addr=%h pte=%h super_ok=%0d perm_ok=%0d access=%0d priv=%0d sum=%0d mxr=%0d",
-                           req_vaddr_q, l1_pte_addr_w, pte, (pte[19:10] == 10'b0),
-                           pte_perm_ok(pte, req_access_q, req_priv_q, req_sum_q, req_mxr_q),
-                           req_access_q, req_priv_q, req_sum_q, req_mxr_q);
-                  mmu_pf_log_cnt_q <= mmu_pf_log_cnt_q + 1'b1;
-                end
-`endif
                 state_q <= ST_IDLE;
                 resp_valid_q <= 1'b1;
                 resp_page_fault_q <= 1'b1;
@@ -403,15 +408,6 @@ module sv32_mmu #(
 `endif
             if (pte_invalid(pte) || !pte_is_leaf(pte) ||
                 !pte_perm_ok(pte, req_access_q, req_priv_q, req_sum_q, req_mxr_q)) begin
-`ifndef SYNTHESIS
-              if (mmu_pf_log_cnt_q < MMU_PF_LOG_BUDGET) begin
-                $display("[mmu-pf-l0] vaddr=%h pte_addr=%h pte=%h invalid=%0d leaf=%0d perm_ok=%0d access=%0d priv=%0d sum=%0d mxr=%0d",
-                         req_vaddr_q, l0_pte_addr_w, pte, pte_invalid(pte), pte_is_leaf(pte),
-                         pte_perm_ok(pte, req_access_q, req_priv_q, req_sum_q, req_mxr_q),
-                         req_access_q, req_priv_q, req_sum_q, req_mxr_q);
-                mmu_pf_log_cnt_q <= mmu_pf_log_cnt_q + 1'b1;
-              end
-`endif
               state_q <= ST_IDLE;
               resp_valid_q <= 1'b1;
               resp_page_fault_q <= 1'b1;
@@ -466,7 +462,8 @@ module sv32_mmu #(
         default: begin
           state_q <= ST_IDLE;
         end
-      endcase
+        endcase
+      end
     end
   end
 

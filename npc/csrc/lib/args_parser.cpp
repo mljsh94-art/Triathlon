@@ -230,6 +230,10 @@ SimArgs parse_args(int argc, char **argv) {
       }
       continue;
     }
+    if (arg == "--progress-verbose") {
+      args.progress_verbose = true;
+      continue;
+    }
     if (arg == "--linux-early-debug") {
       args.linux_early_debug = true;
       continue;

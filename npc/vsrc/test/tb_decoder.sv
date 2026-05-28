@@ -20,6 +20,7 @@ module tb_decoder (
     output logic [31:0] check_imm,
     output int          check_alu_op,    // 使用 int 方便 C++ 里的 enum 转换
     output int          check_lsu_op,
+    output int          check_amo_op,
     output int          check_br_op,
     output int          check_fu_type,
     output logic        check_is_load,
@@ -96,6 +97,7 @@ module tb_decoder (
   assign check_imm      = dec_uops[0].imm;  // 32位立即数
   assign check_alu_op   = dec_uops[0].alu_op;
   assign check_lsu_op   = dec_uops[0].lsu_op;
+  assign check_amo_op   = dec_uops[0].amo_op;
   assign check_br_op    = dec_uops[0].br_op;
   assign check_fu_type  = dec_uops[0].fu;
   assign check_is_load  = dec_uops[0].is_load;

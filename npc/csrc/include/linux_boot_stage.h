@@ -39,8 +39,13 @@ struct LinuxBootStageView {
 
 class LinuxBootStageTracker {
  public:
+  static constexpr uint32_t kAllStagesSeenMask = (1u << 15) - 1u;
+
+  bool all_seen() const { return (seen_mask_ & kAllStagesSeenMask) == kAllStagesSeenMask; }
+
   template <typename MemT>
   void on_commit(const LinuxBootStageView &view, MemT &mem) {
+    if (all_seen()) return;
     if (!view.rf) return;
 
     if (view.pc == kOpenSbiFirmwareBase && view.priv == 3u) {
@@ -83,15 +88,16 @@ class LinuxBootStageTracker {
     }
 
     if (view.priv == 3u && (*view.rf)[10] == kDtbBase) {
-      maybe_emit("opensbi-dtb-a0", "OpenSBI 将 DTB 地址装入 a0 (0x87f00000)", view, mem, 12);
+      maybe_emit("opensbi-dtb-a0", "OpenSBI 将 DTB 地址装入 a0 (0x83f00000)", view, mem, 12);
     }
     if (view.priv == 1u && (*view.rf)[11] == kDtbBase) {
-      maybe_emit("linux-dtb-a1", "Linux S-mode 收到 DTB 指针 (a1 == 0x87f00000)", view, mem, 14);
+      maybe_emit("linux-dtb-a1", "Linux S-mode 收到 DTB 指针 (a1 == 0x83f00000)", view, mem, 14);
     }
   }
 
   template <typename MemT>
   void on_satp_change(const LinuxBootStageView &view, MemT &mem) {
+    if (all_seen()) return;
     if (!view.rf) return;
     if (view.satp_old == view.satp) return;
 
@@ -109,6 +115,7 @@ class LinuxBootStageTracker {
 
   template <typename MemT>
   void on_flush(const LinuxBootStageView &view, uint32_t src_pc, uint32_t src_inst, MemT &mem) {
+    if (all_seen()) return;
     if (!view.rf) return;
 
     if (mmu_enabled_in_linux_ && view.rob_flush_cause == 12u && src_pc >= 0x80401044u &&
@@ -157,7 +164,7 @@ class LinuxBootStageTracker {
                 << " sp=0x" << (*view.rf)[2] << " gp=0x" << (*view.rf)[3] << " ra=0x" << (*view.rf)[1]
                 << std::dec;
     }
-    std::cout << " dtb_magic@87f00000=0x" << std::hex << dtb_magic;
+    std::cout << " dtb_magic@83f00000=0x" << std::hex << dtb_magic;
     if (fdt_ok) {
       std::cout << " (FDT_OK)";
     }

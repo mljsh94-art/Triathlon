@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
   // Platform contract constants (Task 1 target).
   assert(npc::kBootRomBase == 0x00001000u);
   assert(npc::kBootRomSize == 0x00001000u);
-  assert(npc::kDtbBase == 0x87F00000u);
+  assert(npc::kDtbBase == 0x83F00000u);
   assert(npc::kClintBase == 0x02000000u);
   assert(npc::kPlicBase == 0x0C000000u);
   assert(npc::kUartBase == 0xA0000000u);

@@ -361,12 +361,7 @@ module icache #(
   logic                           rsp_valid_q;
   logic [FETCH_NUM-1:0][ILEN-1:0] rsp_instrs_q;
 `ifndef SYNTHESIS
-  integer agent_icache_log_fd;
-  int unsigned agent_icache_log_cnt;
-  initial begin
-    agent_icache_log_fd = 0;
-    agent_icache_log_cnt = 0;
-  end
+
 `endif
 
   assign ifu_rsp_instrs_o          = rsp_instrs_q;
@@ -443,7 +438,6 @@ module icache #(
       rsp_valid_q       <= 1'b0;
       rsp_instrs_q      <= '0;
 `ifndef SYNTHESIS
-      agent_icache_log_cnt <= 0;
 `endif
       miss_paddr_q      <= '0;
       miss_victim_way_q <= '0;
@@ -485,24 +479,7 @@ module icache #(
             // Use array outputs + stored expected tag to determine hit/miss
             if (hit_all) begin
 `ifndef SYNTHESIS
-              // #region agent log
-              if ((agent_icache_log_cnt < 16) && (pc_q >= 32'h80c181c0) &&
-                  (pc_q <= 32'h80c181f0)) begin
-                if (agent_icache_log_fd == 0) begin
-                  agent_icache_log_fd = $fopen("/mnt/e/vivado_project/OOOcpu_design/Triathlon/debug-e93a92.log", "a");
-                end
-                if (agent_icache_log_fd != 0) begin
-                  $fdisplay(agent_icache_log_fd,
-                            "{\"sessionId\":\"e93a92\",\"runId\":\"frontend-fetch-trace\",\"hypothesisId\":\"H23,H26\",\"location\":\"icache.sv:lookup-hit\",\"message\":\"target-icache-hit-state\",\"data\":{\"pc\":\"0x%08h\",\"startSlot\":%0d,\"halfwordSel\":%0d,\"crossLine\":%0d,\"hitWayA\":%0d,\"lineWord4\":\"0x%08h\",\"lineWord5\":\"0x%08h\",\"lineWord6\":\"0x%08h\",\"lineWord7\":\"0x%08h\",\"asm0\":\"0x%08h\",\"asm1\":\"0x%08h\",\"asm2\":\"0x%08h\",\"asm3\":\"0x%08h\"},\"timestamp\":0}",
-                            pc_q, start_slot_q, halfword_sel_q, cross_line_q, hit_way_idx_a,
-                            line_a_words[4], line_a_words[5], line_a_words[6], line_a_words[7],
-                            assembled_instrs[0], assembled_instrs[1], assembled_instrs[2],
-                            assembled_instrs[3]);
-                  $fflush(agent_icache_log_fd);
-                  agent_icache_log_cnt <= agent_icache_log_cnt + 1;
-                end
-              end
-              // #endregion agent log
+
 `endif
               if (!req_killed_q) begin
                 rsp_valid_q  <= 1'b1;
@@ -568,7 +545,6 @@ module icache #(
     $display("icache2ifu_ready: %b", ifu_rsp_handshake_o.ready);
     $display("icache_current_state: %d", state_q);
 `endif
-
 
   end
 

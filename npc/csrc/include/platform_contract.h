@@ -10,7 +10,7 @@ inline constexpr uint32_t kPmemSize = 0x08000000u;  // 128 MiB
 
 inline constexpr uint32_t kBootRomBase = 0x00001000u;
 inline constexpr uint32_t kBootRomSize = 0x00001000u;
-inline constexpr uint32_t kDtbBase = 0x87F00000u;
+inline constexpr uint32_t kDtbBase = 0x83F00000u;
 
 inline constexpr uint32_t kClintBase = 0x02000000u;
 inline constexpr uint32_t kClintMtimecmpLow = kClintBase + 0x00004000u;
