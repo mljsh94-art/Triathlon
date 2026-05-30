@@ -60,14 +60,16 @@ package test_config_pkg;
       ROB_MAX_COMMIT_LD : unsigned'(2),
       RS_DEPTH     : unsigned'(64),
       ALU_COUNT    : unsigned'(4),
-      ICACHE_BYTE_SIZE : unsigned'(8192),
+      ICACHE_BYTE_SIZE : unsigned'(32768),
       ICACHE_SET_ASSOC : unsigned'(4),
       ICACHE_LINE_WIDTH : unsigned'(256),
 
       // DCache (默认与 ICache 同行宽，方便复用 AXI beat 聚合)
-      DCACHE_BYTE_SIZE : unsigned'(8192),
+      DCACHE_BYTE_SIZE : unsigned'(32768),
       DCACHE_SET_ASSOC : unsigned'(4),
-      DCACHE_LINE_WIDTH : unsigned'(256)
+      DCACHE_LINE_WIDTH : unsigned'(256),
+      ITLB_ENTRIES : unsigned'(32),
+      DTLB_ENTRIES : unsigned'(32)
   };
 
 endpackage : test_config_pkg

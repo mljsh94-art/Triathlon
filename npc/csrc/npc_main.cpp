@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -147,6 +148,7 @@ int main(int argc, char **argv) {
   uint64_t linux_satp_change_logs = 0;
   uint64_t linux_gp_write_logs = 0;
   uint64_t linux_exc_pair_step_logs = 0;
+  uint64_t agent_priv_fault_logs = 0;
   uint64_t last_fw_text_write_count = 0;
   uint32_t last_commit_pc_seen = 0xffffffffu;
   uint32_t last_satp_seen = 0xffffffffu;
@@ -165,6 +167,7 @@ int main(int argc, char **argv) {
   constexpr uint64_t kLinuxGpWriteLogLimit = 256;
   constexpr uint64_t kLinuxExcPairLogLimit = 512;
   constexpr uint64_t kLinuxPtWriteLogLimit = 2048;
+  constexpr uint64_t kAgentPrivFaultLogLimit = 32;
   constexpr uint32_t kLinuxRelocPcBegin = 0x80801040u;
   constexpr uint32_t kLinuxRelocPcEnd = 0x808010b0u;
   constexpr uint32_t kLinuxFsctxPcBegin = 0xc01d0660u;
@@ -185,6 +188,110 @@ int main(int argc, char **argv) {
     if (cycle < args.commit_trace_start) return false;
     if (args.commit_trace_end != 0 && cycle > args.commit_trace_end) return false;
     return true;
+  };
+
+  auto pte_flags = [](uint32_t pte) {
+    std::string flags;
+    flags.reserve(8);
+    flags.push_back((pte & (1u << 0)) ? 'v' : '-');
+    flags.push_back((pte & (1u << 1)) ? 'r' : '-');
+    flags.push_back((pte & (1u << 2)) ? 'w' : '-');
+    flags.push_back((pte & (1u << 3)) ? 'x' : '-');
+    flags.push_back((pte & (1u << 4)) ? 'u' : '-');
+    flags.push_back((pte & (1u << 5)) ? 'g' : '-');
+    flags.push_back((pte & (1u << 6)) ? 'a' : '-');
+    flags.push_back((pte & (1u << 7)) ? 'd' : '-');
+    return flags;
+  };
+
+  auto pte_valid = [](uint32_t pte) {
+    const bool v = (pte & 0x1u) != 0u;
+    const bool r = (pte & 0x2u) != 0u;
+    const bool w = (pte & 0x4u) != 0u;
+    return v && !(w && !r);
+  };
+
+  auto pte_leaf = [](uint32_t pte) {
+    return (pte & 0xau) != 0u;
+  };
+
+  auto emit_sv32_fault_walk = [&](uint64_t cycle, uint32_t cause, uint32_t src_pc,
+                                 uint32_t fault_va) {
+    if (cause != 12u && cause != 13u && cause != 15u) return;
+    const uint32_t satp = top->dbg_csr_satp_o;
+    const bool sv32_enabled = (satp & 0x80000000u) != 0u;
+    const char *access = (cause == 12u) ? "exec" : ((cause == 13u) ? "load" : "store");
+
+    const uint32_t root_base = (satp & 0x003fffffu) << 12;
+    const uint32_t vpn1 = fault_va >> 22;
+    const uint32_t vpn0 = (fault_va >> 12) & 0x3ffu;
+    const uint32_t page_off = fault_va & 0xfffu;
+    const uint32_t l1_addr = root_base + (vpn1 << 2);
+    uint32_t l1_pte = 0;
+    const bool l1_read = mem.mem.read_phys_u32(l1_addr, l1_pte);
+    const bool l1_ok = l1_read && pte_valid(l1_pte);
+    const bool l1_is_leaf = l1_ok && pte_leaf(l1_pte);
+
+    uint32_t l0_base = 0;
+    uint32_t l0_addr = 0;
+    uint32_t l0_pte = 0;
+    bool l0_read = false;
+    bool l0_ok = false;
+    bool l0_is_leaf = false;
+    uint32_t resolved_pa = 0;
+    bool resolved = false;
+
+    if (l1_is_leaf) {
+      const uint32_t ppn1 = (l1_pte >> 20) & 0xfffu;
+      resolved_pa = (ppn1 << 22) | (vpn0 << 12) | page_off;
+      resolved = true;
+    } else if (l1_ok) {
+      l0_base = ((l1_pte >> 10) & 0x003fffffu) << 12;
+      l0_addr = l0_base + (vpn0 << 2);
+      l0_read = mem.mem.read_phys_u32(l0_addr, l0_pte);
+      l0_ok = l0_read && pte_valid(l0_pte);
+      l0_is_leaf = l0_ok && pte_leaf(l0_pte);
+      if (l0_is_leaf) {
+        const uint32_t ppn = (l0_pte >> 10) & 0x003fffffu;
+        resolved_pa = (ppn << 12) | page_off;
+        resolved = true;
+      }
+    }
+
+    std::ios::fmtflags f(std::cout.flags());
+    std::cout << "[debug][sv32-fault-walk] cycle=" << cycle
+              << " cause=0x" << std::hex << cause
+              << " access=" << access
+              << " src_pc=0x" << src_pc
+              << " fault_va=0x" << fault_va
+              << " satp=0x" << satp
+              << " root_base=0x" << root_base
+              << " vpn1=0x" << vpn1
+              << " vpn0=0x" << vpn0
+              << " off=0x" << page_off
+              << " l1_addr=0x" << l1_addr
+              << " l1_pte=0x" << l1_pte
+              << std::dec
+              << " sv32=" << static_cast<int>(sv32_enabled)
+              << " l1_read=" << static_cast<int>(l1_read)
+              << " l1_ok=" << static_cast<int>(l1_ok)
+              << " l1_leaf=" << static_cast<int>(l1_is_leaf)
+              << " l1_flags=" << pte_flags(l1_pte);
+    if (l1_ok && !l1_is_leaf) {
+      std::cout << " l0_base=0x" << std::hex << l0_base
+                << " l0_addr=0x" << l0_addr
+                << " l0_pte=0x" << l0_pte
+                << std::dec
+                << " l0_read=" << static_cast<int>(l0_read)
+                << " l0_ok=" << static_cast<int>(l0_ok)
+                << " l0_leaf=" << static_cast<int>(l0_is_leaf)
+                << " l0_flags=" << pte_flags(l0_pte);
+    }
+    if (resolved) {
+      std::cout << " resolved_pa=0x" << std::hex << resolved_pa << std::dec;
+    }
+    std::cout << "\n";
+    std::cout.flags(f);
   };
 
   auto make_linux_stage_view = [&](uint64_t cycle, uint32_t slot, uint32_t pc, uint32_t inst,
@@ -327,28 +434,73 @@ int main(int argc, char **argv) {
         linux_stages.on_flush(flush_view, src_pc, src_inst, mem.mem);
       }
       if (args.linux_early_debug) {
-      bool pc_changed = (src_pc != last_flush_src_pc);
-      bool periodic_log = (cycles - last_flush_log_cycle >= 100000ull);
-      if (pc_changed || periodic_log) {
-        std::ios::fmtflags f(std::cout.flags());
-        std::cout << "[debug][flush-exc] cycle=" << cycles
-                  << " src_pc=0x" << std::hex << src_pc
-                  << " src_inst=0x" << src_inst
-                  << " cause=0x" << static_cast<uint32_t>(top->dbg_rob_flush_cause_o)
-                  << " mcause=0x" << top->dbg_csr_mcause_o
-                  << " mepc=0x" << top->dbg_csr_mepc_o
-                  << " mtval(aliased)=0x" << top->dbg_csr_stval_o
-                  << " mstatus=0x" << top->dbg_csr_mstatus_o
-                  << " scause=0x" << top->dbg_csr_scause_o
-                  << " sepc=0x" << top->dbg_csr_sepc_o
-                  << " stval=0x" << top->dbg_csr_stval_o
-                  << " satp=0x" << top->dbg_csr_satp_o
-                  << " priv=0x" << static_cast<uint32_t>(top->dbg_csr_priv_mode_o)
-                  << std::dec << "\n";
-        std::cout.flags(f);
-        last_flush_src_pc = src_pc;
-        last_flush_log_cycle = cycles;
-      }
+        bool pc_changed = (src_pc != last_flush_src_pc);
+        bool periodic_log = (cycles - last_flush_log_cycle >= 100000ull);
+        if (pc_changed || periodic_log) {
+          uint32_t flush_cause = static_cast<uint32_t>(top->dbg_rob_flush_cause_o);
+          uint32_t trap_tval = top->dbg_csr_trap_tval_o;
+          // #region agent log
+          if (agent_priv_fault_logs < kAgentPrivFaultLogLimit &&
+              flush_cause == 12 && top->dbg_csr_priv_mode_o == 1 &&
+              trap_tval >= 0x90000000u && trap_tval < 0xc0000000u) {
+            const uint32_t fault_va = trap_tval;
+            const uint32_t satp = top->dbg_csr_satp_o;
+            const uint32_t root_base = (satp & 0x003fffffu) << 12;
+            const uint32_t vpn1 = fault_va >> 22;
+            const uint32_t vpn0 = (fault_va >> 12) & 0x3ffu;
+            const uint32_t l1_addr = root_base + (vpn1 << 2);
+            const uint32_t l1_pte = mem.mem.read_word(l1_addr);
+            const bool l1_valid = (l1_pte & 0x1u) != 0u && !((l1_pte & 0x4u) && !(l1_pte & 0x2u));
+            const bool l1_leaf = (l1_pte & 0xau) != 0u;
+            uint32_t l0_addr = 0;
+            uint32_t l0_pte = 0;
+            if (l1_valid && !l1_leaf) {
+              l0_addr = ((l1_pte >> 10) << 12) + (vpn0 << 2);
+              l0_pte = mem.mem.read_word(l0_addr);
+            }
+            std::ofstream("../debug-fd94f9.log", std::ios::app)
+                << "{\"sessionId\":\"fd94f9\",\"runId\":\"priv-mismatch-flush\","
+                << "\"hypothesisId\":\"H1-H3\","
+                << "\"location\":\"npc/csrc/npc_main.cpp:flush_exception\","
+                << "\"message\":\"S-mode instruction page fault on user virtual page\","
+                << "\"timestamp\":" << cycles
+                << ",\"data\":{\"cycle\":" << cycles
+                << ",\"srcPc\":\"0x" << std::hex << src_pc
+                << "\",\"faultVa\":\"0x" << fault_va
+                << "\",\"satp\":\"0x" << satp
+                << "\",\"mstatus\":\"0x" << top->dbg_csr_mstatus_o
+                << "\",\"sepc\":\"0x" << top->dbg_csr_sepc_o
+                << "\",\"stval\":\"0x" << top->dbg_csr_stval_o
+                << "\",\"scause\":\"0x" << top->dbg_csr_scause_o
+                << "\",\"l1Pte\":\"0x" << l1_pte
+                << "\",\"l0Pte\":\"0x" << l0_pte
+                << "\",\"l0User\":" << std::dec << static_cast<int>((l0_pte & 0x10u) != 0u)
+                << ",\"l0Exec\":" << static_cast<int>((l0_pte & 0x8u) != 0u)
+                << "}}\n";
+            agent_priv_fault_logs++;
+          }
+          // #endregion
+          std::ios::fmtflags f(std::cout.flags());
+          std::cout << "[debug][flush-exc] cycle=" << cycles
+                    << " src_pc=0x" << std::hex << src_pc
+                    << " src_inst=0x" << src_inst
+                    << " cause=0x" << flush_cause
+                    << " trap_tval=0x" << trap_tval
+                    << " mcause=0x" << top->dbg_csr_mcause_o
+                    << " mepc=0x" << top->dbg_csr_mepc_o
+                    << " mtval(aliased)=0x" << top->dbg_csr_stval_o
+                    << " mstatus=0x" << top->dbg_csr_mstatus_o
+                    << " scause=0x" << top->dbg_csr_scause_o
+                    << " sepc=0x" << top->dbg_csr_sepc_o
+                    << " stval=0x" << top->dbg_csr_stval_o
+                    << " satp=0x" << top->dbg_csr_satp_o
+                    << " priv=0x" << static_cast<uint32_t>(top->dbg_csr_priv_mode_o)
+                    << std::dec << "\n";
+          std::cout.flags(f);
+          emit_sv32_fault_walk(cycles, flush_cause, src_pc, trap_tval);
+          last_flush_src_pc = src_pc;
+          last_flush_log_cycle = cycles;
+        }
       }
     }
 
@@ -978,6 +1130,46 @@ int main(int argc, char **argv) {
           last_linux_wait_log_cycle = cycles;
         }
       }
+      // #region agent log
+      if (args.linux_early_debug && agent_priv_fault_logs < kAgentPrivFaultLogLimit &&
+          top->dbg_csr_priv_mode_o == 1 && top->dbg_csr_scause_o == 12 &&
+          top->dbg_csr_trap_tval_o >= 0x90000000u && top->dbg_csr_trap_tval_o < 0xc0000000u) {
+        const uint32_t fault_va = top->dbg_csr_trap_tval_o;
+        const uint32_t satp = top->dbg_csr_satp_o;
+        const uint32_t root_base = (satp & 0x003fffffu) << 12;
+        const uint32_t vpn1 = fault_va >> 22;
+        const uint32_t vpn0 = (fault_va >> 12) & 0x3ffu;
+        const uint32_t l1_addr = root_base + (vpn1 << 2);
+        const uint32_t l1_pte = mem.mem.read_word(l1_addr);
+        const bool l1_valid = (l1_pte & 0x1u) != 0u && !((l1_pte & 0x4u) && !(l1_pte & 0x2u));
+        const bool l1_leaf = (l1_pte & 0xau) != 0u;
+        uint32_t l0_addr = 0;
+        uint32_t l0_pte = 0;
+        if (l1_valid && !l1_leaf) {
+          l0_addr = ((l1_pte >> 10) << 12) + (vpn0 << 2);
+          l0_pte = mem.mem.read_word(l0_addr);
+        }
+        std::ofstream("debug-fd94f9.log", std::ios::app)
+            << "{\"sessionId\":\"fd94f9\",\"runId\":\"priv-mismatch\",\"hypothesisId\":\"H1-H3\","
+            << "\"location\":\"npc/csrc/npc_main.cpp:agent_priv_fault\","
+            << "\"message\":\"S-mode instruction page fault on user virtual page\","
+            << "\"timestamp\":" << cycles
+            << ",\"data\":{\"cycle\":" << cycles
+            << ",\"lastPc\":\"0x" << std::hex << last_pc
+            << "\",\"faultVa\":\"0x" << fault_va
+            << "\",\"satp\":\"0x" << satp
+            << "\",\"mstatus\":\"0x" << top->dbg_csr_mstatus_o
+            << "\",\"sepc\":\"0x" << top->dbg_csr_sepc_o
+            << "\",\"stval\":\"0x" << top->dbg_csr_stval_o
+            << "\",\"scause\":\"0x" << top->dbg_csr_scause_o
+            << "\",\"l1Pte\":\"0x" << l1_pte
+            << "\",\"l0Pte\":\"0x" << l0_pte
+            << "\",\"l0User\":" << std::dec << static_cast<int>((l0_pte & 0x10u) != 0u)
+            << ",\"l0Exec\":" << static_cast<int>((l0_pte & 0x8u) != 0u)
+            << "}}\n";
+        agent_priv_fault_logs++;
+      }
+      // #endregion
       if (args.linux_early_debug && last_pc >= 0x810042f2u && last_pc < 0x81004460u) {
         std::cout << "[debug][setup-vm] cycle=" << cycles
                   << " last_pc=0x" << std::hex << last_pc

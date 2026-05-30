@@ -65,6 +65,7 @@ module tb_triathlon #(
     output logic [Cfg.XLEN-1:0]                dbg_csr_sepc_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_scause_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_stval_o,
+    output logic [Cfg.XLEN-1:0]                dbg_csr_trap_tval_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_satp_o,
     output logic [1:0]                         dbg_csr_priv_mode_o,
     output logic                               backend_flush_o,
@@ -369,6 +370,7 @@ module tb_triathlon #(
   assign dbg_csr_sepc_o    = dut.u_backend.u_csr.csr_sepc;
   assign dbg_csr_scause_o  = dut.u_backend.u_csr.csr_scause;
   assign dbg_csr_stval_o   = dut.u_backend.u_csr.csr_stval;
+  assign dbg_csr_trap_tval_o = dut.u_backend.u_csr.trap_tval;
   assign dbg_csr_satp_o    = dut.u_backend.u_csr.csr_satp;
   assign dbg_csr_priv_mode_o = dut.u_backend.csr_priv_mode;
   assign backend_flush_o = dut.u_backend.backend_flush_o;

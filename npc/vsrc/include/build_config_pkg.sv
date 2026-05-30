@@ -106,6 +106,10 @@ package build_config_pkg;
     cfg.DCACHE_BANK_SEL_WIDTH = $clog2(cfg.DCACHE_NUM_BANKS);
     cfg.DCACHE_NUM_SETS = (user_cfg.DCACHE_BYTE_SIZE * 8) / user_cfg.DCACHE_SET_ASSOC / user_cfg.DCACHE_LINE_WIDTH;
 
+    // MMU TLB 配置
+    cfg.ITLB_ENTRIES = (user_cfg.ITLB_ENTRIES >= 4) ? user_cfg.ITLB_ENTRIES : 8;
+    cfg.DTLB_ENTRIES = (user_cfg.DTLB_ENTRIES >= 4) ? user_cfg.DTLB_ENTRIES : 8;
+
     // RS 配置
     cfg.RS_DEPTH = user_cfg.RS_DEPTH;
 

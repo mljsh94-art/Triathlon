@@ -70,6 +70,16 @@ module execute_csr #(
   localparam logic [11:0] CSR_MIE = 12'h304;
   localparam logic [11:0] CSR_MTVEC = 12'h305;
   localparam logic [11:0] CSR_MCOUNTINHIBIT = 12'h320;
+  localparam logic [11:0] CSR_MCYCLE = 12'hB00;
+  localparam logic [11:0] CSR_MINSTRET = 12'hB02;
+  localparam logic [11:0] CSR_MCYCLEH = 12'hB80;
+  localparam logic [11:0] CSR_MINSTRETH = 12'hB82;
+  localparam logic [11:0] CSR_CYCLE = 12'hC00;
+  localparam logic [11:0] CSR_TIME = 12'hC01;
+  localparam logic [11:0] CSR_INSTRET = 12'hC02;
+  localparam logic [11:0] CSR_CYCLEH = 12'hC80;
+  localparam logic [11:0] CSR_TIMEH = 12'hC81;
+  localparam logic [11:0] CSR_INSTRETH = 12'hC82;
   localparam logic [11:0] CSR_SEPC = 12'h141;
   localparam logic [11:0] CSR_SCAUSE = 12'h142;
   localparam logic [11:0] CSR_STVAL = 12'h143;
@@ -127,6 +137,8 @@ module execute_csr #(
   logic [XLEN-1:0] csr_mcause;
   logic [XLEN-1:0] csr_mtval;
   logic [XLEN-1:0] csr_satp;
+  logic [63:0] cycle_counter_q;
+  logic [63:0] instret_counter_q;
   logic [1:0] current_priv;
 
   logic [XLEN-1:0] csr_mip;
@@ -235,6 +247,10 @@ module execute_csr #(
       CSR_MIE: csr_read_val = csr_mie;
       CSR_MTVEC: csr_read_val = csr_mtvec;
       CSR_MCOUNTINHIBIT: csr_read_val = csr_mcountinhibit;
+      CSR_MCYCLE, CSR_CYCLE, CSR_TIME: csr_read_val = cycle_counter_q[31:0];
+      CSR_MINSTRET, CSR_INSTRET: csr_read_val = instret_counter_q[31:0];
+      CSR_MCYCLEH, CSR_CYCLEH, CSR_TIMEH: csr_read_val = cycle_counter_q[63:32];
+      CSR_MINSTRETH, CSR_INSTRETH: csr_read_val = instret_counter_q[63:32];
       CSR_SEPC: csr_read_val = csr_sepc;
       CSR_SCAUSE: csr_read_val = csr_scause;
       CSR_STVAL: csr_read_val = csr_stval;
@@ -476,8 +492,15 @@ module execute_csr #(
       csr_mcause <= '0;
       csr_mtval <= '0;
       csr_satp <= '0;
+      cycle_counter_q <= '0;
+      instret_counter_q <= '0;
       current_priv <= PRIV_LVL_M;
     end else begin
+      cycle_counter_q <= cycle_counter_q + 64'd1;
+      if (csr_valid_i) begin
+        instret_counter_q <= instret_counter_q + 64'd1;
+      end
+
       if (csr_valid_i && uop_i.is_csr && csr_write_en) begin
         unique case (uop_i.csr_addr)
           CSR_SSTATUS: csr_mstatus <= (csr_mstatus & ~csr_sstatus_mask) | (csr_write_val & csr_sstatus_mask);
@@ -558,9 +581,44 @@ module execute_csr #(
 
 `ifndef SYNTHESIS
   logic csr_diag_trace_en_q;
+  localparam int unsigned AGENT_CSR_LOG_LIMIT = 64;
+  logic [6:0] agent_csr_logs_q;
   initial csr_diag_trace_en_q = $test$plusargs("npc_diag_trace");
 
   always_ff @(posedge clk_i) begin
+    integer agent_log_fd;
+    if (!rst_ni) begin
+      agent_csr_logs_q <= '0;
+    end else begin
+      // #region agent log
+      if ((agent_csr_logs_q < AGENT_CSR_LOG_LIMIT[6:0]) &&
+          csr_valid_i && sys_op_valid && uop_i.is_sret) begin
+        agent_log_fd = $fopen("../debug-fd94f9.log", "a");
+        if (agent_log_fd != 0) begin
+          $fwrite(agent_log_fd,
+                  "{\"sessionId\":\"fd94f9\",\"runId\":\"csr-sret-source\",\"hypothesisId\":\"H1\",\"location\":\"npc/vsrc/backend/execute/csr.sv:sret\",\"message\":\"CSR executes SRET\",\"timestamp\":%0t,\"data\":{\"pc\":\"0x%08h\",\"currentPriv\":%0d,\"mstatus\":\"0x%08h\",\"spp\":%0d,\"spie\":%0d,\"sie\":%0d,\"sepc\":\"0x%08h\",\"sretTargetPriv\":%0d,\"sysException\":%0d,\"asyncExceptionTake\":%0d,\"trapTake\":%0d,\"redirect\":\"0x%08h\"}}\n",
+                  $time, uop_i.pc, current_priv, csr_mstatus, csr_mstatus[MSTATUS_SPP_BIT],
+                  csr_mstatus[MSTATUS_SPIE_BIT], csr_mstatus[MSTATUS_SIE_BIT], csr_sepc,
+                  sret_target_priv, sys_exception, async_exception_take, trap_take, sys_redirect_pc);
+          $fclose(agent_log_fd);
+        end
+        agent_csr_logs_q <= agent_csr_logs_q + 7'd1;
+      end else if ((agent_csr_logs_q < AGENT_CSR_LOG_LIMIT[6:0]) &&
+                   async_exception_take && (async_exception_cause_i == 5'd12) &&
+                   (async_exception_tval_i >= Cfg.PLEN'(32'h9000_0000)) &&
+                   (async_exception_tval_i < Cfg.PLEN'(32'hc000_0000))) begin
+        agent_log_fd = $fopen("../debug-fd94f9.log", "a");
+        if (agent_log_fd != 0) begin
+          $fwrite(agent_log_fd,
+                  "{\"sessionId\":\"fd94f9\",\"runId\":\"csr-sret-source\",\"hypothesisId\":\"H1\",\"location\":\"npc/vsrc/backend/execute/csr.sv:ifetch_trap\",\"message\":\"CSR takes instruction page fault\",\"timestamp\":%0t,\"data\":{\"trapPc\":\"0x%08h\",\"tval\":\"0x%08h\",\"currentPriv\":%0d,\"trapRecordPriv\":%0d,\"trapToS\":%0d,\"mstatusBefore\":\"0x%08h\",\"mstatusSTrapNext\":\"0x%08h\",\"sepcBefore\":\"0x%08h\",\"stvalBefore\":\"0x%08h\"}}\n",
+                  $time, trap_pc, trap_tval, current_priv, trap_record_priv, trap_to_s_mode,
+                  csr_mstatus, mstatus_s_trap_next, csr_sepc, csr_stval);
+          $fclose(agent_log_fd);
+        end
+        agent_csr_logs_q <= agent_csr_logs_q + 7'd1;
+      end
+      // #endregion
+    end
     if (csr_valid_i && uop_i.is_csr && csr_write_en && (uop_i.csr_addr == CSR_SATP)) begin
       $display("[csr-satp-wr] pc=%h op=%0d csr=%h rs1_idx=%0d rs1_val=%h imm=%h write=%h priv=%0d trap_take=%0d trap_to_s=%0d",
                uop_i.pc, uop_i.csr_op, uop_i.csr_addr, uop_i.rs1, rs1_data_i, uop_i.imm, csr_write_val,

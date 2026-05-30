@@ -72,6 +72,7 @@ Triathlon/
 │   │   └── virtio_blk.sv            # VirtIO Block Device Simulation
 │   └── util/
 │       └── priority_encoder.sv      # Priority encoder
+├── npc/csrc/test/                   # C++ unit drivers for targeted Verilator testbenches
 ├── am-kernels/                      # Test programs and benchmarks
 ├── nemu/                            # Reference simulator
 ├── abstract-machine/                # Bare-metal runtime
@@ -104,8 +105,9 @@ Triathlon/
 | RS_DEPTH | 16 | Entries per reservation station |
 | ALU_COUNT | 2 | Configured ALU count (actual: 4 ALUs instantiated) |
 | FTQ_DEPTH | 8 | Fetch target queue depth |
-| ICACHE | 4KB, 4-way, 256-bit line | Instruction cache |
-| DCACHE | 4KB, 4-way, 256-bit line | Data cache |
+| ICACHE | 32KB, 4-way, 256-bit line | Instruction cache |
+| DCACHE | 32KB, 4-way, 256-bit line | Data cache |
+| ITLB / DTLB | 32 entries each | SV32 instruction/data TLB entries |
 
 ## Microarchitecture
 
@@ -118,14 +120,14 @@ Fetch -> Decode -> Rename -> Dispatch -> Issue -> Execute -> Writeback -> Commit
 
 ### Frontend (frontend.sv)
 
-- **IFU (Instruction Fetch Unit)**: Manages PC register, sends fetch requests to ICache/MMU, interfaces with BPU for next-PC prediction. Incorporates an SV32 MMU for instruction page walks.
+- **IFU (Instruction Fetch Unit)**: Manages PC register, sends fetch requests to ICache/MMU, interfaces with BPU for next-PC prediction. Incorporates an SV32 MMU for instruction page walks. Instruction page fault capture quiesces further fetch enqueue/issue until the backend trap redirect flush arrives, preventing younger user fetch requests from being translated under the trap handler privilege.
 - **BPU (Branch Prediction Unit)**: Highly advanced tournament predictor supporting speculative fetching. Components include:
   - **TAGE**: Primary conditional branch predictor.
   - **SC_L (Statistical Correlator)**: Assists TAGE for hard-to-predict branches.
   - **Loop Predictor**: Specialized for loop bounds.
   - **ITTAGE**: Indirect Target TAGE for indirect jumps.
   - **RAS (Return Address Stack)**: Predicts function returns, updated speculatively.
-- **ICache**: 4-way set-associative, 4KB, 256-bit line (8 instructions). Non-blocking architecture with refill interface.
+- **ICache**: 4-way set-associative, 32KB, 256-bit line (8 instructions). Non-blocking architecture with refill interface and 32-entry I-TLB.
 - **Fetch Target Queue (FTQ)**: Tracks fetch PCs, epochs, and prediction metadata for branch resolution and redirect recovery.
 
 Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the backend IBuffer.
@@ -154,11 +156,11 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 - **ALU0-ALU3** (`execute_alu`): Single-cycle integer ALU. Operations: ADD, SUB, SLT, SLTU, XOR, OR, AND, SLL, SRL, SRA, LUI, AUIPC
 - **BRU** (uses `execute_alu`): Branch resolution (BEQ/BNE/BLT/BGE/BLTU/BGEU/JAL/JALR). Checks predictions and triggers backend flush on mispredict.
 - **LSU Group** (`lsu_group.sv` & `lsu_lane.sv`): Advanced Out-of-Order Load/Store Unit.
-  - **MMU**: Incorporates SV32 D-TLB and page walk logic; SATP/SFENCE.VMA changes invalidate TLB state and abort in-flight walks. Routine non-synthesis page-fault diagnostics (`[mmu-pf-l0]`, `[mmu-pf-l1]`, `[mmu-pf-tlb]`) are disabled to avoid flooding Linux boot logs.
+  - **MMU**: Incorporates SV32 32-entry D-TLB and page walk logic; SATP/SFENCE.VMA changes invalidate TLB state and abort in-flight walks. Routine non-synthesis page-fault diagnostics (`[mmu-pf-l0]`, `[mmu-pf-l1]`, `[mmu-pf-tlb]`) are disabled to avoid flooding Linux boot logs.
   - **Load Queue (LQ) & Store Queue (SQ)**: Tracks in-flight memory operations for OOO execution, memory disambiguation, and load-store forwarding.
   - **Memory Dependence Predictor (MDP)**: Predicts memory aliasing to prevent load-store ordering violations.
   - Supports RV32A word atomic operations (`LR.W`/`SC.W`, `AMOSWAP.W`, `AMOADD.W`, `AMOXOR.W`, `AMOAND.W`, `AMOOR.W`, `AMOMIN.W`, `AMOMAX.W`, `AMOMINU.W`, `AMOMAXU.W`) through a conservative LSU read-modify-write sequence.
-- **CSR** (`csr.sv`): CSR read/modify/write and exception/interrupt handling. Single-issue, ROB-head ordered. CSR/system exceptions are reported to the ROB first, then applied through the commit-time trap injection path so trap CSRs and `mstatus.MPP`/`SPP` are updated precisely once. `satp` exposes SV32 mode and PPN fields with ASIDLEN=0; ASID bits are WARL-masked to zero because the current TLB is not ASID-tagged.
+- **CSR** (`csr.sv`): CSR read/modify/write and exception/interrupt handling. Single-issue, ROB-head ordered. CSR/system exceptions are reported to the ROB first, then applied through the commit-time trap injection path so trap CSRs and `mstatus.MPP`/`SPP` are updated precisely once. `cycle`/`time`/`instret` and their high-half aliases return monotonic counter values for OpenSBI/Linux delay and probe paths. `satp` exposes SV32 mode and PPN fields with ASIDLEN=0; ASID bits are WARL-masked to zero because the current TLB is not ASID-tagged.
 
 #### Writeback & CDB
 - **Writeback Arbiter** (`writeback.sv`): 7 FU inputs -> 4 CDB ports. Priority arbitration broadcasts execution results.
@@ -180,15 +182,16 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 ### Cache & Memory Interface
 
 #### ICache (icache.sv)
-- 4KB, 4-way set-associative, 256-bit (32-byte) line
-- Tag: 18 bits, Index: 8 bits, Offset: 6 bits
+- 32KB, 4-way set-associative, 256-bit (32-byte) line
+- Tag: 19 bits, Index: 8 bits, Offset: 5 bits
 - Ports: IFU request/response
 - Miss interface: valid/ready handshake to external memory (refill)
 
 #### DCache (dcache.sv)
-- 4KB, 4-way set-associative, 256-bit line (same structure as ICache)
+- 32KB, 4-way set-associative, 256-bit line (same structure as ICache)
 - **Load port**: From LSU (ld_req/ld_rsp)
 - **Store port**: From Store Buffer (st_req)
+- Committed store misses are completed on a blocking refill+merge path so exception flushes cannot discard a store after the Store Buffer has dequeued it.
 - **Miss interface**: valid/ready to external memory (refill)
 - **Writeback interface**: valid/ready for dirty line eviction
 
@@ -363,7 +366,7 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 | `[stall]` | `--stall-trace` | 无 commit stall：前端/IFU/解码/rename/ROB/LSU 等快照 |
 | `[progress]` | `--progress` | 周期性仿真心跳 |
 | `[linux-stage]` | `--linux-early-debug` | 启动里程碑（每 stage 仅一次，见下表） |
-| `[debug][...]` | `--linux-early-debug` | satp 变更、页表写、异常 flush、UART 等细粒度调试 |
+| `[debug][...]` | `--linux-early-debug` | satp 变更、页表写、异常 flush、SV32 fault walk、UART 等细粒度调试 |
 | `[commitm]` / `[controlm]` / `[stallm]` / `[stallm2]`–`[stallm6]` / `[ifum]` / `[pred  ]` / `[hotpcm]` / `[hotinstm]` | `--commit-trace` 或 `--bru-trace` | 仿真结束由 `ProfileCollector` 输出的汇总（commit 宽度、控制流、stall 分类、IFU FQ、BPU 命中率、热 PC/指令等） |
 | `HIT GOOD TRAP` / `HIT BAD TRAP` | — | AM 测试 `ebreak`：a0=0 成功 / 非 0 失败 |
 | `IPC=` / `CPI=` | — | 成功 trap 或超时前输出的性能指标 |
@@ -387,7 +390,7 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 | `linux-swap-pgdir` | trap 路径切换页表 |
 | `linux-vtext` | 进入内核高地址虚拟文本区 |
 
-实现：`npc/csrc/include/linux_boot_stage.h`。
+实现：`npc/csrc/include/linux_boot_stage.h`。异常 flush 日志由 `npc/csrc/npc_main.cpp` 打印；当 `cause` 为 instruction/load/store page fault 时，会额外输出 `[debug][sv32-fault-walk]`，按当前 `satp` 与 CSR trap tval 对故障虚拟地址执行只读 SV32 页表 walk，并打印 L1/L0 PTE、权限位与可解析的物理地址。
 
 #### 常用组合示例
 
@@ -528,12 +531,12 @@ make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(np
 | `CONFIG_ARCH_RV32I` | `y` | RV32I 基座 |
 | `CONFIG_PAGE_OFFSET` | `0xC0000000` | 内核虚拟地址起点 |
 | `CONFIG_RISCV_ISA_C` | `y` | 压缩指令（与 RTL 一致） |
-| `CONFIG_INITRAMFS_SOURCE` | `../rootfs` | 内置 initramfs 根文件系统 |
+| `CONFIG_INITRAMFS_SOURCE` | `../rootfs ../rootfs_extra.list` | 内置 initramfs 根文件系统，并通过 cpio list 预置 `/dev/console` |
 | `CONFIG_INITRAMFS_COMPRESSION_NONE` | `y` | initramfs 不压缩，减少 gzip 解压热点在 RTL 仿真中的启动开销 |
 
 启动命令行（`CONFIG_CMDLINE` 或 bootargs）常用：`earlycon=sbi console=ttyS0 root=/dev/ram0`（initramfs 根文件系统）。
 
-精简配置原则：单核 RV32、SBI、PLIC、RISC-V timer、OF/DT、8250/SBI earlycon、initramfs、`proc`/`sysfs`/`tmpfs`；关闭通用 RISC-V 板卡驱动、块设备驱动、图形/输入/USB/MMC/RTC、非必要文件系统以及 debug/trace 开销。当前 `build_kernel.sh` 使用 `allnoconfig` + `.triathlon_min.config` 最小配置片段生成内核配置，只保留 RV32/SV32、SBI、DT、8250 控制台、内置 initramfs、ELF/script 执行和 `proc`/`sysfs`/`devtmpfs`/`tmpfs`；脚本末尾会检查并拒绝 `NET`、`BLOCK`、`PCI`、`CGROUPS`、`BPF`、`PERF`、`KALLSYMS`、`FTRACE`、`CRYPTO`、`INPUT`、`PINCTRL`、`USB`、`MMC`、`RTC`、`THERMAL`、`VIRTIO`、`FW_LOADER`、`PM`、`IO_URING` 等无关子系统被重新选中。`CONFIG_DEBUG_KERNEL` 是调试菜单总开关，`allnoconfig` 下可能保持为 `y`，但具体 debug/ftrace/debug-info 子项保持关闭。
+精简配置原则：单核 RV32、SBI、PLIC、RISC-V timer、OF/DT、8250/SBI earlycon、initramfs、`proc`/`sysfs`/`tmpfs`；关闭通用 RISC-V 板卡驱动、块设备驱动、图形/输入/USB/MMC/RTC、非必要文件系统以及 debug/trace 开销。当前 `build_kernel.sh` 使用 `allnoconfig` + `.triathlon_min.config` 最小配置片段生成内核配置，只保留 RV32/SV32、SBI、DT、8250 控制台、内置 initramfs、ELF/script 执行和 `proc`/`sysfs`/`devtmpfs`/`tmpfs`；`linux_workspace/rootfs_extra.list` 额外向 initramfs 注入 `/dev/console` 字符设备节点（`c 5 1`），保证内核在执行 `/init` 前能初始化 fd 0/1/2。脚本末尾会检查并拒绝 `NET`、`BLOCK`、`PCI`、`CGROUPS`、`BPF`、`PERF`、`KALLSYMS`、`FTRACE`、`CRYPTO`、`INPUT`、`PINCTRL`、`USB`、`MMC`、`RTC`、`THERMAL`、`VIRTIO`、`FW_LOADER`、`PM`、`IO_URING` 等无关子系统被重新选中。`CONFIG_DEBUG_KERNEL` 是调试菜单总开关，`allnoconfig` 下可能保持为 `y`，但具体 debug/ftrace/debug-info 子项保持关闭。
 
 ##### merge.py 参数
 

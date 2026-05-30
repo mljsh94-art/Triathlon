@@ -539,7 +539,9 @@ module lsu_group #(
   assign pte_upd_paddr_o = mmu_pte_upd_paddr;
   assign pte_upd_data_o = mmu_pte_upd_data;
 
-  sv32_mmu u_lsu_mmu (
+  sv32_mmu #(
+      .TLB_ENTRIES(Cfg.DTLB_ENTRIES)
+  ) u_lsu_mmu (
       .clk_i,
       .rst_ni,
       .req_valid_i(mmu_state_q == MMU_ST_REQ),

@@ -225,7 +225,7 @@ module dcache #(
                      !pending_ld_valid_q && !flush_i && !refill_valid_i &&
                      (!ld_req_valid_i || !ld_req_line_in_mshr);
     st_req_ready_o = (state_q == S_IDLE) && !pending_ld_valid_q && !ld_req_valid_i &&
-                     !flush_i && !refill_valid_i &&
+                     mshr_empty && !flush_i && !refill_valid_i &&
                      (!st_req_valid_i || !st_req_line_in_mshr);
 
     sel_is_load    = 1'b0;
@@ -662,7 +662,7 @@ module dcache #(
       mshr_refill_hit && mshr_entry_data[mshr_refill_idx].is_store;
 
   assign miss_alloc_fire =
-      (state_q == S_LOOKUP) && !req_err_q && !hit &&
+      (state_q == S_LOOKUP) && !req_is_store_q && !req_err_q && !hit &&
       !mshr_req_line_hit && mshr_alloc_ready;
 
   always_comb begin
@@ -922,22 +922,23 @@ module dcache #(
         end else if (hit) begin
           if (req_is_store_q) state_d = S_STORE_WRITE;
           else state_d = S_RESP;
-        end else begin
-          // Miss path
-          if (req_is_store_q) begin
-            // Store miss: allocate MSHR and return to IDLE.
-            if (mshr_req_line_hit || !mshr_alloc_ready) begin
-              state_d = S_LOOKUP;
-            end else begin
-              state_d = S_IDLE;
-            end
+        end else if (req_is_store_q) begin
+          // Committed stores have already been dequeued from the Store Buffer.
+          // Keep store misses blocking in D$ so exception flushes cannot drop
+          // the only in-flight copy before refill+merge updates the cache line.
+          if (mshr_req_line_hit) begin
+            state_d = S_LOOKUP;
+          end else if (way_valid[victim_way_d] && way_dirty[victim_way_d]) begin
+            state_d = S_WB_REQ;
           end else begin
-            // Load miss: allocate MSHR and return to IDLE.
-            if (mshr_req_line_hit || !mshr_alloc_ready) begin
-              state_d = S_LOOKUP;
-            end else begin
-              state_d = S_IDLE;
-            end
+            state_d = S_MISS_REQ;
+          end
+        end else begin
+          // Load miss: allocate MSHR and return to IDLE.
+          if (mshr_req_line_hit || !mshr_alloc_ready) begin
+            state_d = S_LOOKUP;
+          end else begin
+            state_d = S_IDLE;
           end
         end
       end

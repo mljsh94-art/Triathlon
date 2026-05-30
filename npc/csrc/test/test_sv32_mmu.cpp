@@ -83,6 +83,11 @@ void issue_req(Vtb_sv32_mmu &top, uint32_t vaddr, uint32_t access, uint32_t priv
   top.req_sum_i = sum ? 1 : 0;
   top.req_mxr_i = mxr ? 1 : 0;
   top.satp_i = satp;
+  top.eval();
+  for (int i = 0; !top.req_ready_o && i < 4; i++) {
+    tick(top);
+    top.eval();
+  }
   expect(top.req_ready_o, "request should be accepted only when req_ready_o=1");
   tick(top);
   top.req_valid_i = 0;

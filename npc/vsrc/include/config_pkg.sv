@@ -103,6 +103,10 @@ package config_pkg;
     // Data cache line width (in bits)
     int unsigned DCACHE_LINE_WIDTH;
 
+    // MMU TLB configuration
+    int unsigned ITLB_ENTRIES;
+    int unsigned DTLB_ENTRIES;
+
     int unsigned RS_DEPTH;
 
     int unsigned ALU_COUNT;
@@ -218,6 +222,10 @@ package config_pkg;
     int unsigned DCACHE_NUM_BANKS;
     int unsigned DCACHE_BANK_SEL_WIDTH;
     int unsigned DCACHE_NUM_SETS;
+
+    // MMU TLB configuration
+    int unsigned ITLB_ENTRIES;
+    int unsigned DTLB_ENTRIES;
 
     // Reservation Station configuration
     int unsigned RS_DEPTH;

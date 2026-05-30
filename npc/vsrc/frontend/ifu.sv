@@ -223,6 +223,10 @@ module ifu #(
   logic aa_inf_watch_w;
   logic ifu_diag_trace_en_q;
   logic ifu_bsearch_trace_en_q;
+  localparam int unsigned AGENT_IFU_PF_LOG_LIMIT = 32;
+  logic [5:0] agent_ifu_pf_logs_q;
+  localparam int unsigned AGENT_IFU_CTRL_LOG_LIMIT = 96;
+  logic [6:0] agent_ifu_ctrl_logs_q;
   initial ifu_diag_trace_en_q = $test$plusargs("npc_diag_trace");
   initial ifu_bsearch_trace_en_q = $test$plusargs("npc_diag_bsearch");
 
@@ -231,6 +235,7 @@ module ifu #(
   logic fault_pending_q;
   logic [Cfg.PLEN-1:0] fault_pc_q;
   logic [Cfg.PLEN-1:0] fault_tval_q;
+  logic fault_wait_flush_q;
 
   function automatic [REQ_PTR_W-1:0] req_ptr_inc(input [REQ_PTR_W-1:0] ptr);
     if (ptr == REQ_PTR_W'(REQ_DEPTH - 1)) begin
@@ -281,7 +286,7 @@ module ifu #(
 
   // BPU side: enqueue requests into pending FIFO when space is available.
   assign bpu_query_pc_w = flush_i ? redirect_pc_i : pc_reg;
-  assign can_accept_bpu_w = !local_mmu_flush_w &&
+  assign can_accept_bpu_w = !local_mmu_flush_w && !fault_pending_q && !fault_wait_flush_q &&
                             (flush_i ? 1'b1 : (!req_fifo_full_w || req_pop_w)) &&
                             ftq_alloc_ready_w;
   assign ifu2bpu_pc_o = bpu_query_pc_w;
@@ -307,7 +312,8 @@ module ifu #(
 
   // Conservative safety gate:
   // fq_count + inflight_count tracks worst-case buffered responses pressure.
-  assign can_issue_req_w = !ifu_flush_w && !fault_pending_q && !req_fifo_empty_w && !inf_fifo_full_w &&
+  assign can_issue_req_w = !ifu_flush_w && !fault_pending_q && !fault_wait_flush_q &&
+                           !req_fifo_empty_w && !inf_fifo_full_w &&
                            (storage_budget_w < (FQ_CNT_W + 1)'(FQ_DEPTH));
   assign req_block_flush_w = ifu_flush_w;
   assign req_block_reqq_empty_w = !ifu_flush_w && req_fifo_empty_w;
@@ -385,7 +391,9 @@ module ifu #(
   assign ftq_free_valid_w = fault_consume_w || rsp_capture_w;
   assign ftq_free_id_w = fault_consume_w ? req_head_ftq_id_w : inf_head_ftq_id_w;
 
-  sv32_mmu u_ifu_mmu (
+  sv32_mmu #(
+      .TLB_ENTRIES(Cfg.ITLB_ENTRIES)
+  ) u_ifu_mmu (
       .clk_i(clk),
       .rst_ni(~rst),
       .req_valid_i(mmu_state_q == MMU_ST_REQ),
@@ -461,6 +469,9 @@ module ifu #(
   );
 
   always_ff @(posedge clk) begin
+`ifndef SYNTHESIS
+    integer agent_log_fd;
+`endif
     if (rst) begin
       pc_reg <= Cfg.PLEN'(Cfg.RESET_VECTOR);
       fetch_epoch_q <= '0;
@@ -490,9 +501,12 @@ module ifu #(
       fault_pending_q <= 1'b0;
       fault_pc_q <= '0;
       fault_tval_q <= '0;
+      fault_wait_flush_q <= 1'b0;
 `ifndef SYNTHESIS
       ifu_pc_dbg_cnt_q <= '0;
       ifu_aa_dbg_cnt_q <= '0;
+      agent_ifu_pf_logs_q <= '0;
+      agent_ifu_ctrl_logs_q <= '0;
 `endif
 
     end else begin
@@ -527,6 +541,7 @@ module ifu #(
         fault_pending_q <= 1'b0;
         fault_pc_q <= '0;
         fault_tval_q <= '0;
+        fault_wait_flush_q <= 1'b0;
       end else if (local_mmu_flush_w) begin
         // Drop stale fetch requests/responses when SATP or SFENCE.VMA changes translation context.
         // Replay the oldest outstanding virtual PC; keeping speculative pc_reg can
@@ -544,6 +559,7 @@ module ifu #(
         fault_pending_q <= 1'b0;
         fault_pc_q <= '0;
         fault_tval_q <= '0;
+        fault_wait_flush_q <= 1'b0;
       end else begin
         if (req_enq_fire_w) begin
           req_pc_fifo_q[req_tail_q] <= pc_reg;
@@ -569,8 +585,26 @@ module ifu #(
             if (mmu_resp_page_fault_w) begin
               mmu_state_q <= MMU_ST_IDLE;
               fault_pending_q <= 1'b1;
+              fault_wait_flush_q <= 1'b1;
               fault_pc_q <= req_head_pc_w;
               fault_tval_q <= req_head_pc_w;
+`ifndef SYNTHESIS
+              // #region agent log
+              if ((agent_ifu_pf_logs_q < AGENT_IFU_PF_LOG_LIMIT[5:0]) &&
+                  (req_head_pc_w >= 32'h9000_0000) && (req_head_pc_w < 32'hc000_0000)) begin
+                agent_log_fd = $fopen("../debug-fd94f9.log", "a");
+                if (agent_log_fd != 0) begin
+                  $fwrite(agent_log_fd,
+                          "{\"sessionId\":\"fd94f9\",\"runId\":\"ifu-fault-source\",\"hypothesisId\":\"H2-H3\",\"location\":\"npc/vsrc/frontend/ifu.sv:mmu_fault_capture\",\"message\":\"IFU captured instruction page fault\",\"timestamp\":%0t,\"data\":{\"vaddr\":\"0x%08h\",\"mmuPrivLive\":%0d,\"satp\":\"0x%08h\",\"reqEpoch\":%0d,\"fetchEpoch\":%0d,\"flush\":%0d,\"localMmuFlush\":%0d,\"faultPendingBefore\":%0d,\"reqCount\":%0d,\"infCount\":%0d}}\n",
+                          $time, req_head_pc_w, mmu_priv_i, mmu_satp_i, req_head_epoch_w,
+                          fetch_epoch_q, flush_i, local_mmu_flush_w, fault_pending_q,
+                          req_count_q, inf_count_q);
+                  $fclose(agent_log_fd);
+                end
+                agent_ifu_pf_logs_q <= agent_ifu_pf_logs_q + 6'd1;
+              end
+              // #endregion
+`endif
             end else begin
               mmu_state_q <= MMU_ST_READY;
               mmu_translated_paddr_q <= mmu_resp_paddr_w;
@@ -637,6 +671,30 @@ module ifu #(
     $display("\n");
 `endif
 `ifndef SYNTHESIS
+
+    // #region agent log
+    if ((agent_ifu_ctrl_logs_q < AGENT_IFU_CTRL_LOG_LIMIT[6:0]) &&
+        ((((req_head_pc_w >= 32'h956d_0000) && (req_head_pc_w < 32'h9580_0000)) &&
+          (req_issue_fire_w || mmu_resp_fire_w || fault_consume_w || flush_i)) ||
+         (((fault_pc_q >= 32'h956d_0000) && (fault_pc_q < 32'h9580_0000)) &&
+          (fault_pending_q || fault_consume_w || flush_i)) ||
+         (flush_i && (((redirect_pc_i >= 32'h956d_0000) && (redirect_pc_i < 32'h9580_0000)) ||
+                      ((pc_reg >= 32'h956d_0000) && (pc_reg < 32'h9580_0000)) ||
+                      (req_count_q != '0))))) begin
+      agent_log_fd = $fopen("../debug-fd94f9.log", "a");
+      if (agent_log_fd != 0) begin
+        $fwrite(agent_log_fd,
+                "{\"sessionId\":\"fd94f9\",\"runId\":\"ifu-ctrl-flow\",\"hypothesisId\":\"H4-H6\",\"location\":\"npc/vsrc/frontend/ifu.sv:ctrl_flow\",\"message\":\"IFU control flow around user fault\",\"timestamp\":%0t,\"data\":{\"pcReg\":\"0x%08h\",\"reqHead\":\"0x%08h\",\"faultPc\":\"0x%08h\",\"redirect\":\"0x%08h\",\"mmuPriv\":%0d,\"satp\":\"0x%08h\",\"flush\":%0d,\"localMmuFlush\":%0d,\"faultPending\":%0d,\"faultWaitFlush\":%0d,\"faultConsume\":%0d,\"reqEnq\":%0d,\"reqIssue\":%0d,\"reqPop\":%0d,\"mmuState\":%0d,\"mmuReqFire\":%0d,\"mmuRespFire\":%0d,\"mmuRespPf\":%0d,\"reqCount\":%0d,\"infCount\":%0d,\"fetchEpoch\":%0d,\"reqEpoch\":%0d,\"bpuPred\":\"0x%08h\"}}\n",
+                $time, pc_reg, req_head_pc_w, fault_pc_q, redirect_pc_i, mmu_priv_i,
+                mmu_satp_i, flush_i, local_mmu_flush_w, fault_pending_q, fault_wait_flush_q,
+                fault_consume_w, req_enq_fire_w, req_issue_fire_w, req_pop_w, mmu_state_q,
+                mmu_req_fire_w, mmu_resp_fire_w, mmu_resp_page_fault_w, req_count_q,
+                inf_count_q, fetch_epoch_q, req_head_epoch_w, bpu2ifu_predicted_pc_i);
+        $fclose(agent_log_fd);
+      end
+      agent_ifu_ctrl_logs_q <= agent_ifu_ctrl_logs_q + 7'd1;
+    end
+    // #endregion
 
     if (ifu_diag_trace_en_q && req_issue_fire_w && (ifu_pc_dbg_cnt_q < IFU_PC_DBG_BUDGET) && (
         ((req_head_pc_w & 32'hfffff000) == 32'hc0800000) ||
