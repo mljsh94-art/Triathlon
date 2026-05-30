@@ -1,4 +1,4 @@
-*.*
+﻿*.*
 *
 !*/
 !/nemu/*
@@ -15,6 +15,7 @@
 !/opensbi/**
 !/echo_payload/**
 !merge.py
+!build_kernel.sh
 !CLAUDE.md
 .vscode
 .worktrees/
@@ -24,7 +25,11 @@ my_lab_log/
 
 # Build outputs (keep local, do not track)
 **/build/
-linux_workspace/
+!/linux_workspace/
+!linux_workspace/**
+linux_workspace/linux/
+linux_workspace/toolchain/
+linux_workspace/**/build/
 
 # Agent debug NDJSON logs (local only)
 debug-*.log
