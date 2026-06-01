@@ -1853,11 +1853,20 @@ module backend #(
   logic [6:0] agent_backend_csr_arb_logs_q;
   localparam int unsigned AGENT_BACKEND_IFETCH_FLOW_LOG_LIMIT = 96;
   logic [6:0] agent_backend_ifetch_flow_logs_q;
+  localparam int unsigned AGENT_BACKEND_IRQ_LOG_LIMIT = 128;
+  logic [7:0] agent_backend_irq_logs_q;
 `endif
 
   always_comb begin
     csr_rob_exception_inject = rob_sync_exception_pending_q && !csr_en;
-    csr_ifetch_fault_inject = ifetch_fault_valid_i && !csr_en && !csr_rob_exception_inject;
+    // An IFU instruction-fetch page fault may only be escalated to an architectural trap
+    // when it is the next instruction to retire, i.e. the ROB is empty. Otherwise the
+    // faulting fetch can be a wrong-path (BPU-mispredicted) speculative fetch — e.g. a
+    // user VA fetched while the kernel page-fault handler runs in S-mode — and the older
+    // in-flight instructions (the mispredicting branch) must resolve and squash it first.
+    // Injecting it immediately preempts the running handler and live-locks.
+    csr_ifetch_fault_inject = ifetch_fault_valid_i && rob_empty && !csr_en &&
+                              !csr_rob_exception_inject;
     csr_async_exception_inject = csr_rob_exception_inject || csr_ifetch_fault_inject;
     csr_irq_inject = (timer_irq_i || ext_irq_i) && !rob_empty && !csr_en &&
                      !csr_rob_exception_inject && !csr_ifetch_fault_inject;
@@ -1901,7 +1910,24 @@ module backend #(
     if (!rst_ni) begin
       agent_backend_csr_arb_logs_q <= '0;
       agent_backend_ifetch_flow_logs_q <= '0;
+      agent_backend_irq_logs_q <= '0;
     end else begin
+      // #region agent log
+      if ((agent_backend_irq_logs_q < AGENT_BACKEND_IRQ_LOG_LIMIT[7:0]) &&
+          (ext_irq_i || csr_irq_inject)) begin
+        agent_log_fd = $fopen("../debug-aeea27.log", "a");
+        if (agent_log_fd != 0) begin
+          $fwrite(agent_log_fd,
+                  "{\"sessionId\":\"aeea27\",\"runId\":\"uart-irq-backend\",\"hypothesisId\":\"H3-backend-irq-gate\",\"location\":\"npc/vsrc/backend/backend.sv:irq_gate\",\"message\":\"Backend IRQ arbitration state\",\"timestamp\":%0t,\"data\":{\"extIrq\":%0d,\"timerIrq\":%0d,\"csrIrqInject\":%0d,\"csrExecValid\":%0d,\"csrEn\":%0d,\"robEmpty\":%0d,\"robExcInject\":%0d,\"ifetchFaultInject\":%0d,\"ifetchFaultValid\":%0d,\"csrPrivMode\":%0d,\"robHeadPc\":\"0x%08h\",\"csrTrapPc\":\"0x%08h\",\"backendFlush\":%0d}}\n",
+                  $time, ext_irq_i, timer_irq_i, csr_irq_inject, csr_exec_valid, csr_en,
+                  rob_empty, csr_rob_exception_inject, csr_ifetch_fault_inject,
+                  ifetch_fault_valid_i, csr_priv_mode, rob_head_pc, csr_exec_trap_pc,
+                  backend_flush);
+          $fclose(agent_log_fd);
+        end
+        agent_backend_irq_logs_q <= agent_backend_irq_logs_q + 8'd1;
+      end
+      // #endregion
       // #region agent log
       if ((agent_backend_csr_arb_logs_q < AGENT_BACKEND_CSR_ARB_LOG_LIMIT[6:0]) &&
           (csr_en || csr_uop.is_sret || csr_exec_uop.is_sret ||
@@ -1925,17 +1951,17 @@ module backend #(
       end
       // #endregion
       // #region agent log
+      // Focus on the bug: an IFU fetch fault for a USER VA while committed priv == S (2'b01).
+      // This is the spurious S-mode user-page ifetch fault; gating on priv==S keeps the budget
+      // from being drained by normal U-mode demand-paging faults/mispredict flushes.
       if ((agent_backend_ifetch_flow_logs_q < AGENT_BACKEND_IFETCH_FLOW_LOG_LIMIT[6:0]) &&
+          (csr_priv_mode == 2'b01) &&
           ((ifetch_fault_valid_i &&
-            (ifetch_fault_tval_i >= Cfg.PLEN'(32'h956d_0000)) &&
-            (ifetch_fault_tval_i < Cfg.PLEN'(32'h9580_0000))) ||
+            (ifetch_fault_tval_i >= Cfg.PLEN'(32'h9000_0000)) &&
+            (ifetch_fault_tval_i < Cfg.PLEN'(32'hc000_0000))) ||
            (csr_irq_trap && (csr_irq_trap_cause == 5'd12) &&
-            (csr_irq_trap_pc >= Cfg.PLEN'(32'h956d_0000)) &&
-            (csr_irq_trap_pc < Cfg.PLEN'(32'h9580_0000))) ||
-           (backend_flush && (((backend_redirect_pc_o >= Cfg.PLEN'(32'h956d_0000)) &&
-                               (backend_redirect_pc_o < Cfg.PLEN'(32'h9580_0000))) ||
-                              ((rob_flush_src_pc >= Cfg.PLEN'(32'h956d_0000)) &&
-                               (rob_flush_src_pc < Cfg.PLEN'(32'h9580_0000))))))) begin
+            (csr_irq_trap_pc >= Cfg.PLEN'(32'h9000_0000)) &&
+            (csr_irq_trap_pc < Cfg.PLEN'(32'hc000_0000))))) begin
         agent_log_fd = $fopen("../debug-fd94f9.log", "a");
         if (agent_log_fd != 0) begin
           $fwrite(agent_log_fd,

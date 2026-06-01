@@ -673,14 +673,16 @@ module ifu #(
 `ifndef SYNTHESIS
 
     // #region agent log
+    // Focus on the bug: IFU fetching/faulting a USER VA while committed priv == S (2'b01).
+    // U-mode demand-paging (priv==U) is the normal path and would otherwise drain the budget.
     if ((agent_ifu_ctrl_logs_q < AGENT_IFU_CTRL_LOG_LIMIT[6:0]) &&
-        ((((req_head_pc_w >= 32'h956d_0000) && (req_head_pc_w < 32'h9580_0000)) &&
+        (mmu_priv_i == 2'b01) &&
+        ((((req_head_pc_w >= 32'h9000_0000) && (req_head_pc_w < 32'hc000_0000)) &&
           (req_issue_fire_w || mmu_resp_fire_w || fault_consume_w || flush_i)) ||
-         (((fault_pc_q >= 32'h956d_0000) && (fault_pc_q < 32'h9580_0000)) &&
+         (((fault_pc_q >= 32'h9000_0000) && (fault_pc_q < 32'hc000_0000)) &&
           (fault_pending_q || fault_consume_w || flush_i)) ||
-         (flush_i && (((redirect_pc_i >= 32'h956d_0000) && (redirect_pc_i < 32'h9580_0000)) ||
-                      ((pc_reg >= 32'h956d_0000) && (pc_reg < 32'h9580_0000)) ||
-                      (req_count_q != '0))))) begin
+         (flush_i && (((redirect_pc_i >= 32'h9000_0000) && (redirect_pc_i < 32'hc000_0000)) ||
+                      ((pc_reg >= 32'h9000_0000) && (pc_reg < 32'hc000_0000)))))) begin
       agent_log_fd = $fopen("../debug-fd94f9.log", "a");
       if (agent_log_fd != 0) begin
         $fwrite(agent_log_fd,

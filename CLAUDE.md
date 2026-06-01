@@ -160,7 +160,7 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
   - **Load Queue (LQ) & Store Queue (SQ)**: Tracks in-flight memory operations for OOO execution, memory disambiguation, and load-store forwarding.
   - **Memory Dependence Predictor (MDP)**: Predicts memory aliasing to prevent load-store ordering violations.
   - Supports RV32A word atomic operations (`LR.W`/`SC.W`, `AMOSWAP.W`, `AMOADD.W`, `AMOXOR.W`, `AMOAND.W`, `AMOOR.W`, `AMOMIN.W`, `AMOMAX.W`, `AMOMINU.W`, `AMOMAXU.W`) through a conservative LSU read-modify-write sequence.
-- **CSR** (`csr.sv`): CSR read/modify/write and exception/interrupt handling. Single-issue, ROB-head ordered. CSR/system exceptions are reported to the ROB first, then applied through the commit-time trap injection path so trap CSRs and `mstatus.MPP`/`SPP` are updated precisely once. `cycle`/`time`/`instret` and their high-half aliases return monotonic counter values for OpenSBI/Linux delay and probe paths. `satp` exposes SV32 mode and PPN fields with ASIDLEN=0; ASID bits are WARL-masked to zero because the current TLB is not ASID-tagged.
+- **CSR** (`csr.sv`): CSR read/modify/write and exception/interrupt handling. Single-issue, ROB-head ordered. CSR/system exceptions are reported to the ROB first, then applied through the commit-time trap injection path so trap CSRs and `mstatus.MPP`/`SPP` are updated precisely once. External platform interrupts support both machine and supervisor delivery; the Linux device-tree PLIC context drives `SEIP` through `sip/mip`, `sie.SEIE`, `sstatus.SIE`, and `mideleg.SEIP`, allowing S-mode UART/PLIC interrupt handlers to run. `cycle`/`time`/`instret` and their high-half aliases return monotonic counter values for OpenSBI/Linux delay and probe paths. `satp` exposes SV32 mode and PPN fields with ASIDLEN=0; ASID bits are WARL-masked to zero because the current TLB is not ASID-tagged.
 
 #### Writeback & CDB
 - **Writeback Arbiter** (`writeback.sv`): 7 FU inputs -> 4 CDB ports. Priority arbitration broadcasts execution results.
@@ -194,6 +194,7 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 - Committed store misses are completed on a blocking refill+merge path so exception flushes cannot discard a store after the Store Buffer has dequeued it.
 - **Miss interface**: valid/ready to external memory (refill)
 - **Writeback interface**: valid/ready for dirty line eviction
+- The simulator-side refill model uses side-effectful MMIO reads for DCache line fills, so volatile registers such as the PLIC claim/complete register perform their architectural claim action when serviced through the cache miss path.
 
 #### External Memory Interface & Platform
 - Custom refill/writeback protocol at the triathlon top level.
@@ -370,6 +371,64 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 | `[commitm]` / `[controlm]` / `[stallm]` / `[stallm2]`–`[stallm6]` / `[ifum]` / `[pred  ]` / `[hotpcm]` / `[hotinstm]` | `--commit-trace` 或 `--bru-trace` | 仿真结束由 `ProfileCollector` 输出的汇总（commit 宽度、控制流、stall 分类、IFU FQ、BPU 命中率、热 PC/指令等） |
 | `HIT GOOD TRAP` / `HIT BAD TRAP` | — | AM 测试 `ebreak`：a0=0 成功 / 非 0 失败 |
 | `IPC=` / `CPI=` | — | 成功 trap 或超时前输出的性能指标 |
+
+#### NDJSON 故障排查日志（`debug-*.log`）
+
+复杂 RTL/全系统 bug 排查时，除 stdout 上的 `[debug][...]` / `[linux-stage]` 外，还应使用 **NDJSON 结构化日志**（一行一个 JSON 对象），便于按 `runId` / `hypothesisId` / `cycle` 关联 IFU、Backend、C++ 侧证据。
+
+**文件位置与命名**
+
+| 项 | 说明 |
+| :--- | :--- |
+| 默认路径 | 工作区根目录 `debug-<sessionId>.log`（例如 `debug-fd94f9.log`） |
+| 写入方式 | RTL（`npc/vsrc/**/*.sv`）与 C++（`npc/csrc/npc_main.cpp`）通过 `$fopen("../debug-....log","a")` / `std::ofstream` 追加写入 |
+| 运行目录 | 须从 `npc/` 执行 `make sim`，保证 `../debug-*.log` 落在仓库根目录 |
+| stdout 分流 | NDJSON **不进** stdout；完整仿真日志仍可重定向到 `npc/sim_*.log` |
+
+**日志格式（NDJSON）**
+
+每行一个 JSON 对象，典型字段：
+
+| 字段 | 含义 |
+| :--- | :--- |
+| `sessionId` | 调试会话 ID，与文件名中的 `<sessionId>` 一致 |
+| `runId` | 日志来源/主题，如 `arch-truth`、`ifu-ctrl-flow`、`backend-ifetch-flow`、`backend-csr-arb` |
+| `hypothesisId` | 对应待验证假设编号 |
+| `location` | 源文件位置 |
+| `message` | 简短描述 |
+| `timestamp` | 仿真 cycle（C++ 侧）或 `$time`（RTL 侧） |
+| `data` | 结构化 payload（priv、PC、ROB 状态、flush 信号等） |
+
+**排查流程约定**
+
+1. **每次复现前清空** 当前 session 的 `debug-<sessionId>.log`（勿删其他 session 的 `debug-*.log`）。
+2. **修改插桩后必须重编**：`make -C npc`。
+3. **先假设、再插桩、再跑**：每条 log 映射至少一个假设；未用 log 证明前不得声称根因或删插桩。
+4. **stdout + NDJSON 分工**：`sim_*.log` 看启动里程碑与 `[debug][flush-exc]`；`debug-*.log` 看 cycle 级时序（IFU fault、CSR 仲裁、SRET 提交等）。
+5. **验证通过前保留插桩**；仅在 post-fix 日志证明修复或用户确认后再移除。
+
+**当前插桩来源（示例）**
+
+| `runId` | 位置 | 用途 |
+| :--- | :--- | :--- |
+| `arch-truth` | `npc/csrc/npc_main.cpp` | 架构地面真值：priv 变化、已提交 SRET/MRET、异常 flush |
+| `ifu-ctrl-flow` | `npc/vsrc/frontend/ifu.sv` | IFU 取指队列、BPU 预测 PC、fault quiesce、MMU priv |
+| `backend-ifetch-flow` | `npc/vsrc/backend/backend.sv` | 取指 fault 注入、ROB flush、redirect |
+| `backend-csr-arb` | `npc/vsrc/backend/backend.sv` | CSR 仲裁：`csrEn` / `ifetchFaultInject` / `robEmpty` |
+| `priv-mismatch-flush` | `npc/csrc/npc_main.cpp` | S 态对用户 VA 的 instruction page fault |
+| `user-write-syscall` / `user-write-return` | `npc/csrc/npc_main.cpp` | U 态 `write`/`ecall` 参数、SRET 返回值与 UART/PLIC 快照 |
+| `uart-print-path` / `uart-plic-path` | `npc/csrc/include/memory_models.h` | 8250 IER/IIR/THR 与 PLIC pending/claim/enable 流 |
+| `uart-irq-backend` / `uart-irq-csr` / `csr-status-writes` | `npc/vsrc/backend/backend.sv`, `npc/vsrc/backend/execute/csr.sv` | 外部中断从 backend 仲裁到 CSR 条件判定、SIE/SEIE 状态写入的时序 |
+| `linux-tty-path` / `linux-uart-core` / `linux-8250-tx` | `linux_workspace/linux/drivers/tty/**` | Linux N_TTY、serial core xmit ring、8250 TX drain 的 `/init` write 路径 |
+
+**典型全系统复现命令**
+
+```bash
+make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
+  ARGS='--max-cycles=70000000 --progress=2000000 --linux-early-debug' \
+  > npc/sim_debug.log 2>&1
+# 故障复现后检查: debug-<sessionId>.log（位于仓库根目录）
+```
 
 #### `--linux-early-debug` 启动阶段标记
 

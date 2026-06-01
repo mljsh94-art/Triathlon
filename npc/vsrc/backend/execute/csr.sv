@@ -47,6 +47,7 @@ module execute_csr #(
   localparam logic [4:0] EXC_ECALL_UMODE = 5'd8;
   localparam logic [4:0] EXC_ECALL_SMODE = 5'd9;
   localparam logic [4:0] EXC_ECALL_MMODE = 5'd11;
+  localparam logic [4:0] EXC_S_EXT = 5'd9;
   localparam logic [4:0] EXC_M_EXT = 5'd11;
   localparam logic [4:0] EXC_M_TIMER = 5'd7;
 
@@ -107,8 +108,10 @@ module execute_csr #(
   localparam int unsigned MSTATUS_MPP_MSB = 12;
   localparam int unsigned MSTATUS_SUM_BIT = 18;
   localparam int unsigned MSTATUS_MXR_BIT = 19;
+  localparam int unsigned MIE_SEIE_BIT = 9;
   localparam int unsigned MIE_MEIE_BIT = 11;
   localparam int unsigned MIE_MTIE_BIT = 7;
+  localparam int unsigned MIP_SEIP_BIT = 9;
   localparam int unsigned MIP_MEIP_BIT = 11;
   localparam int unsigned MIP_MTIP_BIT = 7;
   localparam logic [XLEN-1:0] CSR_MISA_VALUE = XLEN'(32'h40141105);
@@ -142,6 +145,7 @@ module execute_csr #(
   logic [1:0] current_priv;
 
   logic [XLEN-1:0] csr_mip;
+  logic [XLEN-1:0] csr_sip_view;
   logic [XLEN-1:0] csr_sstatus_view;
   logic [XLEN-1:0] csr_sstatus_mask;
   logic [XLEN-1:0] csr_read_val;
@@ -167,6 +171,8 @@ module execute_csr #(
   logic decode_illegal_exception;
   logic interrupt_pending;
   logic interrupt_ext_pending;
+  logic interrupt_s_ext_pending;
+  logic interrupt_m_ext_pending;
   logic interrupt_timer_pending;
   logic interrupt_take;
   logic [4:0] interrupt_cause;
@@ -211,8 +217,14 @@ module execute_csr #(
 
   always_comb begin
     csr_mip = '0;
-    csr_mip[MIP_MEIP_BIT] = external_irq_i;
+    csr_mip[MIP_SEIP_BIT] = external_irq_i;
+    csr_mip[MIP_MEIP_BIT] = external_irq_i && !csr_mideleg[MIP_SEIP_BIT];
     csr_mip[MIP_MTIP_BIT] = timer_irq_i;
+  end
+
+  always_comb begin
+    csr_sip_view = csr_sip;
+    csr_sip_view[MIP_SEIP_BIT] = external_irq_i;
   end
 
   always_comb begin
@@ -254,7 +266,7 @@ module execute_csr #(
       CSR_SEPC: csr_read_val = csr_sepc;
       CSR_SCAUSE: csr_read_val = csr_scause;
       CSR_STVAL: csr_read_val = csr_stval;
-      CSR_SIP: csr_read_val = csr_sip;
+      CSR_SIP: csr_read_val = csr_sip_view;
       CSR_MSCRATCH: csr_read_val = csr_mscratch;
       CSR_MEPC: csr_read_val = csr_mepc;
       CSR_MCAUSE: csr_read_val = csr_mcause;
@@ -377,12 +389,19 @@ module execute_csr #(
     end
   end
 
-  assign interrupt_ext_pending = external_irq_i && csr_mstatus[MSTATUS_MIE_BIT] &&
-                                 csr_mie[MIE_MEIE_BIT];
+  assign interrupt_s_ext_pending = external_irq_i && csr_mideleg[MIP_SEIP_BIT] &&
+                                   csr_sie[MIE_SEIE_BIT] &&
+                                   ((current_priv == PRIV_LVL_U) ||
+                                    (current_priv == PRIV_LVL_S && csr_mstatus[MSTATUS_SIE_BIT]));
+  assign interrupt_m_ext_pending = external_irq_i && !csr_mideleg[MIP_SEIP_BIT] &&
+                                   csr_mstatus[MSTATUS_MIE_BIT] &&
+                                   csr_mie[MIE_MEIE_BIT];
+  assign interrupt_ext_pending = interrupt_s_ext_pending || interrupt_m_ext_pending;
   assign interrupt_timer_pending = timer_irq_i && csr_mstatus[MSTATUS_MIE_BIT] &&
                                    csr_mie[MIE_MTIE_BIT];
   assign interrupt_pending = interrupt_ext_pending || interrupt_timer_pending;
-  assign interrupt_cause = interrupt_ext_pending ? EXC_M_EXT : EXC_M_TIMER;
+  assign interrupt_cause = interrupt_s_ext_pending ? EXC_S_EXT :
+                           (interrupt_m_ext_pending ? EXC_M_EXT : EXC_M_TIMER);
   assign interrupt_take = csr_valid_i && interrupt_inject_i && interrupt_pending;
   assign async_exception_take = csr_valid_i && async_exception_inject_i;
   assign decode_illegal_exception = csr_valid_i && uop_i.illegal;
@@ -394,11 +413,12 @@ module execute_csr #(
   assign trap_delegate_to_s = csr_medeleg[trap_ecause] ||
                               (trap_ecause == EXC_LD_ADDR_MISALIGNED) ||
                               (trap_ecause == EXC_ST_ADDR_MISALIGNED);
-  assign trap_to_s_mode = (current_priv != PRIV_LVL_M) &&
-                          (decode_illegal_exception || csr_illegal_exception ||
-                           system_take_exception ||
-                           async_exception_take) &&
-                          trap_delegate_to_s;
+  assign trap_to_s_mode = interrupt_s_ext_pending ||
+                          ((current_priv != PRIV_LVL_M) &&
+                           (decode_illegal_exception || csr_illegal_exception ||
+                            system_take_exception ||
+                            async_exception_take) &&
+                           trap_delegate_to_s);
   assign satp_write_flush = csr_valid_i && uop_i.is_csr && csr_write_en &&
                             (uop_i.csr_addr == CSR_SATP) && !trap_take;
 
@@ -583,13 +603,58 @@ module execute_csr #(
   logic csr_diag_trace_en_q;
   localparam int unsigned AGENT_CSR_LOG_LIMIT = 64;
   logic [6:0] agent_csr_logs_q;
+  localparam int unsigned AGENT_CSR_IRQ_LOG_LIMIT = 128;
+  logic [7:0] agent_csr_irq_logs_q;
+  localparam int unsigned AGENT_CSR_STATUS_LOG_LIMIT = 160;
+  logic [7:0] agent_csr_status_logs_q;
   initial csr_diag_trace_en_q = $test$plusargs("npc_diag_trace");
 
   always_ff @(posedge clk_i) begin
     integer agent_log_fd;
     if (!rst_ni) begin
       agent_csr_logs_q <= '0;
+      agent_csr_irq_logs_q <= '0;
+      agent_csr_status_logs_q <= '0;
     end else begin
+      // #region agent log
+      if ((agent_csr_status_logs_q < AGENT_CSR_STATUS_LOG_LIMIT[7:0]) &&
+          csr_valid_i && uop_i.is_csr && csr_write_en &&
+          ((uop_i.csr_addr == CSR_SSTATUS) || (uop_i.csr_addr == CSR_MSTATUS) ||
+           (uop_i.csr_addr == CSR_SIE) || (uop_i.csr_addr == CSR_MIE) ||
+           (uop_i.csr_addr == CSR_MIDELEG))) begin
+        agent_log_fd = $fopen("../debug-aeea27.log", "a");
+        if (agent_log_fd != 0) begin
+          $fwrite(agent_log_fd,
+                  "{\"sessionId\":\"aeea27\",\"runId\":\"csr-status-writes\",\"hypothesisId\":\"H7-sie-state\",\"location\":\"npc/vsrc/backend/execute/csr.sv:csr_write\",\"message\":\"CSR interrupt-enable related write\",\"timestamp\":%0t,\"data\":{\"pc\":\"0x%08h\",\"csr\":\"0x%03h\",\"op\":%0d,\"rs1\":\"0x%08h\",\"writeVal\":\"0x%08h\",\"mstatusBefore\":\"0x%08h\",\"sieBefore\":\"0x%08h\",\"mieBefore\":\"0x%08h\",\"midelegBefore\":\"0x%08h\",\"currentPriv\":%0d,\"sstatusSieBefore\":%0d,\"sstatusSpieBefore\":%0d,\"sieSeieBefore\":%0d,\"midelegSeipBefore\":%0d}}\n",
+                  $time, uop_i.pc, uop_i.csr_addr, uop_i.csr_op, csr_src,
+                  csr_write_val, csr_mstatus, csr_sie, csr_mie, csr_mideleg,
+                  current_priv, csr_mstatus[MSTATUS_SIE_BIT],
+                  csr_mstatus[MSTATUS_SPIE_BIT], csr_sie[MIE_SEIE_BIT],
+                  csr_mideleg[MIP_SEIP_BIT]);
+          $fclose(agent_log_fd);
+        end
+        agent_csr_status_logs_q <= agent_csr_status_logs_q + 8'd1;
+      end
+      // #endregion
+      // #region agent log
+      if ((agent_csr_irq_logs_q < AGENT_CSR_IRQ_LOG_LIMIT[7:0]) &&
+          (external_irq_i || interrupt_take)) begin
+        agent_log_fd = $fopen("../debug-aeea27.log", "a");
+        if (agent_log_fd != 0) begin
+          $fwrite(agent_log_fd,
+                  "{\"sessionId\":\"aeea27\",\"runId\":\"uart-irq-csr\",\"hypothesisId\":\"H3-csr-irq-condition\",\"location\":\"npc/vsrc/backend/execute/csr.sv:irq_eval\",\"message\":\"CSR external interrupt eligibility\",\"timestamp\":%0t,\"data\":{\"csrValid\":%0d,\"interruptInject\":%0d,\"externalIrq\":%0d,\"timerIrq\":%0d,\"currentPriv\":%0d,\"midelegSeip\":%0d,\"sieSeie\":%0d,\"sstatusSie\":%0d,\"mieMeie\":%0d,\"mstatusMie\":%0d,\"sExtPending\":%0d,\"mExtPending\":%0d,\"timerPending\":%0d,\"interruptPending\":%0d,\"interruptTake\":%0d,\"cause\":%0d,\"trapToS\":%0d,\"trapPc\":\"0x%08h\",\"stvec\":\"0x%08h\",\"mtvec\":\"0x%08h\"}}\n",
+                  $time, csr_valid_i, interrupt_inject_i, external_irq_i, timer_irq_i,
+                  current_priv, csr_mideleg[MIP_SEIP_BIT], csr_sie[MIE_SEIE_BIT],
+                  csr_mstatus[MSTATUS_SIE_BIT], csr_mie[MIE_MEIE_BIT],
+                  csr_mstatus[MSTATUS_MIE_BIT], interrupt_s_ext_pending,
+                  interrupt_m_ext_pending, interrupt_timer_pending, interrupt_pending,
+                  interrupt_take, interrupt_cause, trap_to_s_mode, trap_pc_i, csr_stvec,
+                  csr_mtvec);
+          $fclose(agent_log_fd);
+        end
+        agent_csr_irq_logs_q <= agent_csr_irq_logs_q + 8'd1;
+      end
+      // #endregion
       // #region agent log
       if ((agent_csr_logs_q < AGENT_CSR_LOG_LIMIT[6:0]) &&
           csr_valid_i && sys_op_valid && uop_i.is_sret) begin

@@ -61,6 +61,11 @@ struct UnifiedMem {
   uint64_t fw_text_write_count = 0;
   uint32_t fw_text_last_write_addr = 0;
   uint32_t fw_text_last_write_data = 0;
+  uint64_t agent_uart_ier_logs = 0;
+  uint64_t agent_uart_tx_logs = 0;
+  mutable uint64_t agent_uart_iir_logs = 0;
+  uint64_t agent_plic_logs = 0;
+  mutable uint64_t agent_plic_unhandled_logs = 0;
 
   UnifiedMem()
       : pmem_words(kPmemSize / sizeof(uint32_t), 0),
@@ -95,6 +100,59 @@ struct UnifiedMem {
 
   bool uart_dlab() const { return (uart_lcr & 0x80u) != 0; }
 
+  void agent_log_uart_event(const char *message, const char *hypothesis_id,
+                            uint32_t addr, uint32_t data, uint32_t aux) const {
+    // #region agent log
+    std::ofstream("../debug-aeea27.log", std::ios::app)
+        << "{\"sessionId\":\"aeea27\",\"runId\":\"uart-print-path\","
+        << "\"hypothesisId\":\"" << hypothesis_id << "\","
+        << "\"location\":\"npc/csrc/include/memory_models.h:uart\","
+        << "\"message\":\"" << message << "\","
+        << "\"timestamp\":" << std::dec << rtc_time_us
+        << ",\"data\":{\"addr\":\"0x" << std::hex << addr
+        << "\",\"data\":\"0x" << data
+        << "\",\"aux\":\"0x" << aux
+        << "\",\"ier\":\"0x" << static_cast<uint32_t>(uart_ier)
+        << "\",\"lcr\":\"0x" << static_cast<uint32_t>(uart_lcr)
+        << "\",\"lsr\":\"0x" << static_cast<uint32_t>(uart_lsr)
+        << "\",\"uartIrq\":" << std::dec << (uart_irq_pending() ? 1 : 0)
+        << ",\"plicPending\":" << (plic_pending1 ? 1 : 0)
+        << ",\"plicClaimed\":" << (plic_claimed1 ? 1 : 0)
+        << ",\"plicEnable\":\"0x" << std::hex << plic_enable_m
+        << "\",\"plicPriority\":\"0x" << plic_priority1
+        << "\",\"plicThreshold\":\"0x" << plic_threshold_m
+        << "\",\"txBytes\":" << std::dec << uart_tx_bytes << "}}\n";
+    // #endregion
+  }
+
+  void agent_log_plic_event(const char *message, const char *hypothesis_id,
+                            uint32_t addr, uint32_t data) const {
+    // #region agent log
+    std::ofstream("../debug-aeea27.log", std::ios::app)
+        << "{\"sessionId\":\"aeea27\",\"runId\":\"uart-plic-path\","
+        << "\"hypothesisId\":\"" << hypothesis_id << "\","
+        << "\"location\":\"npc/csrc/include/memory_models.h:plic\","
+        << "\"message\":\"" << message << "\","
+        << "\"timestamp\":" << std::dec << rtc_time_us
+        << ",\"data\":{\"addr\":\"0x" << std::hex << addr
+        << "\",\"data\":\"0x" << data
+        << "\",\"pendingBits\":\"0x" << plic_pending_bits()
+        << "\",\"line\":" << std::dec << (plic_line1() ? 1 : 0)
+        << ",\"eligible\":" << (plic_irq_pending() ? 1 : 0)
+        << ",\"claimed\":" << (plic_claimed1 ? 1 : 0)
+        << ",\"enable\":\"0x" << std::hex << plic_enable_m
+        << "\",\"priority\":\"0x" << plic_priority1
+        << "\",\"threshold\":\"0x" << plic_threshold_m
+        << "\",\"uartIrq\":" << std::dec << (uart_irq_pending() ? 1 : 0)
+        << ",\"virtioPending\":" << (plic_source_pending1 ? 1 : 0) << "}}\n";
+    // #endregion
+  }
+
+  // UART interrupt request line (level-sensitive). THR is modelled as always
+  // empty, so a TX "transmit holding register empty" interrupt is asserted
+  // whenever the driver enables it via IER.THRI (bit 1). No RX path is modelled.
+  bool uart_irq_pending() const { return (uart_ier & 0x02u) != 0u; }
+
   uint8_t uart_peek8(uint32_t addr) const {
     uint32_t off = addr - kUartTx;
     switch (off) {
@@ -103,8 +161,15 @@ struct UnifiedMem {
       case 1:
         return uart_dlab() ? uart_dlm : uart_ier;
       case 2: {
-        uint8_t iir = 0x01u;  // no pending interrupt
+        // Bit0=0 => an interrupt is pending. Report the THR-empty (TX)
+        // interrupt id (0b001) when the driver enabled it; otherwise 0x01
+        // (no interrupt pending). Upper bits flag an enabled FIFO.
+        uint8_t iir = uart_irq_pending() ? 0x02u : 0x01u;
         if ((uart_fcr & 0x01u) != 0) iir |= 0xC0u;
+        if (agent_uart_iir_logs < 128 && rtc_time_us >= 50000000ull) {
+          agent_log_uart_event("UART IIR read", "H2-plic-uart-iir", addr, iir, uart_fcr);
+          agent_uart_iir_logs++;
+        }
         return iir;
       }
       case 3:
@@ -131,6 +196,10 @@ struct UnifiedMem {
         } else {
           uart_tx_bytes++;
           uart_last_tx = data;
+          if (agent_uart_tx_logs < 256 && rtc_time_us >= 60000000ull) {
+            agent_log_uart_event("UART THR write", "H4-thr-output", addr, data, uart_tx_bytes);
+            agent_uart_tx_logs++;
+          }
           if (uart_stdout_enabled) {
             std::cout << static_cast<char>(data) << std::flush;
           }
@@ -140,7 +209,14 @@ struct UnifiedMem {
         if (uart_dlab()) {
           uart_dlm = data;
         } else {
+          uint8_t old_ier = uart_ier;
           uart_ier = data;
+          // IER.THRI gates the TX-empty interrupt; re-evaluate the PLIC line.
+          update_uart_plic();
+          if (agent_uart_ier_logs < 128) {
+            agent_log_uart_event("UART IER write", "H1-thri-enable", addr, data, old_ier);
+            agent_uart_ier_logs++;
+          }
         }
         break;
       case 2:
@@ -589,9 +665,30 @@ struct UnifiedMem {
     return plic_pending1 && plic_source1_enabled() && !plic_claimed1;
   }
 
+  // Combined request line for PLIC source 1. In triathlon.dts the ns8250 UART
+  // is wired to source 1 (interrupts=<1>) and the VirtIO block device shares
+  // the same source id (kVirtioBlkIrqId==1), so OR their request lines.
+  bool plic_line1() const { return plic_source_pending1 || uart_irq_pending(); }
+
   void refresh_plic_pending() {
-    if (plic_source_pending1 && !plic_claimed1) {
+    if (plic_line1() && !plic_claimed1) {
       plic_pending1 = true;
+      if (agent_plic_logs < 128) {
+        agent_log_plic_event("PLIC pending latched", "H2-plic-eligible", kPlicPending,
+                             plic_pending_bits());
+        agent_plic_logs++;
+      }
+    }
+  }
+
+  // Re-evaluate the UART's contribution to source 1 (called when IER changes).
+  // Latches a pending interrupt while THRI is enabled; drops it once the driver
+  // disables THRI, provided VirtIO is idle and the source is not in service.
+  void update_uart_plic() {
+    if (uart_irq_pending()) {
+      refresh_plic_pending();
+    } else if (!plic_source_pending1 && !plic_claimed1) {
+      plic_pending1 = false;
     }
   }
 
@@ -601,9 +698,9 @@ struct UnifiedMem {
     if (source_id != 1u) return;
     plic_source_pending1 = pending;
     if (!pending) {
-      plic_pending1 = false;
-      if (!plic_claimed1) {
-        plic_claimed1 = false;
+      // Keep the line asserted if the UART still requests source 1.
+      if (!uart_irq_pending()) {
+        plic_pending1 = false;
       }
       return;
     }
@@ -618,6 +715,10 @@ struct UnifiedMem {
     if (!plic_source1_eligible()) return 0u;
     plic_pending1 = false;
     plic_claimed1 = true;
+    if (agent_plic_logs < 128) {
+      agent_log_plic_event("PLIC claim read", "H2-plic-eligible", kPlicClaimCompleteM, 1u);
+      agent_plic_logs++;
+    }
     return 1u;
   }
 
@@ -625,6 +726,10 @@ struct UnifiedMem {
     if (data != 1u) return;
     plic_claimed1 = false;
     refresh_plic_pending();
+    if (agent_plic_logs < 128) {
+      agent_log_plic_event("PLIC complete write", "H2-plic-eligible", kPlicClaimCompleteM, data);
+      agent_plic_logs++;
+    }
   }
 
   void write_word(uint32_t addr, uint32_t data) {
@@ -651,14 +756,26 @@ struct UnifiedMem {
 
     if (aligned == kPlicPriority1) {
       plic_priority1 = (data & 0x7u);
+      if (agent_plic_logs < 128) {
+        agent_log_plic_event("PLIC priority write", "H2-plic-eligible", aligned, data);
+        agent_plic_logs++;
+      }
       return;
     }
     if (aligned == kPlicEnableM) {
       plic_enable_m = data;
+      if (agent_plic_logs < 128) {
+        agent_log_plic_event("PLIC enable write", "H2-plic-eligible", aligned, data);
+        agent_plic_logs++;
+      }
       return;
     }
     if (aligned == kPlicThresholdM) {
       plic_threshold_m = (data & 0x7u);
+      if (agent_plic_logs < 128) {
+        agent_log_plic_event("PLIC threshold write", "H2-plic-eligible", aligned, data);
+        agent_plic_logs++;
+      }
       return;
     }
     if (aligned == kPlicClaimCompleteM) {
@@ -675,6 +792,14 @@ struct UnifiedMem {
 
     if (in_virtio_blk(aligned)) {
       virtio_mmio_write(aligned, data);
+      return;
+    }
+
+    if (aligned >= kPlicBase && aligned < (kPlicBase + 0x04000000u)) {
+      if (agent_plic_unhandled_logs < 128) {
+        agent_log_plic_event("Unhandled PLIC write", "H2-plic-context-address", aligned, data);
+        agent_plic_unhandled_logs++;
+      }
       return;
     }
 
@@ -811,6 +936,12 @@ struct UnifiedMem {
   uint32_t read_word(uint32_t addr) {
     uint32_t aligned = addr & ~0x3u;
     if (aligned == kPlicClaimCompleteM) return plic_claim_read();
+    if (aligned >= kPlicBase && aligned < (kPlicBase + 0x04000000u) &&
+        aligned != kPlicPriority1 && aligned != kPlicPending && aligned != kPlicEnableM &&
+        aligned != kPlicThresholdM && agent_plic_unhandled_logs < 128) {
+      agent_log_plic_event("Unhandled PLIC read", "H2-plic-context-address", aligned, 0u);
+      agent_plic_unhandled_logs++;
+    }
     return read_word_common(aligned);
   }
 
@@ -819,7 +950,7 @@ struct UnifiedMem {
     return read_word_common(aligned);
   }
 
-  void fill_line(uint32_t line_addr, std::array<uint32_t, 8> &line) const {
+  void fill_line(uint32_t line_addr, std::array<uint32_t, 8> &line) {
     for (int i = 0; i < 8; i++) {
       line[i] = read_word(line_addr + 4u * static_cast<uint32_t>(i));
     }
