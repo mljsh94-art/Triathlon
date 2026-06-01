@@ -9,10 +9,7 @@
 !README.md
 !.gitignore
 !init.sh
-!/fceux-am/*
 !/am-kernels/*
-!merge.py
-!build_kernel.sh
 !CLAUDE.md
 .vscode
 .worktrees/
@@ -21,7 +18,11 @@
 nemu/
 opensbi/
 echo_payload/
-linux_workspace/
+fceux-am/
+linux_workspace/*
+!linux_workspace/merge.py
+!linux_workspace/build_kernel.sh
+!linux_workspace/fw_combined.bin
 
 # Local logs (do not track)
 my_lab_log/
