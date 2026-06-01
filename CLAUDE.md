@@ -89,8 +89,8 @@ Triathlon/
 ├── linux_workspace/                 # Linux 构建脚本与预合并镜像（内核树本地自备）
 │   ├── build_kernel.sh              # 生成最小 RV32 Linux 配置并编译 Image
 │   ├── merge.py                     # 合并 OpenSBI + Linux Image + DTB → fw_combined.bin
-│   ├── fw_combined.bin              # 全系统仿真镜像（加载到 0x80000000）
 │   └── build/triathlon.dtb          # merge.py 生成的 DTB（gitignore 或未跟踪）
+├── fw_combined.bin                  # 全系统仿真镜像（加载到 0x80000000）
 └── Makefile                         # Top-level build script
 ```
 
@@ -425,7 +425,7 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 **典型全系统复现命令**
 
 ```bash
-make -C npc sim DIFFTEST_SO= IMG=../linux_workspace/fw_combined.bin \
+make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
   ARGS='--max-cycles=70000000 --progress=2000000 --linux-early-debug' \
   > npc/sim_debug.log 2>&1
 # 故障复现后检查: debug-<sessionId>.log（位于仓库根目录）
@@ -463,7 +463,7 @@ make -C npc sim DIFFTEST= IMG=.../dhrystone-riscv32i-npc.bin \
 make -C npc sim IMG=.../test.bin ARGS='--commit-trace 100000:150000'
 
 # merge.py 全系统镜像 + 早期调试
-make -C npc sim DIFFTEST_SO= IMG=../linux_workspace/fw_combined.bin \
+make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
   ARGS='--max-cycles=2000000 --progress=500000 --linux-early-debug'
 
 # Boot handoff + VirtIO（linux-smoke 风格）
@@ -618,7 +618,7 @@ make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(np
 | `linux_workspace/linux/arch/riscv/boot/Image` | Linux 输入 |
 | `opensbi/platform/triathlon/triathlon.dts` | DTB 源（有 `dtc` 时编译） |
 | `build/triathlon.dtb` | 生成的 DTB |
-| `fw_combined.bin` | 合并输出（`linux_workspace/fw_combined.bin`） |
+| `fw_combined.bin` | 合并输出（仓库根目录） |
 
 ```bash
 python3 linux_workspace/merge.py
@@ -637,7 +637,7 @@ make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(np
 python3 linux_workspace/merge.py
 
 # 4. 仿真
-make -C npc sim DIFFTEST_SO= IMG=../linux_workspace/fw_combined.bin \
+make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
   ARGS='--max-cycles=100000000 --progress=1000000 --linux-early-debug'
 ```
 
@@ -657,7 +657,7 @@ wsl bash -c "make -C /mnt/e/vivado_project/OOOcpu_design/Triathlon/opensbi PLATF
 wsl bash -c "make -C /mnt/e/vivado_project/OOOcpu_design/Triathlon/linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(nproc) Image"
 
 # 3. 合并镜像并仿真
-wsl bash -c "cd /mnt/e/vivado_project/OOOcpu_design/Triathlon && python3 linux_workspace/merge.py && make -C npc sim IMG=/mnt/e/vivado_project/OOOcpu_design/Triathlon/linux_workspace/fw_combined.bin DIFFTEST_SO= ARGS='--max-cycles=100000000 --progress=1000000 --linux-early-debug' > npc/sim_final_verify.log 2>&1"
+wsl bash -c "cd /mnt/e/vivado_project/OOOcpu_design/Triathlon && python3 linux_workspace/merge.py && make -C npc sim IMG=/mnt/e/vivado_project/OOOcpu_design/Triathlon/fw_combined.bin DIFFTEST_SO= ARGS='--max-cycles=100000000 --progress=1000000 --linux-early-debug' > npc/sim_final_verify.log 2>&1"
 ```
 
 #### 流程步骤
@@ -672,9 +672,9 @@ wsl bash -c "cd /mnt/e/vivado_project/OOOcpu_design/Triathlon && python3 linux_w
    - 读取 `opensbi/build/platform/triathlon/firmware/fw_jump.bin`
    - 读取 `linux_workspace/linux/arch/riscv/boot/Image`
    - 生成 `linux_workspace/build/triathlon.dtb`（优先 `dtc` + `triathlon.dts`，否则内置 DTB）
-   - 输出 `linux_workspace/fw_combined.bin`（布局见上表）
+   - 输出 `fw_combined.bin`（布局见上表）
 4. **启动 Verilator 仿真 (`make -C npc sim ...`)**
-   - **`IMG=...`**: 加载 `linux_workspace/fw_combined.bin` 到 `0x80000000`
+   - **`IMG=...`**: 加载 `fw_combined.bin` 到 `0x80000000`
    - **`DIFFTEST_SO=`**: 置空以禁用 DiffTest（OpenSBI/Linux 涉及 SV32 MMU、特权级 CSR 与外设，bare-metal NEMU 无法对齐）
    - 仿真扩展参数见 **§4 仿真器命令行扩展参数**（常用：`--max-cycles`、`--progress`、`--linux-early-debug`、`--commit-trace` 等）
 

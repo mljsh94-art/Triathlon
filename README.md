@@ -18,7 +18,7 @@ Triathlon/
 ├── linux_workspace/     # Linux 构建脚本、预合并镜像（见下文；不含内核源码树）
 │   ├── build_kernel.sh  # 生成最小 RV32 Linux 配置并编译 Image
 │   ├── merge.py         # 合并 OpenSBI + Linux Image + DTB → fw_combined.bin
-│   └── fw_combined.bin  # 预构建全系统仿真镜像（可 git 拉取后直接仿真）
+├── fw_combined.bin      # 预构建全系统仿真镜像（可 git 拉取后直接仿真）
 ├── echo_payload/        # 可选最小 S-mode payload（不参与 merge.py 默认流程）
 └── CLAUDE.md            # 开发/仿真详细文档
 ```
@@ -198,7 +198,7 @@ export CROSS_COMPILE=riscv64-linux-gnu-
 python3 linux_workspace/merge.py
 ```
 
-生成 **`linux_workspace/fw_combined.bin`**，布局：
+生成仓库根目录 **`fw_combined.bin`**，布局：
 
 | 组件 | 物理地址 |
 |------|----------|
@@ -213,7 +213,7 @@ python3 linux_workspace/merge.py
 Linux/OpenSBI 涉及 SV32 MMU 与特权级，**请禁用 DiffTest**：
 
 ```bash
-make -C npc sim DIFFTEST= IMG=../linux_workspace/fw_combined.bin \
+make -C npc sim DIFFTEST= IMG=../fw_combined.bin \
   ARGS='--max-cycles=100000000 --progress=1000000'
 ```
 
@@ -232,7 +232,7 @@ make -C npc sim DIFFTEST= IMG=../linux_workspace/fw_combined.bin \
 2. **Linux 仿真不要开 DiffTest** — bare-metal NEMU 无法对齐全系统 SV32/PLIC 行为，请 `DIFFTEST=`。
 3. **`merge.py` 报缺文件** — 先完成 OpenSBI 与 `./linux_workspace/build_kernel.sh`，并确认 `linux_workspace/linux` 存在。
 4. **工具链** — OpenSBI 与 Linux 推荐 `riscv64-linux-gnu-`；`linux_workspace/build_kernel.sh` 默认 `../toolchain/bin/riscv32-linux-musl-` 仅在你本地放了 toolchain 时有效。
-5. **跳过本地编译** — 仓库已包含 `linux_workspace/fw_combined.bin`，可直接 `make -C npc sim DIFFTEST= IMG=../linux_workspace/fw_combined.bin`。
+5. **跳过本地编译** — 仓库已包含根目录 `fw_combined.bin`，可直接 `make -C npc sim DIFFTEST= IMG=../fw_combined.bin`。
 
 ---
 

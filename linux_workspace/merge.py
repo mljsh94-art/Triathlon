@@ -16,7 +16,7 @@ FW_JUMP_BIN = REPO_ROOT / "opensbi/build/platform/triathlon/firmware/fw_jump.bin
 LINUX_IMAGE = WORKSPACE / "linux/arch/riscv/boot/Image"
 DTS_PATH = REPO_ROOT / "opensbi/platform/triathlon/triathlon.dts"
 DTB_PATH = WORKSPACE / "build/triathlon.dtb"
-OUT_PATH = WORKSPACE / "fw_combined.bin"
+OUT_PATH = REPO_ROOT / "fw_combined.bin"
 
 
 def read_binary(path: Path) -> bytes:

@@ -11,6 +11,7 @@
 !init.sh
 !/am-kernels/*
 !CLAUDE.md
+!fw_combined.bin
 .vscode
 .worktrees/
 
@@ -22,7 +23,6 @@ fceux-am/
 linux_workspace/*
 !linux_workspace/merge.py
 !linux_workspace/build_kernel.sh
-!linux_workspace/fw_combined.bin
 
 # Local logs (do not track)
 my_lab_log/
