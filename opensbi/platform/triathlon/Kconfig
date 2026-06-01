@@ -1,6 +1,0 @@
-config PLATFORM_TRIATHLON
-	bool
-	select IRQCHIP_PLIC
-	select SERIAL_UART8250
-	select TIMER_MTIMER
-	default y

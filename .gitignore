@@ -1,7 +1,6 @@
 ﻿*.*
 *
 !*/
-!/nemu/*
 !/nexus-am/*
 !/nanos-lite/*
 !/navy-apps/*
@@ -12,24 +11,23 @@
 !init.sh
 !/fceux-am/*
 !/am-kernels/*
-!/opensbi/**
-!/echo_payload/**
 !merge.py
 !build_kernel.sh
 !CLAUDE.md
 .vscode
 .worktrees/
 
+# Third-party / large trees (keep local, do not track)
+nemu/
+opensbi/
+echo_payload/
+linux_workspace/
+
 # Local logs (do not track)
 my_lab_log/
 
 # Build outputs (keep local, do not track)
 **/build/
-!/linux_workspace/
-!linux_workspace/**
-linux_workspace/linux/
-linux_workspace/toolchain/
-linux_workspace/**/build/
 
 # Agent debug NDJSON logs (local only)
 debug-*.log

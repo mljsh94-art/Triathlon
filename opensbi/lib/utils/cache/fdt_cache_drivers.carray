@@ -1,3 +1,0 @@
-HEADER: sbi_utils/cache/fdt_cache.h
-TYPE: const struct fdt_driver
-NAME: fdt_cache_drivers
