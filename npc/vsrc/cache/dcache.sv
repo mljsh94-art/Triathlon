@@ -201,6 +201,7 @@ module dcache #(
   logic [LD_PORT_ID_WIDTH-1:0] sel_id;
   logic ld_req_line_in_mshr;
   logic st_req_line_in_mshr;
+  logic st_req_is_mmio;
   logic rsp_fire_w;
   logic rsp_handoff_use_pending_w;
   logic rsp_handoff_use_live_req_w;
@@ -224,9 +225,11 @@ module dcache #(
     ld_req_ready_o = ((state_q == S_IDLE) || (state_q == S_RESP)) &&
                      !pending_ld_valid_q && !flush_i && !refill_valid_i &&
                      (!ld_req_valid_i || !ld_req_line_in_mshr);
-    st_req_ready_o = (state_q == S_IDLE) && !pending_ld_valid_q && !ld_req_valid_i &&
-                     mshr_empty && !flush_i && !refill_valid_i &&
-                     (!st_req_valid_i || !st_req_line_in_mshr);
+    st_req_ready_o = st_req_is_mmio
+                         ? ((state_q == S_IDLE) && !flush_i)
+                         : ((state_q == S_IDLE) && !pending_ld_valid_q && !ld_req_valid_i &&
+                            mshr_empty && !flush_i && !refill_valid_i &&
+                            (!st_req_valid_i || !st_req_line_in_mshr));
 
     sel_is_load    = 1'b0;
     sel_is_store   = 1'b0;
@@ -253,7 +256,7 @@ module dcache #(
         sel_op      = ld_req_op_i;
         sel_wdata   = '0;
         sel_id      = ld_req_id_i;
-      end else if (st_req_valid_i && st_req_ready_o) begin
+      end else if (st_req_valid_i && st_req_ready_o && !st_req_is_mmio) begin
         sel_is_store = 1'b1;
         sel_addr     = st_req_addr_i;
         sel_op       = st_req_op_i;
@@ -298,6 +301,7 @@ module dcache #(
   assign sel_byte_off  = sel_addr[OFFSET_WIDTH-1:0];
   assign ld_req_line_addr = ld_req_addr_i[Cfg.PLEN-1:OFFSET_WIDTH];
   assign st_req_line_addr = st_req_addr_i[Cfg.PLEN-1:OFFSET_WIDTH];
+  assign st_req_is_mmio   = config_pkg::is_mmio_addr({{(32 - Cfg.PLEN) {1'b0}}, st_req_addr_i});
 
   logic [SETS_PER_BANK_WIDTH-1:0] sel_bank_addr;
   logic [     BANK_SEL_WIDTH-1:0] sel_bank_sel;

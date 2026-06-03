@@ -63,6 +63,18 @@ module lsu_group #(
     output logic                ld_rsp_ready_o,
     input  logic [Cfg.XLEN-1:0] ld_rsp_data_i,
     input  logic                ld_rsp_err_i,
+
+    // =========================================================
+    // 3b) MMIO Uncached Load interface (bypass D-Cache)
+    // =========================================================
+    output logic                               mmio_req_valid_o,
+    input  logic                               mmio_req_ready_i,
+    output logic                [Cfg.PLEN-1:0] mmio_req_addr_o,
+    output decode_pkg::lsu_op_e                mmio_req_op_o,
+
+    input  logic                               mmio_rsp_valid_i,
+    input  logic [Cfg.XLEN-1:0]                mmio_rsp_data_i,
+
     output logic                pte_req_valid_o,
     input  logic                pte_req_ready_i,
     output logic [31:0]         pte_req_paddr_o,
@@ -176,6 +188,13 @@ module lsu_group #(
   logic                [         N_LSU-1:0]                    lane_wb_is_mispred;
   logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_wb_redirect_pc;
   logic                [         N_LSU-1:0]                    lane_wb_ready;
+
+  // Per-lane MMIO interface signals
+  logic                [         N_LSU-1:0]                    lane_mmio_req_valid;
+  logic                [         N_LSU-1:0]                    lane_mmio_req_ready;
+  logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_mmio_req_addr;
+  decode_pkg::lsu_op_e                                         lane_mmio_req_op     [N_LSU];
+  logic                [         N_LSU-1:0]                    lane_mmio_rsp_valid;
 
   logic                [         N_LSU-1:0]                    alloc_grant;
   logic                [LANE_SEL_WIDTH-1:0]                    alloc_lane_idx;
@@ -614,6 +633,15 @@ module lsu_group #(
           .ld_rsp_data_i,
           .ld_rsp_err_i,
 
+          // MMIO bypass
+          .rob_head_i(rob_head_i),
+          .mmio_req_valid_o(lane_mmio_req_valid[gi]),
+          .mmio_req_ready_i(lane_mmio_req_ready[gi]),
+          .mmio_req_addr_o(lane_mmio_req_addr[gi]),
+          .mmio_req_op_o(lane_mmio_req_op[gi]),
+          .mmio_rsp_valid_i(lane_mmio_rsp_valid[gi]),
+          .mmio_rsp_data_i(mmio_rsp_data_i),
+
           .wb_valid_o(lane_wb_valid[gi]),
           .wb_rob_idx_o(lane_wb_rob_idx[gi]),
           .wb_data_o(lane_wb_data[gi]),
@@ -624,9 +652,29 @@ module lsu_group #(
           .wb_ready_i(lane_wb_ready[gi])
       );
 
-      assign dbg_lane_busy[gi] = lane_ld_req_valid[gi] | lane_ld_rsp_ready[gi] | lane_wb_valid[gi];
+      assign dbg_lane_busy[gi] = lane_ld_req_valid[gi] | lane_ld_rsp_ready[gi] | lane_wb_valid[gi] | lane_mmio_req_valid[gi];
     end
   endgenerate
+
+  // ---------------------------------------------------------
+  // MMIO request arbitration (priority: lowest lane index)
+  // ---------------------------------------------------------
+  always_comb begin
+    mmio_req_valid_o  = 1'b0;
+    mmio_req_addr_o   = '0;
+    mmio_req_op_o     = decode_pkg::LSU_LW;
+    lane_mmio_req_ready = '0;
+    lane_mmio_rsp_valid = '0;
+    for (int i = 0; i < N_LSU; i++) begin
+      if (!mmio_req_valid_o && lane_mmio_req_valid[i]) begin
+        mmio_req_valid_o       = 1'b1;
+        mmio_req_addr_o        = lane_mmio_req_addr[i];
+        mmio_req_op_o          = lane_mmio_req_op[i];
+        lane_mmio_req_ready[i] = mmio_req_ready_i;
+        lane_mmio_rsp_valid[i] = mmio_rsp_valid_i;
+      end
+    end
+  end
 
   assign state_q    = g_lanes[0].u_lane.state_q;
   assign req_tag_q  = g_lanes[0].u_lane.req_tag_q;

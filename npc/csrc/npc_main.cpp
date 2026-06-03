@@ -14,7 +14,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -82,6 +81,7 @@ int main(int argc, char **argv) {
   }
   mem.icache.mem = &mem.mem;
   mem.dcache.mem = &mem.mem;
+  mem.mmio.mem   = &mem.mem;
 
   auto *top = new Vtb_triathlon;
   VerilatedVcdC *tfp = nullptr;
@@ -148,29 +148,6 @@ int main(int argc, char **argv) {
   uint64_t linux_satp_change_logs = 0;
   uint64_t linux_gp_write_logs = 0;
   uint64_t linux_exc_pair_step_logs = 0;
-  uint64_t agent_priv_fault_logs = 0;
-  // #region agent log
-  // Architectural ground-truth trace around the user-page instruction-fault loop.
-  // Arms on the first user-VA instruction page fault, then records only the events
-  // that discriminate "SRET committed & priv dropped to U" (ARCH) from
-  // "SRET never commits / priv stuck at S" (SPEC preemption): priv transitions,
-  // committed SRET/MRET, and exception flushes.
-  uint64_t agent_arch_trace_logs = 0;
-  bool agent_arch_armed = false;
-  uint32_t agent_prev_priv = 0xffu;
-  constexpr uint64_t kAgentArchTraceLogLimit = 800;
-  uint64_t agent_user_ecall_logs = 0;
-  constexpr uint64_t kAgentUserEcallLogLimit = 32;
-  uint64_t agent_user_return_logs = 0;
-  constexpr uint64_t kAgentUserReturnLogLimit = 32;
-  // After the livelock fix, busybox panics with a user-mode SIGILL (cause=2).
-  // Capture the REAL instruction bytes at the faulting user VA (translate via SV32)
-  // AND the instruction the CPU actually committed at that PC, to discriminate:
-  //   N1/N2: legal bytes wrongly rejected by decoder / unsupported encoding, vs
-  //   N3:    fetch corruption (cpu-decoded word != memory bytes).
-  uint64_t agent_illegal_inst_logs = 0;
-  constexpr uint64_t kAgentIllegalInstLogLimit = 40;
-  // #endregion
   uint64_t last_fw_text_write_count = 0;
   uint32_t last_commit_pc_seen = 0xffffffffu;
   uint32_t last_satp_seen = 0xffffffffu;
@@ -189,7 +166,6 @@ int main(int argc, char **argv) {
   constexpr uint64_t kLinuxGpWriteLogLimit = 256;
   constexpr uint64_t kLinuxExcPairLogLimit = 512;
   constexpr uint64_t kLinuxPtWriteLogLimit = 2048;
-  constexpr uint64_t kAgentPrivFaultLogLimit = 32;
   constexpr uint32_t kLinuxRelocPcBegin = 0x80801040u;
   constexpr uint32_t kLinuxRelocPcEnd = 0x808010b0u;
   constexpr uint32_t kLinuxFsctxPcBegin = 0xc01d0660u;
@@ -346,7 +322,8 @@ int main(int argc, char **argv) {
     npc::tick(top, mem, tfp, sim_time);
     profile.observe_cycle(top);
 
-    if (top->dbg_sb_dcache_req_valid_o && top->dbg_sb_dcache_req_ready_o) {
+    if (top->dbg_sb_dcache_req_valid_o && top->dbg_sb_dcache_req_ready_o &&
+        npc::UnifiedMem::in_pmem(top->dbg_sb_dcache_req_addr_o)) {
       uint32_t addr = top->dbg_sb_dcache_req_addr_o;
       uint32_t data = top->dbg_sb_dcache_req_data_o;
       uint32_t op = top->dbg_sb_dcache_req_op_o;
@@ -451,75 +428,6 @@ int main(int argc, char **argv) {
         top->dbg_rob_flush_is_exception_o) {
       uint32_t src_pc = top->dbg_rob_flush_src_pc_o;
       uint32_t src_inst = mem.mem.read_word(src_pc);
-      // #region agent log
-      // N1-N3: user-mode illegal-instruction (cause=2) capture. Translate the faulting
-      // user VA -> PA via a read-only SV32 walk and read the REAL instruction bytes,
-      // and also scan commit slots for the word the CPU actually decoded at that PC.
-      if (agent_illegal_inst_logs < kAgentIllegalInstLogLimit &&
-          static_cast<uint32_t>(top->dbg_rob_flush_cause_o) == 2u) {
-        const uint32_t satp = top->dbg_csr_satp_o;
-        uint32_t pa = 0;
-        bool translated = false;
-        if (satp & 0x80000000u) {
-          const uint32_t root_base = (satp & 0x003fffffu) << 12;
-          const uint32_t vpn1 = src_pc >> 22;
-          const uint32_t vpn0 = (src_pc >> 12) & 0x3ffu;
-          const uint32_t off = src_pc & 0xfffu;
-          uint32_t l1_pte = 0;
-          if (mem.mem.read_phys_u32(root_base + (vpn1 << 2), l1_pte) && (l1_pte & 0x1u)) {
-            if (l1_pte & 0xau) {
-              pa = (((l1_pte >> 20) & 0xfffu) << 22) | (vpn0 << 12) | off;
-              translated = true;
-            } else {
-              const uint32_t l0_base = ((l1_pte >> 10) & 0x003fffffu) << 12;
-              uint32_t l0_pte = 0;
-              if (mem.mem.read_phys_u32(l0_base + (vpn0 << 2), l0_pte) &&
-                  (l0_pte & 0x1u) && (l0_pte & 0xau)) {
-                pa = (((l0_pte >> 10) & 0x003fffffu) << 12) | off;
-                translated = true;
-              }
-            }
-          }
-        }
-        uint32_t real_word = 0;
-        if (translated) {
-          uint32_t w0 = 0, w1 = 0;
-          mem.mem.read_phys_u32(pa & ~0x3u, w0);
-          mem.mem.read_phys_u32((pa & ~0x3u) + 4u, w1);
-          const uint32_t shift = (pa & 0x3u) * 8u;
-          const uint64_t comb = (static_cast<uint64_t>(w1) << 32) | w0;
-          real_word = static_cast<uint32_t>(comb >> shift);
-        }
-        uint32_t cpu_inst = 0;
-        bool cpu_inst_found = false;
-        for (uint32_t s = 0; s < cfg_commit_width; s++) {
-          if (((top->commit_valid_o >> s) & 0x1u) == 0u) continue;
-          if (top->commit_pc_o[s] == src_pc) {
-            cpu_inst = top->commit_inst_o[s];
-            cpu_inst_found = true;
-          }
-        }
-        std::ofstream("../debug-fd94f9.log", std::ios::app)
-            << "{\"sessionId\":\"fd94f9\",\"runId\":\"illegal-inst\",\"hypothesisId\":\"N1-N3\","
-            << "\"location\":\"npc/csrc/npc_main.cpp:illegal_inst\","
-            << "\"message\":\"User-mode illegal-instruction trap: real vs decoded\","
-            << "\"timestamp\":" << std::dec << cycles
-            << ",\"data\":{\"cycle\":" << cycles
-            << ",\"srcPc\":\"0x" << std::hex << src_pc
-            << "\",\"priv\":" << std::dec << static_cast<uint32_t>(top->dbg_csr_priv_mode_o)
-            << ",\"satp\":\"0x" << std::hex << satp
-            << "\",\"translated\":" << std::dec << (translated ? 1 : 0)
-            << ",\"pa\":\"0x" << std::hex << pa
-            << "\",\"realInstWord\":\"0x" << real_word
-            << "\",\"realInst16\":\"0x" << (real_word & 0xffffu)
-            << "\",\"cpuInstFound\":" << std::dec << (cpu_inst_found ? 1 : 0)
-            << ",\"cpuInst\":\"0x" << std::hex << cpu_inst
-            << "\",\"scause\":\"0x" << top->dbg_csr_scause_o
-            << "\",\"stval\":\"0x" << top->dbg_csr_stval_o
-            << std::dec << "\"}}\n";
-        agent_illegal_inst_logs++;
-      }
-      // #endregion
       if (args.linux_early_debug && !linux_stages.all_seen()) {
         npc::LinuxBootStageView flush_view = make_linux_stage_view(cycles, 0, src_pc, src_inst, rf);
         linux_stages.on_flush(flush_view, src_pc, src_inst, mem.mem);
@@ -530,77 +438,6 @@ int main(int argc, char **argv) {
         if (pc_changed || periodic_log) {
           uint32_t flush_cause = static_cast<uint32_t>(top->dbg_rob_flush_cause_o);
           uint32_t trap_tval = top->dbg_csr_trap_tval_o;
-          // #region agent log
-          if (agent_user_ecall_logs < kAgentUserEcallLogLimit &&
-              flush_cause == 8u &&
-              static_cast<uint32_t>(top->dbg_csr_priv_mode_o) == 0u) {
-            std::ofstream("../debug-aeea27.log", std::ios::app)
-                << "{\"sessionId\":\"aeea27\",\"runId\":\"user-write-syscall\","
-                << "\"hypothesisId\":\"H5-user-ecall-args\","
-                << "\"location\":\"npc/csrc/npc_main.cpp:user_ecall_flush\","
-                << "\"message\":\"U-mode ecall trap arguments\","
-                << "\"timestamp\":" << std::dec << cycles
-                << ",\"data\":{\"srcPc\":\"0x" << std::hex << src_pc
-                << "\",\"inst\":\"0x" << src_inst
-                << "\",\"a0\":\"0x" << rf[10]
-                << "\",\"a1\":\"0x" << rf[11]
-                << "\",\"a2\":\"0x" << rf[12]
-                << "\",\"a3\":\"0x" << rf[13]
-                << "\",\"a7\":\"0x" << rf[17]
-                << "\",\"satp\":\"0x" << top->dbg_csr_satp_o
-                << "\",\"stvec\":\"0x" << top->dbg_csr_stvec_o
-                << "\",\"sepc\":\"0x" << top->dbg_csr_sepc_o
-                << "\",\"scause\":\"0x" << top->dbg_csr_scause_o
-                << "\",\"stval\":\"0x" << top->dbg_csr_stval_o
-                << "\",\"mstatus\":\"0x" << top->dbg_csr_mstatus_o
-                << "\",\"uartTxBytes\":" << std::dec << mem.mem.uart_tx_bytes
-                << ",\"uartIer\":\"0x" << std::hex << static_cast<uint32_t>(mem.mem.uart_ier)
-                << "\",\"plicPending\":\"0x" << mem.mem.plic_pending_bits()
-                << "\"}}\n";
-            agent_user_ecall_logs++;
-          }
-          // #endregion
-          // #region agent log
-          if (agent_priv_fault_logs < kAgentPrivFaultLogLimit &&
-              flush_cause == 12 && top->dbg_csr_priv_mode_o == 1 &&
-              trap_tval >= 0x90000000u && trap_tval < 0xc0000000u) {
-            const uint32_t fault_va = trap_tval;
-            const uint32_t satp = top->dbg_csr_satp_o;
-            const uint32_t root_base = (satp & 0x003fffffu) << 12;
-            const uint32_t vpn1 = fault_va >> 22;
-            const uint32_t vpn0 = (fault_va >> 12) & 0x3ffu;
-            const uint32_t l1_addr = root_base + (vpn1 << 2);
-            const uint32_t l1_pte = mem.mem.read_word(l1_addr);
-            const bool l1_valid = (l1_pte & 0x1u) != 0u && !((l1_pte & 0x4u) && !(l1_pte & 0x2u));
-            const bool l1_leaf = (l1_pte & 0xau) != 0u;
-            uint32_t l0_addr = 0;
-            uint32_t l0_pte = 0;
-            if (l1_valid && !l1_leaf) {
-              l0_addr = ((l1_pte >> 10) << 12) + (vpn0 << 2);
-              l0_pte = mem.mem.read_word(l0_addr);
-            }
-            std::ofstream("../debug-fd94f9.log", std::ios::app)
-                << "{\"sessionId\":\"fd94f9\",\"runId\":\"priv-mismatch-flush\","
-                << "\"hypothesisId\":\"H1-H3\","
-                << "\"location\":\"npc/csrc/npc_main.cpp:flush_exception\","
-                << "\"message\":\"S-mode instruction page fault on user virtual page\","
-                << "\"timestamp\":" << cycles
-                << ",\"data\":{\"cycle\":" << cycles
-                << ",\"srcPc\":\"0x" << std::hex << src_pc
-                << "\",\"faultVa\":\"0x" << fault_va
-                << "\",\"satp\":\"0x" << satp
-                << "\",\"mstatus\":\"0x" << top->dbg_csr_mstatus_o
-                << "\",\"sepc\":\"0x" << top->dbg_csr_sepc_o
-                << "\",\"stval\":\"0x" << top->dbg_csr_stval_o
-                << "\",\"scause\":\"0x" << top->dbg_csr_scause_o
-                << "\",\"l1Pte\":\"0x" << l1_pte
-                << "\",\"l0Pte\":\"0x" << l0_pte
-                << "\",\"l0User\":" << std::dec << static_cast<int>((l0_pte & 0x10u) != 0u)
-                << ",\"l0Exec\":" << static_cast<int>((l0_pte & 0x8u) != 0u)
-                << "}}\n";
-            agent_priv_fault_logs++;
-          }
-          // #endregion
           std::ios::fmtflags f(std::cout.flags());
           std::cout << "[debug][flush-exc] cycle=" << cycles
                     << " src_pc=0x" << std::hex << src_pc
@@ -652,68 +489,6 @@ int main(int argc, char **argv) {
         linux_flush_any_logs++;
       }
     }
-
-    // #region agent log
-    {
-      const uint32_t arch_priv = static_cast<uint32_t>(top->dbg_csr_priv_mode_o);
-      const bool exc_flush_now = top->backend_flush_o && top->dbg_rob_flush_o &&
-                                 top->dbg_rob_flush_is_exception_o;
-      const uint32_t arch_flush_cause = static_cast<uint32_t>(top->dbg_rob_flush_cause_o);
-      const uint32_t arch_trap_tval = top->dbg_csr_trap_tval_o;
-      const bool user_va_tval = (arch_trap_tval >= 0x90000000u) && (arch_trap_tval < 0xc0000000u);
-      // Arm on the first user-VA instruction page fault (cause 12), priv-agnostic,
-      // so we capture the U-mode demand-paging run-up AND the S-mode transition.
-      if (!agent_arch_armed && exc_flush_now && arch_flush_cause == 12u && user_va_tval) {
-        agent_arch_armed = true;
-      }
-      if (agent_arch_armed && agent_arch_trace_logs < kAgentArchTraceLogLimit) {
-        // Detect a committed SRET/MRET this cycle (architectural retirement, not speculation).
-        bool committed_sret = false;
-        bool committed_mret = false;
-        uint32_t sys_slot_pc = 0u;
-        for (uint32_t s = 0; s < cfg_commit_width; s++) {
-          if (((top->commit_valid_o >> s) & 0x1u) == 0u) continue;
-          const uint32_t cinst = top->commit_inst_o[s];
-          if (cinst == 0x10200073u) { committed_sret = true; sys_slot_pc = top->commit_pc_o[s]; }
-          else if (cinst == 0x30200073u) { committed_mret = true; sys_slot_pc = top->commit_pc_o[s]; }
-        }
-        const bool priv_changed = (arch_priv != agent_prev_priv);
-        if (priv_changed || committed_sret || committed_mret || exc_flush_now) {
-          const char *what = exc_flush_now ? "exc-flush"
-                             : committed_sret ? "sret-commit"
-                             : committed_mret ? "mret-commit"
-                             : "priv-change";
-          std::ofstream("../debug-fd94f9.log", std::ios::app)
-              << "{\"sessionId\":\"fd94f9\",\"runId\":\"arch-truth\",\"hypothesisId\":\"H-SPEC-vs-ARCH\","
-              << "\"location\":\"npc/csrc/npc_main.cpp:arch_truth\","
-              << "\"message\":\"Architectural commit/priv/flush ground truth around user ipf loop\","
-              << "\"timestamp\":" << std::dec << cycles
-              << ",\"data\":{\"cycle\":" << cycles
-              << ",\"what\":\"" << what << "\""
-              << ",\"priv\":" << arch_priv
-              << ",\"prevPriv\":" << static_cast<int>(agent_prev_priv)
-              << ",\"privChanged\":" << (priv_changed ? 1 : 0)
-              << ",\"sretCommit\":" << (committed_sret ? 1 : 0)
-              << ",\"mretCommit\":" << (committed_mret ? 1 : 0)
-              << ",\"sysSlotPc\":\"0x" << std::hex << sys_slot_pc
-              << "\",\"excFlush\":" << std::dec << (exc_flush_now ? 1 : 0)
-              << ",\"flushCause\":" << arch_flush_cause
-              << ",\"flushSrcPc\":\"0x" << std::hex << static_cast<uint32_t>(top->dbg_rob_flush_src_pc_o)
-              << "\",\"trapTval\":\"0x" << arch_trap_tval
-              << "\",\"mstatus\":\"0x" << top->dbg_csr_mstatus_o
-              << "\",\"sepc\":\"0x" << top->dbg_csr_sepc_o
-              << "\",\"scause\":\"0x" << top->dbg_csr_scause_o
-              << "\",\"stval\":\"0x" << top->dbg_csr_stval_o
-              << "\",\"satp\":\"0x" << top->dbg_csr_satp_o
-              << "\",\"robHeadPc\":\"0x" << top->dbg_rob_head_pc_o
-              << "\",\"backendRedirect\":\"0x" << top->backend_redirect_pc_o
-              << std::dec << "\"}}\n";
-          agent_arch_trace_logs++;
-        }
-      }
-      agent_prev_priv = arch_priv;
-    }
-    // #endregion
 
     if (args.bru_trace && top->dbg_bru_wb_valid_o) {
       std::ios::fmtflags f(std::cout.flags());
@@ -774,33 +549,6 @@ int main(int argc, char **argv) {
       uint32_t inst = top->commit_inst_o[i];
       uint32_t decoded_inst = top->commit_decoded_inst_o[i];
       bool is_rvc = ((top->commit_is_rvc_o >> i) & 0x1) != 0;
-      // #region agent log
-      if (agent_user_return_logs < kAgentUserReturnLogLimit &&
-          inst == 0x10200073u &&
-          top->dbg_csr_sepc_o < 0x20000u) {
-        std::ofstream("../debug-aeea27.log", std::ios::app)
-            << "{\"sessionId\":\"aeea27\",\"runId\":\"user-write-return\","
-            << "\"hypothesisId\":\"H6-syscall-return\","
-            << "\"location\":\"npc/csrc/npc_main.cpp:sret_commit\","
-            << "\"message\":\"SRET returns to low user PC after syscall\","
-            << "\"timestamp\":" << std::dec << cycles
-            << ",\"data\":{\"sretPc\":\"0x" << std::hex << pc
-            << "\",\"sepc\":\"0x" << top->dbg_csr_sepc_o
-            << "\",\"a0\":\"0x" << rf[10]
-            << "\",\"a1\":\"0x" << rf[11]
-            << "\",\"a2\":\"0x" << rf[12]
-            << "\",\"a7\":\"0x" << rf[17]
-            << "\",\"mstatus\":\"0x" << top->dbg_csr_mstatus_o
-            << "\",\"scause\":\"0x" << top->dbg_csr_scause_o
-            << "\",\"stval\":\"0x" << top->dbg_csr_stval_o
-            << "\",\"satp\":\"0x" << top->dbg_csr_satp_o
-            << "\",\"uartTxBytes\":" << std::dec << mem.mem.uart_tx_bytes
-            << ",\"uartIer\":\"0x" << std::hex << static_cast<uint32_t>(mem.mem.uart_ier)
-            << "\",\"plicPending\":\"0x" << mem.mem.plic_pending_bits()
-            << "\"}}\n";
-        agent_user_return_logs++;
-      }
-      // #endregion
       uint32_t satp_now = top->dbg_csr_satp_o;
       const bool satp_changed = (satp_now != last_satp_seen);
       if (satp_changed) {
@@ -1340,46 +1088,6 @@ int main(int argc, char **argv) {
           last_linux_wait_log_cycle = cycles;
         }
       }
-      // #region agent log
-      if (args.linux_early_debug && agent_priv_fault_logs < kAgentPrivFaultLogLimit &&
-          top->dbg_csr_priv_mode_o == 1 && top->dbg_csr_scause_o == 12 &&
-          top->dbg_csr_trap_tval_o >= 0x90000000u && top->dbg_csr_trap_tval_o < 0xc0000000u) {
-        const uint32_t fault_va = top->dbg_csr_trap_tval_o;
-        const uint32_t satp = top->dbg_csr_satp_o;
-        const uint32_t root_base = (satp & 0x003fffffu) << 12;
-        const uint32_t vpn1 = fault_va >> 22;
-        const uint32_t vpn0 = (fault_va >> 12) & 0x3ffu;
-        const uint32_t l1_addr = root_base + (vpn1 << 2);
-        const uint32_t l1_pte = mem.mem.read_word(l1_addr);
-        const bool l1_valid = (l1_pte & 0x1u) != 0u && !((l1_pte & 0x4u) && !(l1_pte & 0x2u));
-        const bool l1_leaf = (l1_pte & 0xau) != 0u;
-        uint32_t l0_addr = 0;
-        uint32_t l0_pte = 0;
-        if (l1_valid && !l1_leaf) {
-          l0_addr = ((l1_pte >> 10) << 12) + (vpn0 << 2);
-          l0_pte = mem.mem.read_word(l0_addr);
-        }
-        std::ofstream("debug-fd94f9.log", std::ios::app)
-            << "{\"sessionId\":\"fd94f9\",\"runId\":\"priv-mismatch\",\"hypothesisId\":\"H1-H3\","
-            << "\"location\":\"npc/csrc/npc_main.cpp:agent_priv_fault\","
-            << "\"message\":\"S-mode instruction page fault on user virtual page\","
-            << "\"timestamp\":" << cycles
-            << ",\"data\":{\"cycle\":" << cycles
-            << ",\"lastPc\":\"0x" << std::hex << last_pc
-            << "\",\"faultVa\":\"0x" << fault_va
-            << "\",\"satp\":\"0x" << satp
-            << "\",\"mstatus\":\"0x" << top->dbg_csr_mstatus_o
-            << "\",\"sepc\":\"0x" << top->dbg_csr_sepc_o
-            << "\",\"stval\":\"0x" << top->dbg_csr_stval_o
-            << "\",\"scause\":\"0x" << top->dbg_csr_scause_o
-            << "\",\"l1Pte\":\"0x" << l1_pte
-            << "\",\"l0Pte\":\"0x" << l0_pte
-            << "\",\"l0User\":" << std::dec << static_cast<int>((l0_pte & 0x10u) != 0u)
-            << ",\"l0Exec\":" << static_cast<int>((l0_pte & 0x8u) != 0u)
-            << "}}\n";
-        agent_priv_fault_logs++;
-      }
-      // #endregion
       if (args.linux_early_debug && last_pc >= 0x810042f2u && last_pc < 0x81004460u) {
         std::cout << "[debug][setup-vm] cycle=" << cycles
                   << " last_pc=0x" << std::hex << last_pc

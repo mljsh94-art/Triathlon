@@ -23,6 +23,10 @@ inline constexpr uint32_t kPlicPending = kPlicBase + 0x00001000u;
 inline constexpr uint32_t kPlicEnableM = kPlicBase + 0x00002000u;
 inline constexpr uint32_t kPlicThresholdM = kPlicBase + 0x00200000u;
 inline constexpr uint32_t kPlicClaimCompleteM = kPlicBase + 0x00200004u;
+// Context 1 (S-mode) PLIC registers
+inline constexpr uint32_t kPlicEnableS         = kPlicBase + 0x00002080u;
+inline constexpr uint32_t kPlicThresholdS      = kPlicBase + 0x00201000u;
+inline constexpr uint32_t kPlicClaimCompleteS  = kPlicBase + 0x00201004u;
 inline constexpr uint32_t kVirtioBlkBase = 0x10001000u;
 inline constexpr uint32_t kVirtioBlkSize = 0x00001000u;
 inline constexpr uint32_t kVirtioBlkIrqId = 1u;

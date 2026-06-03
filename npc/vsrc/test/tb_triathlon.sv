@@ -47,6 +47,15 @@ module tb_triathlon #(
     output logic [             Cfg.PLEN-1:0] dcache_wb_req_paddr_o,
     output logic [Cfg.DCACHE_LINE_WIDTH-1:0] dcache_wb_req_data_o,
 
+    // MMIO Uncached Load interface
+    output logic                               mmio_req_valid_o,
+    input  logic                               mmio_req_ready_i,
+    output logic [             Cfg.PLEN-1:0]   mmio_req_addr_o,
+    output logic [$bits(decode_pkg::lsu_op_e)-1:0] mmio_req_op_o,
+
+    input  logic                               mmio_rsp_valid_i,
+    input  logic [           Cfg.XLEN-1:0]     mmio_rsp_data_i,
+
     // Expose commit signals for test
     output logic [Cfg.NRET-1:0]                commit_valid_o,
     output logic [Cfg.NRET-1:0]                commit_we_o,
@@ -349,7 +358,14 @@ module tb_triathlon #(
       .dcache_wb_req_valid_o,
       .dcache_wb_req_ready_i,
       .dcache_wb_req_paddr_o,
-      .dcache_wb_req_data_o
+      .dcache_wb_req_data_o,
+
+      .mmio_req_valid_o,
+      .mmio_req_ready_i,
+      .mmio_req_addr_o,
+      .mmio_req_op_o,
+      .mmio_rsp_valid_i,
+      .mmio_rsp_data_i
   );
 
   // Expose backend commit signals

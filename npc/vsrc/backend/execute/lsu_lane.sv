@@ -63,6 +63,19 @@ module lsu_lane #(
     input  logic                ld_rsp_err_i,
 
     // =========================================================
+    // 3b) MMIO Uncached Load interface (bypass D-Cache)
+    // =========================================================
+    input  logic [ROB_IDX_WIDTH-1:0] rob_head_i,
+
+    output logic                               mmio_req_valid_o,
+    input  logic                               mmio_req_ready_i,
+    output logic                [Cfg.PLEN-1:0] mmio_req_addr_o,
+    output decode_pkg::lsu_op_e                mmio_req_op_o,
+
+    input  logic                               mmio_rsp_valid_i,
+    input  logic [Cfg.XLEN-1:0]                mmio_rsp_data_i,
+
+    // =========================================================
     // 4) Writeback to ROB/CDB
     // =========================================================
     output logic                     wb_valid_o,
@@ -153,8 +166,10 @@ module lsu_lane #(
   logic [Cfg.XLEN-1:0] req_addr_tval;
   logic handoff_from_resp_w;
   logic handoff_from_ld_rsp_w;
+  logic handoff_from_mmio_rsp_w;
   logic req_fire_w;
   logic is_amo;
+  logic is_mmio;
 
   assign is_load       = uop_i.is_load;
   assign is_store      = uop_i.is_store;
@@ -163,6 +178,7 @@ module lsu_lane #(
   assign eff_addr_xlen = rs1_data_i + uop_i.imm;
   assign eff_addr      = addr_override_valid_i ? addr_override_i : eff_addr_xlen[Cfg.PLEN-1:0];
   assign misaligned    = is_misaligned(uop_i.lsu_op, eff_addr);
+  assign is_mmio       = config_pkg::is_mmio_addr({{(32-Cfg.PLEN){1'b0}}, eff_addr});
 
   assign fwd_data      = extract_fwd(sb_load_data_i, uop_i.lsu_op);
   assign eff_addr_tval = Cfg.XLEN'(eff_addr);
@@ -171,24 +187,29 @@ module lsu_lane #(
   // ---------------------------------------------------------
   // State machine
   // ---------------------------------------------------------
-  typedef enum logic [1:0] {
+  typedef enum logic [2:0] {
     S_IDLE,
     S_LD_REQ,
     S_LD_RSP,
-    S_RESP
+    S_RESP,
+    S_MMIO_WAIT_ROB,  // MMIO Load: wait until instruction reaches ROB head
+    S_MMIO_REQ        // MMIO Load: issue uncached read request
   } lsu_state_e;
 
   function automatic lsu_state_e next_state_after_accept(input logic acc_is_store,
                                                           input logic acc_is_load,
                                                           input logic acc_misaligned,
                                                           input logic acc_force_exception,
-                                                          input logic acc_sb_hit);
+                                                          input logic acc_sb_hit,
+                                                          input logic acc_is_mmio);
     begin
       if (acc_is_store) begin
         next_state_after_accept = S_RESP;
       end else if (acc_is_load) begin
         if (acc_misaligned || acc_force_exception || acc_sb_hit) begin
           next_state_after_accept = S_RESP;
+        end else if (acc_is_mmio) begin
+          next_state_after_accept = S_MMIO_WAIT_ROB;
         end else begin
           next_state_after_accept = S_LD_REQ;
         end
@@ -218,7 +239,8 @@ module lsu_lane #(
   // ---------------------------------------------------------
   assign handoff_from_resp_w = (state_q == S_RESP) && wb_ready_i;
   assign handoff_from_ld_rsp_w = (state_q == S_LD_RSP) && ld_rsp_valid_i && wb_ready_i;
-  assign req_ready_o = !flush_i && ((state_q == S_IDLE) || handoff_from_resp_w || handoff_from_ld_rsp_w);
+  assign handoff_from_mmio_rsp_w = (state_q == S_MMIO_REQ) && mmio_rsp_valid_i && mmio_req_ready_i && wb_ready_i;
+  assign req_ready_o = !flush_i && ((state_q == S_IDLE) || handoff_from_resp_w || handoff_from_ld_rsp_w || handoff_from_mmio_rsp_w);
   assign req_fire_w = req_valid_i && req_ready_o;
 
   // Store buffer execute write (pulse when accepting a store)
@@ -240,6 +262,14 @@ module lsu_lane #(
 
   assign ld_rsp_ready_o = (state_q == S_LD_RSP);
 
+  // D-Cache load port
+  // (MMIO loads never drive the D-Cache port)
+
+  // MMIO uncached load port
+  assign mmio_req_valid_o = (state_q == S_MMIO_REQ);
+  assign mmio_req_addr_o  = req_addr_q;
+  assign mmio_req_op_o    = req_op_q;
+
   // Writeback (to CDB/ROB)
   logic rsp_bypass_wb_valid;
   logic [ROB_IDX_WIDTH-1:0] rsp_bypass_wb_tag;
@@ -253,11 +283,19 @@ module lsu_lane #(
   assign rsp_bypass_wb_exc = ld_rsp_err_i;
   assign rsp_bypass_wb_ecause = ld_rsp_err_i ? EXC_LD_ACCESS_FAULT : '0;
 
-  assign wb_valid_o = (state_q == S_RESP) || rsp_bypass_wb_valid;
-  assign wb_rob_idx_o = rsp_bypass_wb_valid ? rsp_bypass_wb_tag : resp_tag_q;
-  assign wb_data_o = rsp_bypass_wb_valid ? rsp_bypass_wb_data : resp_data_q;
-  assign wb_exception_o = rsp_bypass_wb_valid ? rsp_bypass_wb_exc : resp_exc_q;
-  assign wb_ecause_o = rsp_bypass_wb_valid ? rsp_bypass_wb_ecause : resp_ecause_q;
+  // MMIO bypass writeback
+  logic mmio_bypass_wb_valid;
+  assign mmio_bypass_wb_valid = (state_q == S_MMIO_REQ) && mmio_rsp_valid_i && mmio_req_ready_i;
+
+  assign wb_valid_o = (state_q == S_RESP) || rsp_bypass_wb_valid || mmio_bypass_wb_valid;
+  assign wb_rob_idx_o = mmio_bypass_wb_valid ? req_tag_q :
+                        rsp_bypass_wb_valid  ? rsp_bypass_wb_tag : resp_tag_q;
+  assign wb_data_o = mmio_bypass_wb_valid ? mmio_rsp_data_i :
+                     rsp_bypass_wb_valid  ? rsp_bypass_wb_data : resp_data_q;
+  assign wb_exception_o = mmio_bypass_wb_valid ? 1'b0 :
+                          rsp_bypass_wb_valid  ? rsp_bypass_wb_exc : resp_exc_q;
+  assign wb_ecause_o = mmio_bypass_wb_valid ? '0 :
+                       rsp_bypass_wb_valid  ? rsp_bypass_wb_ecause : resp_ecause_q;
   assign wb_is_mispred_o = 1'b0;
   assign wb_redirect_pc_o = '0;
 
@@ -271,7 +309,7 @@ module lsu_lane #(
       S_IDLE: begin
         if (req_fire_w) begin
           state_d = next_state_after_accept(is_store, is_load, misaligned, force_exception_i,
-                                            sb_load_hit_i);
+                                            sb_load_hit_i, is_mmio);
         end
       end
 
@@ -286,7 +324,7 @@ module lsu_lane #(
           if (wb_ready_i) begin
             if (req_fire_w) begin
               state_d = next_state_after_accept(is_store, is_load, misaligned, force_exception_i,
-                                                sb_load_hit_i);
+                                                sb_load_hit_i, is_mmio);
             end else begin
               state_d = S_IDLE;
             end
@@ -300,9 +338,32 @@ module lsu_lane #(
         if (wb_ready_i) begin
           if (req_fire_w) begin
             state_d = next_state_after_accept(is_store, is_load, misaligned, force_exception_i,
-                                              sb_load_hit_i);
+                                              sb_load_hit_i, is_mmio);
           end else begin
             state_d = S_IDLE;
+          end
+        end
+      end
+
+      S_MMIO_WAIT_ROB: begin
+        // Wait until this instruction reaches the ROB head (non-speculative)
+        if (req_tag_q == rob_head_i) begin
+          state_d = S_MMIO_REQ;
+        end
+      end
+
+      S_MMIO_REQ: begin
+        // Issue uncached MMIO read; wait for response
+        if (mmio_req_ready_i && mmio_rsp_valid_i) begin
+          if (wb_ready_i) begin
+            if (req_fire_w) begin
+              state_d = next_state_after_accept(is_store, is_load, misaligned, force_exception_i,
+                                                sb_load_hit_i, is_mmio);
+            end else begin
+              state_d = S_IDLE;
+            end
+          end else begin
+            state_d = S_RESP;
           end
         end
       end
@@ -382,6 +443,14 @@ module lsu_lane #(
           resp_data_q   <= ld_rsp_err_i ? req_addr_tval : ld_rsp_data_i;
           resp_exc_q    <= ld_rsp_err_i;
           resp_ecause_q <= ld_rsp_err_i ? EXC_LD_ACCESS_FAULT : '0;
+        end
+
+        // Capture MMIO response when CDB is not ready
+        if (state_q == S_MMIO_REQ && mmio_rsp_valid_i && mmio_req_ready_i && !wb_ready_i) begin
+          resp_tag_q    <= req_tag_q;
+          resp_data_q   <= mmio_rsp_data_i;
+          resp_exc_q    <= 1'b0;
+          resp_ecause_q <= '0;
         end
       end
     end

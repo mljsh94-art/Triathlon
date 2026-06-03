@@ -94,10 +94,6 @@ module sv32_mmu #(
   logic [31:0] l1_pte_addr_w;
   logic [31:0] l0_pte_addr_w;
   logic [31:0] leaf_pte_updated_w;
-`ifndef SYNTHESIS
-  localparam int unsigned AGENT_MMU_PF_LOG_LIMIT = 32;
-  logic [5:0] agent_mmu_pf_logs_q;
-`endif
 
   function automatic logic pte_invalid(input logic [31:0] pte);
     pte_invalid = (!pte[0]) || (pte[2] && !pte[1]);
@@ -235,9 +231,6 @@ module sv32_mmu #(
   always_ff @(posedge clk_i or negedge rst_ni) begin
     logic [31:0] pte;
     logic [31:0] hit_pte_updated;
-`ifndef SYNTHESIS
-    integer agent_log_fd;
-`endif
 
     if (!rst_ni) begin
       state_q <= ST_IDLE;
@@ -271,9 +264,6 @@ module sv32_mmu #(
       tlb_pte_q <= '0;
       tlb_pte_addr_q <= '0;
       tlb_repl_ptr_q <= '0;
-`ifndef SYNTHESIS
-      agent_mmu_pf_logs_q <= '0;
-`endif
     end else begin
       pte = pte_rsp_data_i;
       hit_pte_updated = pte_with_ad(tlb_hit_pte_w, req_access_i);
@@ -283,10 +273,6 @@ module sv32_mmu #(
       if (satp_context_flush_w) begin
         tlb_valid_q <= '0;
       end
-
-`ifndef SYNTHESIS
-
-`endif
 
       if (satp_context_flush_w) begin
         // Drop any walk/update that was started under the previous translation context.
@@ -320,24 +306,6 @@ module sv32_mmu #(
                 resp_valid_q <= 1'b1;
                 resp_page_fault_q <= 1'b1;
                 resp_paddr_q <= '0;
-`ifndef SYNTHESIS
-                // #region agent log
-                if ((agent_mmu_pf_logs_q < AGENT_MMU_PF_LOG_LIMIT[5:0]) &&
-                    (req_access_i == ACCESS_INSTR) &&
-                    (req_vaddr_i >= 32'h9000_0000) && (req_vaddr_i < 32'hc000_0000)) begin
-                  agent_log_fd = $fopen("../debug-fd94f9.log", "a");
-                  if (agent_log_fd != 0) begin
-                    $fwrite(agent_log_fd,
-                            "{\"sessionId\":\"fd94f9\",\"runId\":\"mmu-priv-source\",\"hypothesisId\":\"H2-H3\",\"location\":\"npc/vsrc/mmu/sv32_mmu.sv:tlb_perm_fault\",\"message\":\"I-MMU TLB permission fault\",\"timestamp\":%0t,\"data\":{\"vaddr\":\"0x%08h\",\"access\":%0d,\"reqPriv\":%0d,\"sum\":%0d,\"mxr\":%0d,\"pte\":\"0x%08h\",\"pteU\":%0d,\"pteX\":%0d,\"permOk\":%0d,\"tlbHit\":1}}\n",
-                            $time, req_vaddr_i, req_access_i, req_priv_i, req_sum_i, req_mxr_i,
-                            tlb_hit_pte_w, tlb_hit_pte_w[4], tlb_hit_pte_w[3],
-                            pte_perm_ok(tlb_hit_pte_w, req_access_i, req_priv_i, req_sum_i, req_mxr_i));
-                    $fclose(agent_log_fd);
-                  end
-                  agent_mmu_pf_logs_q <= agent_mmu_pf_logs_q + 6'd1;
-                end
-                // #endregion
-`endif
               end else if (pte_need_ad_update(tlb_hit_pte_w, req_access_i)) begin
                 state_q <= ST_PTE_UPDATE;
                 upd_pte_addr_q <= tlb_hit_pte_addr_w;
@@ -435,24 +403,6 @@ module sv32_mmu #(
               resp_valid_q <= 1'b1;
               resp_page_fault_q <= 1'b1;
               resp_paddr_q <= '0;
-`ifndef SYNTHESIS
-              // #region agent log
-              if ((agent_mmu_pf_logs_q < AGENT_MMU_PF_LOG_LIMIT[5:0]) &&
-                  (req_access_q == ACCESS_INSTR) &&
-                  (req_vaddr_q >= 32'h9000_0000) && (req_vaddr_q < 32'hc000_0000)) begin
-                agent_log_fd = $fopen("../debug-fd94f9.log", "a");
-                if (agent_log_fd != 0) begin
-                  $fwrite(agent_log_fd,
-                          "{\"sessionId\":\"fd94f9\",\"runId\":\"mmu-priv-source\",\"hypothesisId\":\"H2-H3\",\"location\":\"npc/vsrc/mmu/sv32_mmu.sv:l0_perm_fault\",\"message\":\"I-MMU L0 permission fault\",\"timestamp\":%0t,\"data\":{\"vaddr\":\"0x%08h\",\"access\":%0d,\"reqPriv\":%0d,\"sum\":%0d,\"mxr\":%0d,\"pteAddr\":\"0x%08h\",\"pte\":\"0x%08h\",\"pteValid\":%0d,\"pteLeaf\":%0d,\"pteU\":%0d,\"pteX\":%0d,\"permOk\":%0d,\"tlbHit\":0}}\n",
-                          $time, req_vaddr_q, req_access_q, req_priv_q, req_sum_q, req_mxr_q,
-                          l0_pte_addr_w, pte, !pte_invalid(pte), pte_is_leaf(pte), pte[4], pte[3],
-                          pte_perm_ok(pte, req_access_q, req_priv_q, req_sum_q, req_mxr_q));
-                  $fclose(agent_log_fd);
-                end
-                agent_mmu_pf_logs_q <= agent_mmu_pf_logs_q + 6'd1;
-              end
-              // #endregion
-`endif
             end else if (pte_need_ad_update(pte, req_access_q)) begin
               state_q <= ST_PTE_UPDATE;
               upd_pte_addr_q <= l0_pte_addr_w;

@@ -234,4 +234,13 @@ package config_pkg;
     int unsigned ALU_COUNT;
   } cfg_t;
   localparam cfg_t EmptyCfg = cfg_t'(0);
+
+  // PMA: Physical Memory Attribute — MMIO region check
+  // Everything outside the DRAM window is considered MMIO/Uncacheable.
+  localparam logic [31:0] PMEM_BASE = 32'h80000000;
+  localparam logic [31:0] PMEM_END  = 32'h88000000;
+
+  function automatic logic is_mmio_addr(input logic [31:0] addr);
+    return (addr < PMEM_BASE) || (addr >= PMEM_END);
+  endfunction
 endpackage

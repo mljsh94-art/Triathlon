@@ -223,10 +223,6 @@ module ifu #(
   logic aa_inf_watch_w;
   logic ifu_diag_trace_en_q;
   logic ifu_bsearch_trace_en_q;
-  localparam int unsigned AGENT_IFU_PF_LOG_LIMIT = 32;
-  logic [5:0] agent_ifu_pf_logs_q;
-  localparam int unsigned AGENT_IFU_CTRL_LOG_LIMIT = 96;
-  logic [6:0] agent_ifu_ctrl_logs_q;
   initial ifu_diag_trace_en_q = $test$plusargs("npc_diag_trace");
   initial ifu_bsearch_trace_en_q = $test$plusargs("npc_diag_bsearch");
 
@@ -469,9 +465,6 @@ module ifu #(
   );
 
   always_ff @(posedge clk) begin
-`ifndef SYNTHESIS
-    integer agent_log_fd;
-`endif
     if (rst) begin
       pc_reg <= Cfg.PLEN'(Cfg.RESET_VECTOR);
       fetch_epoch_q <= '0;
@@ -505,8 +498,6 @@ module ifu #(
 `ifndef SYNTHESIS
       ifu_pc_dbg_cnt_q <= '0;
       ifu_aa_dbg_cnt_q <= '0;
-      agent_ifu_pf_logs_q <= '0;
-      agent_ifu_ctrl_logs_q <= '0;
 `endif
 
     end else begin
@@ -588,23 +579,6 @@ module ifu #(
               fault_wait_flush_q <= 1'b1;
               fault_pc_q <= req_head_pc_w;
               fault_tval_q <= req_head_pc_w;
-`ifndef SYNTHESIS
-              // #region agent log
-              if ((agent_ifu_pf_logs_q < AGENT_IFU_PF_LOG_LIMIT[5:0]) &&
-                  (req_head_pc_w >= 32'h9000_0000) && (req_head_pc_w < 32'hc000_0000)) begin
-                agent_log_fd = $fopen("../debug-fd94f9.log", "a");
-                if (agent_log_fd != 0) begin
-                  $fwrite(agent_log_fd,
-                          "{\"sessionId\":\"fd94f9\",\"runId\":\"ifu-fault-source\",\"hypothesisId\":\"H2-H3\",\"location\":\"npc/vsrc/frontend/ifu.sv:mmu_fault_capture\",\"message\":\"IFU captured instruction page fault\",\"timestamp\":%0t,\"data\":{\"vaddr\":\"0x%08h\",\"mmuPrivLive\":%0d,\"satp\":\"0x%08h\",\"reqEpoch\":%0d,\"fetchEpoch\":%0d,\"flush\":%0d,\"localMmuFlush\":%0d,\"faultPendingBefore\":%0d,\"reqCount\":%0d,\"infCount\":%0d}}\n",
-                          $time, req_head_pc_w, mmu_priv_i, mmu_satp_i, req_head_epoch_w,
-                          fetch_epoch_q, flush_i, local_mmu_flush_w, fault_pending_q,
-                          req_count_q, inf_count_q);
-                  $fclose(agent_log_fd);
-                end
-                agent_ifu_pf_logs_q <= agent_ifu_pf_logs_q + 6'd1;
-              end
-              // #endregion
-`endif
             end else begin
               mmu_state_q <= MMU_ST_READY;
               mmu_translated_paddr_q <= mmu_resp_paddr_w;
@@ -671,32 +645,6 @@ module ifu #(
     $display("\n");
 `endif
 `ifndef SYNTHESIS
-
-    // #region agent log
-    // Focus on the bug: IFU fetching/faulting a USER VA while committed priv == S (2'b01).
-    // U-mode demand-paging (priv==U) is the normal path and would otherwise drain the budget.
-    if ((agent_ifu_ctrl_logs_q < AGENT_IFU_CTRL_LOG_LIMIT[6:0]) &&
-        (mmu_priv_i == 2'b01) &&
-        ((((req_head_pc_w >= 32'h9000_0000) && (req_head_pc_w < 32'hc000_0000)) &&
-          (req_issue_fire_w || mmu_resp_fire_w || fault_consume_w || flush_i)) ||
-         (((fault_pc_q >= 32'h9000_0000) && (fault_pc_q < 32'hc000_0000)) &&
-          (fault_pending_q || fault_consume_w || flush_i)) ||
-         (flush_i && (((redirect_pc_i >= 32'h9000_0000) && (redirect_pc_i < 32'hc000_0000)) ||
-                      ((pc_reg >= 32'h9000_0000) && (pc_reg < 32'hc000_0000)))))) begin
-      agent_log_fd = $fopen("../debug-fd94f9.log", "a");
-      if (agent_log_fd != 0) begin
-        $fwrite(agent_log_fd,
-                "{\"sessionId\":\"fd94f9\",\"runId\":\"ifu-ctrl-flow\",\"hypothesisId\":\"H4-H6\",\"location\":\"npc/vsrc/frontend/ifu.sv:ctrl_flow\",\"message\":\"IFU control flow around user fault\",\"timestamp\":%0t,\"data\":{\"pcReg\":\"0x%08h\",\"reqHead\":\"0x%08h\",\"faultPc\":\"0x%08h\",\"redirect\":\"0x%08h\",\"mmuPriv\":%0d,\"satp\":\"0x%08h\",\"flush\":%0d,\"localMmuFlush\":%0d,\"faultPending\":%0d,\"faultWaitFlush\":%0d,\"faultConsume\":%0d,\"reqEnq\":%0d,\"reqIssue\":%0d,\"reqPop\":%0d,\"mmuState\":%0d,\"mmuReqFire\":%0d,\"mmuRespFire\":%0d,\"mmuRespPf\":%0d,\"reqCount\":%0d,\"infCount\":%0d,\"fetchEpoch\":%0d,\"reqEpoch\":%0d,\"bpuPred\":\"0x%08h\"}}\n",
-                $time, pc_reg, req_head_pc_w, fault_pc_q, redirect_pc_i, mmu_priv_i,
-                mmu_satp_i, flush_i, local_mmu_flush_w, fault_pending_q, fault_wait_flush_q,
-                fault_consume_w, req_enq_fire_w, req_issue_fire_w, req_pop_w, mmu_state_q,
-                mmu_req_fire_w, mmu_resp_fire_w, mmu_resp_page_fault_w, req_count_q,
-                inf_count_q, fetch_epoch_q, req_head_epoch_w, bpu2ifu_predicted_pc_i);
-        $fclose(agent_log_fd);
-      end
-      agent_ifu_ctrl_logs_q <= agent_ifu_ctrl_logs_q + 7'd1;
-    end
-    // #endregion
 
     if (ifu_diag_trace_en_q && req_issue_fire_w && (ifu_pc_dbg_cnt_q < IFU_PC_DBG_BUDGET) && (
         ((req_head_pc_w & 32'hfffff000) == 32'hc0800000) ||

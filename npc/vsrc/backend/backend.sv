@@ -70,7 +70,16 @@ module backend #(
     output logic                             dcache_wb_req_valid_o,
     input  logic                             dcache_wb_req_ready_i,
     output logic [             Cfg.PLEN-1:0] dcache_wb_req_paddr_o,
-    output logic [Cfg.DCACHE_LINE_WIDTH-1:0] dcache_wb_req_data_o
+    output logic [Cfg.DCACHE_LINE_WIDTH-1:0] dcache_wb_req_data_o,
+
+    // MMIO Uncached Load interface (bypass D-Cache)
+    output logic                               mmio_req_valid_o,
+    input  logic                               mmio_req_ready_i,
+    output logic [             Cfg.PLEN-1:0]   mmio_req_addr_o,
+    output decode_pkg::lsu_op_e                mmio_req_op_o,
+
+    input  logic                               mmio_rsp_valid_i,
+    input  logic [           Cfg.XLEN-1:0]     mmio_rsp_data_i
 );
 
   localparam int unsigned DISPATCH_WIDTH = Cfg.INSTR_PER_FETCH;
@@ -1791,6 +1800,14 @@ module backend #(
       .ld_rsp_ready_o(lsu_ld_rsp_ready),
       .ld_rsp_data_i (lsu_ld_rsp_data),
       .ld_rsp_err_i  (lsu_ld_rsp_err),
+
+      .mmio_req_valid_o(mmio_req_valid_o),
+      .mmio_req_ready_i(mmio_req_ready_i),
+      .mmio_req_addr_o (mmio_req_addr_o),
+      .mmio_req_op_o   (mmio_req_op_o),
+      .mmio_rsp_valid_i(mmio_rsp_valid_i),
+      .mmio_rsp_data_i (mmio_rsp_data_i),
+
       .pte_req_valid_o(lsu_pte_req_valid),
       .pte_req_ready_i(lsu_pte_req_ready),
       .pte_req_paddr_o(lsu_pte_req_paddr),
@@ -1848,15 +1865,6 @@ module backend #(
   logic csr_mstatus_mxr;
   logic csr_sfence_vma_flush;
 
-`ifndef SYNTHESIS
-  localparam int unsigned AGENT_BACKEND_CSR_ARB_LOG_LIMIT = 96;
-  logic [6:0] agent_backend_csr_arb_logs_q;
-  localparam int unsigned AGENT_BACKEND_IFETCH_FLOW_LOG_LIMIT = 96;
-  logic [6:0] agent_backend_ifetch_flow_logs_q;
-  localparam int unsigned AGENT_BACKEND_IRQ_LOG_LIMIT = 128;
-  logic [7:0] agent_backend_irq_logs_q;
-`endif
-
   always_comb begin
     csr_rob_exception_inject = rob_sync_exception_pending_q && !csr_en;
     // An IFU instruction-fetch page fault may only be escalated to an architectural trap
@@ -1903,84 +1911,6 @@ module backend #(
       csr_exec_async_tval = '0;
     end
   end
-
-`ifndef SYNTHESIS
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    integer agent_log_fd;
-    if (!rst_ni) begin
-      agent_backend_csr_arb_logs_q <= '0;
-      agent_backend_ifetch_flow_logs_q <= '0;
-      agent_backend_irq_logs_q <= '0;
-    end else begin
-      // #region agent log
-      if ((agent_backend_irq_logs_q < AGENT_BACKEND_IRQ_LOG_LIMIT[7:0]) &&
-          (ext_irq_i || csr_irq_inject)) begin
-        agent_log_fd = $fopen("../debug-aeea27.log", "a");
-        if (agent_log_fd != 0) begin
-          $fwrite(agent_log_fd,
-                  "{\"sessionId\":\"aeea27\",\"runId\":\"uart-irq-backend\",\"hypothesisId\":\"H3-backend-irq-gate\",\"location\":\"npc/vsrc/backend/backend.sv:irq_gate\",\"message\":\"Backend IRQ arbitration state\",\"timestamp\":%0t,\"data\":{\"extIrq\":%0d,\"timerIrq\":%0d,\"csrIrqInject\":%0d,\"csrExecValid\":%0d,\"csrEn\":%0d,\"robEmpty\":%0d,\"robExcInject\":%0d,\"ifetchFaultInject\":%0d,\"ifetchFaultValid\":%0d,\"csrPrivMode\":%0d,\"robHeadPc\":\"0x%08h\",\"csrTrapPc\":\"0x%08h\",\"backendFlush\":%0d}}\n",
-                  $time, ext_irq_i, timer_irq_i, csr_irq_inject, csr_exec_valid, csr_en,
-                  rob_empty, csr_rob_exception_inject, csr_ifetch_fault_inject,
-                  ifetch_fault_valid_i, csr_priv_mode, rob_head_pc, csr_exec_trap_pc,
-                  backend_flush);
-          $fclose(agent_log_fd);
-        end
-        agent_backend_irq_logs_q <= agent_backend_irq_logs_q + 8'd1;
-      end
-      // #endregion
-      // #region agent log
-      if ((agent_backend_csr_arb_logs_q < AGENT_BACKEND_CSR_ARB_LOG_LIMIT[6:0]) &&
-          (csr_en || csr_uop.is_sret || csr_exec_uop.is_sret ||
-           (ifetch_fault_valid_i &&
-            (ifetch_fault_tval_i >= Cfg.PLEN'(32'h9000_0000)) &&
-            (ifetch_fault_tval_i < Cfg.PLEN'(32'hc000_0000))))) begin
-        agent_log_fd = $fopen("../debug-fd94f9.log", "a");
-        if (agent_log_fd != 0) begin
-          $fwrite(agent_log_fd,
-                  "{\"sessionId\":\"fd94f9\",\"runId\":\"backend-csr-arb\",\"hypothesisId\":\"H1-arb\",\"location\":\"npc/vsrc/backend/backend.sv:csr_arb\",\"message\":\"Backend CSR arbitration inputs\",\"timestamp\":%0t,\"data\":{\"csrEn\":%0d,\"csrUopSret\":%0d,\"csrUopPc\":\"0x%08h\",\"csrDst\":%0d,\"robExcInject\":%0d,\"ifetchFaultInject\":%0d,\"ifetchFaultValid\":%0d,\"ifetchFaultReady\":%0d,\"ifetchFaultPc\":\"0x%08h\",\"ifetchFaultTval\":\"0x%08h\",\"irqInject\":%0d,\"csrExecValid\":%0d,\"csrExecSret\":%0d,\"csrExecPc\":\"0x%08h\",\"csrExecTrapPc\":\"0x%08h\",\"csrExecAsyncCause\":%0d,\"csrExecAsyncTval\":\"0x%08h\",\"robHeadPtr\":%0d,\"robHeadPc\":\"0x%08h\",\"robEmpty\":%0d,\"csrPrivMode\":%0d,\"backendFlush\":%0d}}\n",
-                  $time,
-                  csr_en, csr_uop.is_sret, csr_uop.pc, csr_dst,
-                  csr_rob_exception_inject, csr_ifetch_fault_inject, ifetch_fault_valid_i,
-                  ifetch_fault_ready_o, ifetch_fault_pc_i, ifetch_fault_tval_i, csr_irq_inject,
-                  csr_exec_valid, csr_exec_uop.is_sret, csr_exec_uop.pc, csr_exec_trap_pc,
-                  csr_exec_async_ecause, csr_exec_async_tval, rob_head_ptr, rob_head_pc,
-                  rob_empty, csr_priv_mode, backend_flush);
-          $fclose(agent_log_fd);
-        end
-        agent_backend_csr_arb_logs_q <= agent_backend_csr_arb_logs_q + 7'd1;
-      end
-      // #endregion
-      // #region agent log
-      // Focus on the bug: an IFU fetch fault for a USER VA while committed priv == S (2'b01).
-      // This is the spurious S-mode user-page ifetch fault; gating on priv==S keeps the budget
-      // from being drained by normal U-mode demand-paging faults/mispredict flushes.
-      if ((agent_backend_ifetch_flow_logs_q < AGENT_BACKEND_IFETCH_FLOW_LOG_LIMIT[6:0]) &&
-          (csr_priv_mode == 2'b01) &&
-          ((ifetch_fault_valid_i &&
-            (ifetch_fault_tval_i >= Cfg.PLEN'(32'h9000_0000)) &&
-            (ifetch_fault_tval_i < Cfg.PLEN'(32'hc000_0000))) ||
-           (csr_irq_trap && (csr_irq_trap_cause == 5'd12) &&
-            (csr_irq_trap_pc >= Cfg.PLEN'(32'h9000_0000)) &&
-            (csr_irq_trap_pc < Cfg.PLEN'(32'hc000_0000))))) begin
-        agent_log_fd = $fopen("../debug-fd94f9.log", "a");
-        if (agent_log_fd != 0) begin
-          $fwrite(agent_log_fd,
-                  "{\"sessionId\":\"fd94f9\",\"runId\":\"backend-ifetch-flow\",\"hypothesisId\":\"H4-H6\",\"location\":\"npc/vsrc/backend/backend.sv:ifetch_flow\",\"message\":\"Backend ifetch fault to flush flow\",\"timestamp\":%0t,\"data\":{\"ifetchValid\":%0d,\"ifetchReady\":%0d,\"ifetchPc\":\"0x%08h\",\"ifetchTval\":\"0x%08h\",\"csrIfetchInject\":%0d,\"csrExecValid\":%0d,\"csrAsyncCause\":%0d,\"csrAsyncTval\":\"0x%08h\",\"csrTrapPc\":\"0x%08h\",\"csrIrqTrap\":%0d,\"csrIrqCause\":%0d,\"csrIrqPc\":\"0x%08h\",\"csrIrqRedirect\":\"0x%08h\",\"backendFlush\":%0d,\"robFlush\":%0d,\"robFlushPc\":\"0x%08h\",\"robFlushSrc\":\"0x%08h\",\"robFlushExc\":%0d,\"csrPriv\":%0d,\"robEmpty\":%0d,\"robHeadPc\":\"0x%08h\"}}\n",
-                  $time, ifetch_fault_valid_i, ifetch_fault_ready_o, ifetch_fault_pc_i,
-                  ifetch_fault_tval_i, csr_ifetch_fault_inject, csr_exec_valid,
-                  csr_exec_async_ecause, csr_exec_async_tval, csr_exec_trap_pc,
-                  csr_irq_trap, csr_irq_trap_cause, csr_irq_trap_pc,
-                  csr_irq_trap_redirect_pc, backend_flush, rob_flush, rob_flush_pc,
-                  rob_flush_src_pc, rob_flush_is_exception, csr_priv_mode, rob_empty,
-                  rob_head_pc);
-          $fclose(agent_log_fd);
-        end
-        agent_backend_ifetch_flow_logs_q <= agent_backend_ifetch_flow_logs_q + 7'd1;
-      end
-      // #endregion
-    end
-  end
-`endif
 
   execute_csr #(
       .Cfg  (Cfg),

@@ -193,6 +193,7 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 - **Load port**: From LSU (ld_req/ld_rsp)
 - **Store port**: From Store Buffer (st_req)
 - Committed store misses are completed on a blocking refill+merge path so exception flushes cannot discard a store after the Store Buffer has dequeued it.
+- Committed MMIO stores bypass the DCache array/refill path and complete directly through the simulator-side store hook, preserving Store Buffer order for side-effectful registers.
 - **Miss interface**: valid/ready to external memory (refill)
 - **Writeback interface**: valid/ready for dirty line eviction
 - The simulator-side refill model uses side-effectful MMIO reads for DCache line fills, so volatile registers such as the PLIC claim/complete register perform their architectural claim action when serviced through the cache miss path.
@@ -200,6 +201,10 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 #### External Memory Interface & Platform
 - Custom refill/writeback protocol at the triathlon top level.
 - Incorporates AXI wrappers (`icache_axi_wrapper.sv`, `dcache_axi_wrapper.sv`) for system integration.
+- PMA marks addresses outside the DRAM window (`0x80000000`-`0x87FFFFFF`) as uncacheable/MMIO, covering low platform devices and the UART window at `0xA0000000`.
+- The simulator captures MMIO Store Buffer handshakes before the clock edge and applies side effects directly to the C++ platform model, while DRAM stores remain handled by the post-tick store hook.
+- Uncached MMIO reads return the addressed byte lane in the low bits so byte-wide UART register polling observes the expected 8250 values.
+- C++ 全系统外设模型（`npc/csrc/include/memory_models.h`）：8250 UART TX-empty 中断为 **latched** 语义（写 THR 清除、IER.THRI 上升沿或模拟 THR 发送完成后重新 arm、关 THRI 清除），PLIC source 1 与 `ext_irq_i` 联动；PLIC claim/complete 对 M/S context 共用 `plic_claimed1` 状态。
 - Built-in minimal platform peripherals for full-system simulation:
   - **PLIC** (`plic.sv`): Platform-Level Interrupt Controller.
   - **VirtIO Block** (`virtio_blk.sv`): For block device / disk simulation.
@@ -406,21 +411,7 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 2. **修改插桩后必须重编**：`make -C npc`。
 3. **先假设、再插桩、再跑**：每条 log 映射至少一个假设；未用 log 证明前不得声称根因或删插桩。
 4. **stdout + NDJSON 分工**：`sim_*.log` 看启动里程碑与 `[debug][flush-exc]`；`debug-*.log` 看 cycle 级时序（IFU fault、CSR 仲裁、SRET 提交等）。
-5. **验证通过前保留插桩**；仅在 post-fix 日志证明修复或用户确认后再移除。
-
-**当前插桩来源（示例）**
-
-| `runId` | 位置 | 用途 |
-| :--- | :--- | :--- |
-| `arch-truth` | `npc/csrc/npc_main.cpp` | 架构地面真值：priv 变化、已提交 SRET/MRET、异常 flush |
-| `ifu-ctrl-flow` | `npc/vsrc/frontend/ifu.sv` | IFU 取指队列、BPU 预测 PC、fault quiesce、MMU priv |
-| `backend-ifetch-flow` | `npc/vsrc/backend/backend.sv` | 取指 fault 注入、ROB flush、redirect |
-| `backend-csr-arb` | `npc/vsrc/backend/backend.sv` | CSR 仲裁：`csrEn` / `ifetchFaultInject` / `robEmpty` |
-| `priv-mismatch-flush` | `npc/csrc/npc_main.cpp` | S 态对用户 VA 的 instruction page fault |
-| `user-write-syscall` / `user-write-return` | `npc/csrc/npc_main.cpp` | U 态 `write`/`ecall` 参数、SRET 返回值与 UART/PLIC 快照 |
-| `uart-print-path` / `uart-plic-path` | `npc/csrc/include/memory_models.h` | 8250 IER/IIR/THR 与 PLIC pending/claim/enable 流 |
-| `uart-irq-backend` / `uart-irq-csr` / `csr-status-writes` | `npc/vsrc/backend/backend.sv`, `npc/vsrc/backend/execute/csr.sv` | 外部中断从 backend 仲裁到 CSR 条件判定、SIE/SEIE 状态写入的时序 |
-| `linux-tty-path` / `linux-uart-core` / `linux-8250-tx` | `linux_workspace/linux/drivers/tty/**` | Linux N_TTY、serial core xmit ring、8250 TX drain 的 `/init` write 路径 |
+5. **验证通过前保留插桩**；问题确认修复并归档后再移除对应 session 插桩。
 
 **典型全系统复现命令**
 
@@ -591,12 +582,12 @@ make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(np
 | `CONFIG_ARCH_RV32I` | `y` | RV32I 基座 |
 | `CONFIG_PAGE_OFFSET` | `0xC0000000` | 内核虚拟地址起点 |
 | `CONFIG_RISCV_ISA_C` | `y` | 压缩指令（与 RTL 一致） |
-| `CONFIG_INITRAMFS_SOURCE` | `../rootfs ../rootfs_extra.list` | 内置 initramfs 根文件系统，并通过 cpio list 预置 `/dev/console` |
+| `CONFIG_INITRAMFS_SOURCE` | `../rootfs ../rootfs_extra.list` | 内置 initramfs 根文件系统；`rootfs_extra.list` 预置 `/proc`、`/sys`、`/dev` 目录与 `/dev/console` |
 | `CONFIG_INITRAMFS_COMPRESSION_NONE` | `y` | initramfs 不压缩，减少 gzip 解压热点在 RTL 仿真中的启动开销 |
 
 启动命令行（`CONFIG_CMDLINE` 或 bootargs）常用：`earlycon=sbi console=ttyS0 root=/dev/ram0`（initramfs 根文件系统）。
 
-精简配置原则：单核 RV32、SBI、PLIC、RISC-V timer、OF/DT、8250/SBI earlycon、initramfs、`proc`/`sysfs`/`tmpfs`；关闭通用 RISC-V 板卡驱动、块设备驱动、图形/输入/USB/MMC/RTC、非必要文件系统以及 debug/trace 开销。当前 `linux_workspace/build_kernel.sh` 使用 `allnoconfig` + `.triathlon_min.config` 最小配置片段生成内核配置，只保留 RV32/SV32、SBI、DT、8250 控制台、内置 initramfs、ELF/script 执行和 `proc`/`sysfs`/`devtmpfs`/`tmpfs`；`linux_workspace/rootfs_extra.list` 额外向 initramfs 注入 `/dev/console` 字符设备节点（`c 5 1`），保证内核在执行 `/init` 前能初始化 fd 0/1/2。脚本末尾会检查并拒绝 `NET`、`BLOCK`、`PCI`、`CGROUPS`、`BPF`、`PERF`、`KALLSYMS`、`FTRACE`、`CRYPTO`、`INPUT`、`PINCTRL`、`USB`、`MMC`、`RTC`、`THERMAL`、`VIRTIO`、`FW_LOADER`、`PM`、`IO_URING` 等无关子系统被重新选中。`CONFIG_DEBUG_KERNEL` 是调试菜单总开关，`allnoconfig` 下可能保持为 `y`，但具体 debug/ftrace/debug-info 子项保持关闭。
+精简配置原则：单核 RV32、SBI、PLIC、RISC-V timer、OF/DT、8250/SBI earlycon、initramfs、`proc`/`sysfs`/`tmpfs`；关闭通用 RISC-V 板卡驱动、块设备驱动、图形/输入/USB/MMC/RTC、非必要文件系统以及 debug/trace 开销。当前 `linux_workspace/build_kernel.sh` 使用 `allnoconfig` + `.triathlon_min.config` 最小配置片段生成内核配置，只保留 RV32/SV32、SBI、DT、8250 控制台、内置 initramfs、ELF/script 执行和 `proc`/`sysfs`/`devtmpfs`/`tmpfs`；`linux_workspace/rootfs_extra.list` 额外向 initramfs 注入 `/proc`、`/sys`、`/dev` 目录及 `/dev/console` 字符设备节点（`c 5 1`），供 `/init` 挂载 proc/sys/devtmpfs 并保证 fd 0/1/2 可用。脚本末尾会检查并拒绝 `NET`、`BLOCK`、`PCI`、`CGROUPS`、`BPF`、`PERF`、`KALLSYMS`、`FTRACE`、`CRYPTO`、`INPUT`、`PINCTRL`、`USB`、`MMC`、`RTC`、`THERMAL`、`VIRTIO`、`FW_LOADER`、`PM`、`IO_URING` 等无关子系统被重新选中。`CONFIG_DEBUG_KERNEL` 是调试菜单总开关，`allnoconfig` 下可能保持为 `y`，但具体 debug/ftrace/debug-info 子项保持关闭。
 
 ##### merge.py 参数
 
