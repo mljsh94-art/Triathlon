@@ -1,6 +1,8 @@
 add_library(npcsim STATIC
   lib/args_parser.cpp
   lib/difftest_client.cpp
+  lib/sim_observer.cpp
+  lib/sim_trap_exit.cpp
 )
 
 target_include_directories(npcsim

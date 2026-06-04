@@ -72,6 +72,10 @@ Triathlon/
 │   │   └── virtio_blk.sv            # VirtIO Block Device Simulation
 │   └── util/
 │       └── priority_encoder.sv      # Priority encoder
+├── npc/csrc/                        # Verilator 仿真 C++ 宿主
+│   ├── npc_main.cpp                 # 仿真主循环骨架（tick/commit/difftest）
+│   ├── include/                     # args、memory_models、sim_observer 等
+│   └── lib/                         # args_parser、difftest、profile、sim_observer、sim_trap_exit
 ├── npc/csrc/test/                   # C++ unit drivers for targeted Verilator testbenches
 ├── am-kernels/                      # Test programs and benchmarks
 ├── nemu/                            # Reference simulator
@@ -441,7 +445,7 @@ make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
 | `linux-swap-pgdir` | trap 路径切换页表 |
 | `linux-vtext` | 进入内核高地址虚拟文本区 |
 
-实现：`npc/csrc/include/linux_boot_stage.h`。异常 flush 日志由 `npc/csrc/npc_main.cpp` 打印；当 `cause` 为 instruction/load/store page fault 时，会额外输出 `[debug][sv32-fault-walk]`，按当前 `satp` 与 CSR trap tval 对故障虚拟地址执行只读 SV32 页表 walk，并打印 L1/L0 PTE、权限位与可解析的物理地址。
+实现：`npc/csrc/include/linux_boot_stage.h`。`--linux-early-debug` 及 commit/LSU/progress 等可选 trace 由 `npc/csrc/lib/sim_observer.cpp` 打印；当 `cause` 为 instruction/load/store page fault 时，会额外输出 `[debug][sv32-fault-walk]`，按当前 `satp` 与 CSR trap tval 对故障虚拟地址执行只读 SV32 页表 walk，并打印 L1/L0 PTE、权限位与可解析的物理地址。
 
 #### 常用组合示例
 
