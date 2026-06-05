@@ -40,8 +40,10 @@ def extract_run_entry(run_dir: Path) -> dict | None:
         return None
 
     meta = load_metadata(run_dir)
+    run_id = meta.get("run_id", run_dir.name)
     entry = {
-        "run_id": meta.get("run_id", run_dir.name),
+        "run_id": run_id,
+        "display_name": meta.get("display_name") or run_id,
         "created_at": meta.get("created_at"),
         "git_sha": meta.get("git_sha"),
         "git_branch": meta.get("git_branch"),

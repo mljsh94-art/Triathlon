@@ -78,7 +78,7 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
     baseline_dir = profile_root / baseline_id
     runs = index.get("runs", [])
 
-    labels = [r.get("run_id", "?") for r in runs]
+    labels = [r.get("display_name") or r.get("run_id", "?") for r in runs]
     dhry_ipc = [r.get("ipc", {}).get("dhrystone", 0) for r in runs]
     core_ipc = [r.get("ipc", {}).get("coremark", 0) for r in runs]
     dhry_cycles = [r.get("cycles", {}).get("dhrystone", 0) for r in runs]
@@ -89,6 +89,7 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
 
     for run in reversed(runs):
         run_id = run.get("run_id", "?")
+        display_name = run.get("display_name") or run_id
         run_dir = Path(run.get("run_dir", profile_root / run_id))
         if not run_dir.is_dir():
             run_dir = profile_root / run_id
@@ -101,8 +102,9 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
         alerts = failures + warnings
         alert_html = "<br>".join(html.escape(a) for a in alerts) if alerts else "-"
 
+        run_label = display_name if display_name == run_id else f"{display_name} ({run_id})"
         run_rows.append(
-            f"<tr><td>{html.escape(run_id)}</td>"
+            f"<tr><td>{html.escape(run_label)}</td>"
             f"<td>{html.escape(str(run.get('git_sha') or '-'))}</td>"
             f"<td>{html.escape(str(run.get('created_at') or '-'))}</td>"
             f"<td class='{status_class}'>{html.escape(status)}</td>"
@@ -140,7 +142,7 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
                 f"ret={predict.get('ret_miss_rate', 0):.4f}</p></div>"
             )
         detail_sections.append(
-            f"<section class='detail'><h3>{html.escape(run_id)}</h3>"
+            f"<section class='detail'><h3>{html.escape(run_label)}</h3>"
             f"{''.join(bench_blocks)}"
             f"<p><a href='{html.escape(report_href)}'>查看完整报告 →</a></p>"
             f"</section>"

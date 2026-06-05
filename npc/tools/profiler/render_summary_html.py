@@ -289,7 +289,9 @@ def render_run_summary_page(
     *,
     dashboard_href: str = "../dashboard/index.html",
 ) -> str:
+    display_name = metadata.get("display_name") or run_id
     meta_bits = [
+        f"<span><b>名称:</b> {esc(display_name)}</span>",
         f"<span><b>Run ID:</b> {esc(run_id)}</span>",
         f"<span><b>Git Commit:</b> {esc(metadata.get('git_sha') or '-')}</span>",
         f"<span><b>分支 (Branch):</b> {esc(metadata.get('git_branch') or '-')}</span>",
@@ -304,10 +306,10 @@ def render_run_summary_page(
     return (
         "<!DOCTYPE html><html lang='zh-CN'><head>"
         "<meta charset='UTF-8' /><meta name='viewport' content='width=device-width, initial-scale=1' />"
-        f"<title>Profile Report · {esc(run_id)}</title>"
+        f"<title>Profile Report · {esc(display_name)}</title>"
         f"<style>{SHARED_CSS}</style></head><body>"
         f"<p class='nav'><a href='{esc(dashboard_href)}'>← 返回看板 (Dashboard)</a></p>"
-        f"<h1>性能分析报告 (Profile Report) - {esc(run_id)}</h1>"
+        f"<h1>性能分析报告 - {esc(display_name)}</h1>"
         f"<div class='meta'>{''.join(meta_bits)}</div>"
         f"{''.join(bench_sections)}"
         "<div style='margin-top: 32px; font-size: 13px; color: #57606a;'>原始数据：<code>summary.json</code>（同目录）</div>"

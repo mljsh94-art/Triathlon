@@ -26,6 +26,11 @@ def git_value(*args: str) -> str | None:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Finalize profile run metadata.json")
     ap.add_argument("--run-dir", required=True, help="Profile run output directory")
+    ap.add_argument(
+        "--display-name",
+        default=None,
+        help="Optional friendly label for dashboard (default: directory name)",
+    )
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -42,8 +47,10 @@ def main() -> int:
         except json.JSONDecodeError:
             pass
 
+    display_name = args.display_name or run_dir.name
     metadata = {
         "run_id": run_dir.name,
+        "display_name": display_name,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "git_sha": git_value("rev-parse", "HEAD"),
         "git_branch": git_value("rev-parse", "--abbrev-ref", "HEAD"),

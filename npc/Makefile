@@ -130,20 +130,23 @@ CROSS_COMPILE ?= riscv64-unknown-elf-
 PROFILE_OUT_DIR ?=
 PROFILE_ROOT ?= $(abspath ./build/profile)
 PROFILE_TAG ?= latest
+PROFILE_DISPLAY_NAME ?=
 PROFILE_TAG_DIR ?= $(abspath ./build/profile/$(PROFILE_TAG))
 
 profile-report:
 	@if [ -n "$(PROFILE_OUT_DIR)" ]; then \
 		OUT_DIR=$(PROFILE_OUT_DIR) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) \
+			PROFILE_DISPLAY_NAME=$(PROFILE_DISPLAY_NAME) \
 			$(PROFILE_TOOL_DIR)/run_profile.sh; \
 	else \
 		ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) \
+			PROFILE_DISPLAY_NAME=$(PROFILE_DISPLAY_NAME) \
 			$(PROFILE_TOOL_DIR)/run_profile.sh; \
 	fi
 
 profile-task:
 	$(MAKE) profile-report ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) \
-		PROFILE_OUT_DIR=$(PROFILE_TAG_DIR)
+		PROFILE_OUT_DIR=$(PROFILE_TAG_DIR) PROFILE_DISPLAY_NAME=$(PROFILE_DISPLAY_NAME)
 
 profile-baseline:
 	$(MAKE) profile-task ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) PROFILE_TAG=baseline

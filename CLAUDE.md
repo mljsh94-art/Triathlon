@@ -291,6 +291,7 @@ Backend -> Frontend:
 | `CROSS_COMPILE` | `riscv64-unknown-elf-` | AM benchmark 交叉编译前缀（WSL 常见安装名；勿与 OpenSBI 的 `riscv64-linux-gnu-` 混用）。 |
 | `PROFILE_OUT_DIR` | *(空，自动时间戳)* | `profile-report` 输出目录；从仓库根写 `npc/build/profile/<run_id>`。 |
 | `PROFILE_TAG` | `latest` | `profile-task` 写入 `npc/build/profile/<PROFILE_TAG>/`。 |
+| `PROFILE_DISPLAY_NAME` | *(空，用目录名)* | 看板/图表显示名，写入 `metadata.json` 的 `display_name`。 |
 | `PROFILE_ROOT` | `npc/build/profile` | `profile-index` / `profile-dashboard` 扫描根目录。 |
 
 ### 3. 典型使用示例
@@ -373,6 +374,14 @@ make -C npc sim DIFFTEST= IMG=.../dhrystone-riscv32i-npc.bin \
 ```
 
 仿真失败时，`run_profile.sh` 在 `<run_id>/dhrystone.sim.log`、`<run_id>/coremark.sim.log` 保留日志。
+
+看板折线图 `labels` 使用 `metadata.json` 的 `display_name`（缺省为目录名）。改名后刷新看板：
+
+```bash
+python3 npc/tools/profiler/set_display_name.py \
+  --run-dir npc/build/profile/20260605-164936 --display-name 'BPU修复v1'
+make -C npc profile-dashboard
+```
 
 ### 5. 仿真器命令行扩展参数（`ARGS`）
 

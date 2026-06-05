@@ -63,7 +63,7 @@ class BuildIndexDashboardTest(unittest.TestCase):
             report = root / "baseline" / "summary.html"
             self.assertTrue(report.exists())
             report_text = report.read_text(encoding="utf-8")
-            self.assertIn("Profile Report: baseline", report_text)
+            self.assertIn("性能分析报告 - baseline", report_text)
             self.assertIn("Stall 分类", report_text)
 
     def test_build_index_flat_layout(self):

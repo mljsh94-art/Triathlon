@@ -66,7 +66,11 @@ run_profile_sim dhrystone "${DHRYSTONE_IMG}" "${OUT_DIR}/dhrystone.json" 50000
 run_profile_sim coremark "${COREMARK_IMG}" "${OUT_DIR}/coremark.json" 1000000
 
 python3 "${SCRIPT_DIR}/merge_profile_json.py" --run-dir "${OUT_DIR}"
-python3 "${SCRIPT_DIR}/finalize_run.py" --run-dir "${OUT_DIR}"
+FINALIZE_ARGS=(--run-dir "${OUT_DIR}")
+if [[ -n "${PROFILE_DISPLAY_NAME:-}" ]]; then
+  FINALIZE_ARGS+=(--display-name "${PROFILE_DISPLAY_NAME}")
+fi
+python3 "${SCRIPT_DIR}/finalize_run.py" "${FINALIZE_ARGS[@]}"
 
 echo "[profiler] done"
 echo "[profiler] summary: ${OUT_DIR}/summary.json"
