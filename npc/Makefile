@@ -122,11 +122,13 @@ gdb: $(BIN)
 	$(call git_commit, "debug RTL") # DO NOT REMOVE THIS LINE!!!
 	gdb -s $(BIN) --args $(BIN) $(NPC_EXE)
 
-.PHONY: profile-report profile-parse profile-task profile-baseline linux-smoke bench
+.PHONY: profile-report profile-task profile-baseline profile-index profile-dashboard profile-clean linux-smoke bench
 
 PROFILE_TOOL_DIR := $(abspath ./tools/profiler)
+ARCH ?= riscv32im-npc
+CROSS_COMPILE ?= riscv64-unknown-elf-
 PROFILE_OUT_DIR ?=
-PROFILE_PARSE_DIR ?= $(if $(strip $(PROFILE_OUT_DIR)),$(PROFILE_OUT_DIR),$(abspath ./build/profile/latest))
+PROFILE_ROOT ?= $(abspath ./build/profile)
 PROFILE_TAG ?= latest
 PROFILE_TAG_DIR ?= $(abspath ./build/profile/$(PROFILE_TAG))
 
@@ -139,20 +141,21 @@ profile-report:
 			$(PROFILE_TOOL_DIR)/run_profile.sh; \
 	fi
 
-profile-parse:
-	python3 $(PROFILE_TOOL_DIR)/parse_profile.py \
-		--log-dir $(PROFILE_PARSE_DIR) \
-		--template $(PROFILE_TOOL_DIR)/report_template.md \
-		--out-json $(PROFILE_PARSE_DIR)/summary.json \
-		--out-md $(PROFILE_PARSE_DIR)/report.md
-
 profile-task:
 	$(MAKE) profile-report ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) \
 		PROFILE_OUT_DIR=$(PROFILE_TAG_DIR)
-	$(MAKE) profile-parse PROFILE_PARSE_DIR=$(PROFILE_TAG_DIR)
 
 profile-baseline:
 	$(MAKE) profile-task ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) PROFILE_TAG=baseline
+
+profile-index:
+	python3 $(PROFILE_TOOL_DIR)/build_index.py --profile-root $(PROFILE_ROOT)
+
+profile-dashboard: profile-index
+	python3 $(PROFILE_TOOL_DIR)/build_dashboard.py --profile-root $(PROFILE_ROOT)
+
+profile-clean:
+	rm -rf $(PROFILE_ROOT)
 
 linux-smoke:
 	$(abspath ./scripts/run_linux_smoke.sh)

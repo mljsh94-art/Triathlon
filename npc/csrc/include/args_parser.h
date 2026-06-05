@@ -18,6 +18,8 @@ struct SimArgs {
   bool commit_trace = false;
   uint64_t commit_trace_start = 0;
   uint64_t commit_trace_end = 0;  // 0 = no upper bound (until max_cycles)
+  bool profile = false;
+  std::string profile_json_path;
   bool fe_trace = false;
   bool bru_trace = false;
   bool stall_trace = false;

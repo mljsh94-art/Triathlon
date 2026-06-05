@@ -50,12 +50,27 @@ if ! grep -q 'sim .*DIFFTEST=' "${MAKE_LOG}"; then
   exit 1
 fi
 
-if ! grep -q 'benchmarks/dhrystone.*ARCH=riscv32i-npc.*CROSS_COMPILE=riscv64-elf-.* image' "${MAKE_LOG}"; then
+if ! grep -q 'profile-json' "${MAKE_LOG}"; then
+  echo "missing --profile-json in sim ARGS" >&2
+  exit 1
+fi
+
+if ! grep -q 'merge_profile_json.py' "${PY_LOG}"; then
+  echo "missing merge_profile_json.py invocation" >&2
+  exit 1
+fi
+
+if ! grep -q 'finalize_run.py' "${PY_LOG}"; then
+  echo "missing finalize_run.py invocation" >&2
+  exit 1
+fi
+
+if ! grep -q 'benchmarks/dhrystone.*ARCH=riscv32i-npc.*CROSS_COMPILE=riscv64-unknown-elf-.* image' "${MAKE_LOG}"; then
   echo "missing default riscv32i arch for dhrystone image" >&2
   exit 1
 fi
 
-if ! grep -q 'benchmarks/coremark.*ARCH=riscv32i-npc.*CROSS_COMPILE=riscv64-elf-.* image' "${MAKE_LOG}"; then
+if ! grep -q 'benchmarks/coremark.*ARCH=riscv32i-npc.*CROSS_COMPILE=riscv64-unknown-elf-.* image' "${MAKE_LOG}"; then
   echo "missing default riscv32i arch for coremark image" >&2
   exit 1
 fi

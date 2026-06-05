@@ -62,7 +62,8 @@ void ProfileCollector::observe_cycle(const Vtb_triathlon *top) {
 void ProfileCollector::record_flush(uint64_t cycles,
                                     const Vtb_triathlon *top,
                                     const UnifiedMem &mem) {
-  if (!(args_.commit_trace || args_.bru_trace) || !top->backend_flush_o) return;
+  if (!top->backend_flush_o) return;
+  const bool collect_stats = profile_enabled();
 
   bool rob_flush = top->dbg_rob_flush_o;
   bool rob_mispred = top->dbg_rob_flush_is_mispred_o;
@@ -93,42 +94,65 @@ void ProfileCollector::record_flush(uint64_t cycles,
       if (is_ret_inst(src_inst)) {
         miss_type = "return";
         miss_subtype = "return";
-        pred_ret_miss_++;
+        if (collect_stats) pred_ret_miss_++;
       } else if (is_indirect_jump_inst(src_inst)) {
         miss_type = "jump";
         miss_subtype = "jump_indirect";
-        pred_jump_miss_++;
-        pred_jump_indirect_miss_++;
+        if (collect_stats) {
+          pred_jump_miss_++;
+          pred_jump_indirect_miss_++;
+        }
       } else {
         miss_type = "jump";
         miss_subtype = "jump_direct";
-        pred_jump_miss_++;
-        pred_jump_direct_miss_++;
+        if (collect_stats) {
+          pred_jump_miss_++;
+          pred_jump_direct_miss_++;
+        }
       }
     } else if (rob_is_branch) {
       miss_type = "cond_branch";
       miss_subtype = "cond_branch";
-      pred_cond_miss_++;
+      if (collect_stats) pred_cond_miss_++;
     } else {
       miss_type = "control_unknown";
       miss_subtype = "control_unknown";
     }
   }
 
-  uint32_t redirect_distance =
-      (redirect_pc >= src_pc) ? (redirect_pc - src_pc) : (src_pc - redirect_pc);
-  redirect_distance_sum_ += redirect_distance;
-  redirect_distance_samples_++;
-  redirect_distance_max_ = std::max<uint64_t>(redirect_distance_max_, redirect_distance);
-
   uint32_t commit_pop = popcount_commit(static_cast<uint32_t>(top->commit_valid_o));
   uint32_t rob_count = static_cast<uint32_t>(top->dbg_rob_count_o);
   uint32_t killed_uops = (rob_count >= commit_pop) ? (rob_count - commit_pop) : 0;
-  if (flush_reason == "branch_mispredict") {
-    wrong_path_killed_uops_ += killed_uops;
+
+  if (collect_stats) {
+    uint32_t redirect_distance =
+        (redirect_pc >= src_pc) ? (redirect_pc - src_pc) : (src_pc - redirect_pc);
+    flush_count_++;
+    flush_reason_hist_[flush_reason]++;
+    flush_source_hist_[flush_source]++;
+    redirect_distance_sum_ += redirect_distance;
+    redirect_distance_samples_++;
+    redirect_distance_max_ = std::max<uint64_t>(redirect_distance_max_, redirect_distance);
+    if (flush_reason == "branch_mispredict") {
+      mispredict_flush_count_++;
+      wrong_path_killed_uops_ += killed_uops;
+    }
+    if (top->dbg_bru_mispred_o) {
+      bru_count_++;
+    }
   }
 
-  if (!should_log_verbose_flush(cycles)) return;
+  if (!should_log_verbose_flush(cycles)) {
+    if (collect_stats && !pending_flush_penalty_) {
+      pending_flush_penalty_ = true;
+      pending_flush_cycle_ = cycles;
+      pending_flush_reason_ = flush_reason;
+    }
+    return;
+  }
+
+  const uint32_t redirect_distance =
+      (redirect_pc >= src_pc) ? (redirect_pc - src_pc) : (src_pc - redirect_pc);
 
   std::ios::fmtflags f(std::cout.flags());
   std::cout << "[flush ] cycle=" << cycles
@@ -219,13 +243,16 @@ void ProfileCollector::record_commit_width(uint32_t commit_this_cycle) {
 }
 
 void ProfileCollector::on_commit_cycle(uint64_t cycles) {
-  if ((args_.commit_trace || args_.bru_trace) && pending_flush_penalty_ &&
-      cycles > pending_flush_cycle_) {
+  if (pending_flush_penalty_ && cycles > pending_flush_cycle_) {
+    const uint64_t penalty = cycles - pending_flush_cycle_;
+    if (profile_enabled()) {
+      branch_penalty_cycles_ += penalty;
+    }
     if (should_log_verbose_flush(cycles)) {
       std::ios::fmtflags f(std::cout.flags());
       std::cout << "[flushp] cycle=" << cycles
                 << " reason=" << pending_flush_reason_
-                << " penalty=" << (cycles - pending_flush_cycle_)
+                << " penalty=" << penalty
                 << "\n";
       std::cout.flags(f);
     }

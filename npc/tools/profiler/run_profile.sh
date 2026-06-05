@@ -6,10 +6,21 @@ NPC_HOME=$(cd "${SCRIPT_DIR}/../.." && pwd)
 TRIATHLON_HOME=$(cd "${NPC_HOME}/.." && pwd)
 
 : "${ARCH:=riscv32i-npc}"
-: "${CROSS_COMPILE:=riscv64-elf-}"
+: "${CROSS_COMPILE:=riscv64-unknown-elf-}"
 
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 OUT_DIR=${OUT_DIR:-"${NPC_HOME}/build/profile/${TIMESTAMP}"}
+case "${OUT_DIR}" in
+  /*) ;;
+  npc/build/profile|npc/build/profile/*) OUT_DIR="${TRIATHLON_HOME}/${OUT_DIR}" ;;
+  build/profile|build/profile/*) OUT_DIR="${NPC_HOME}/${OUT_DIR}" ;;
+  *) OUT_DIR="${NPC_HOME}/${OUT_DIR}" ;;
+esac
+OUT_DIR="${OUT_DIR%/}"
+PROFILE_COLLECTION="${NPC_HOME}/build/profile"
+if [[ "${OUT_DIR}" == "${PROFILE_COLLECTION}" ]]; then
+  OUT_DIR="${PROFILE_COLLECTION}/${TIMESTAMP}"
+fi
 mkdir -p "${OUT_DIR}"
 
 DHRYSTONE_IMG="${TRIATHLON_HOME}/am-kernels/benchmarks/dhrystone/build/dhrystone-${ARCH}.bin"
@@ -33,32 +44,29 @@ echo "[profiler] build benchmark images"
 make -C "${TRIATHLON_HOME}/am-kernels/benchmarks/dhrystone" ARCH="${ARCH}" CROSS_COMPILE="${CROSS_COMPILE}" image
 make -C "${TRIATHLON_HOME}/am-kernels/benchmarks/coremark" ARCH="${ARCH}" CROSS_COMPILE="${CROSS_COMPILE}" image
 
-echo "[profiler] run dhrystone full profile"
-make -C "${NPC_HOME}" sim \
-  DIFFTEST= \
-  IMG="${DHRYSTONE_IMG}" \
-  ARGS="--commit-trace --bru-trace --stall-trace=100 --progress=50000" \
-  > "${OUT_DIR}/dhrystone.log" 2>&1
+run_profile_sim() {
+  local label=$1
+  local img=$2
+  local json=$3
+  local progress=$4
+  local log="${OUT_DIR}/${label}.sim.log"
+  echo "[profiler] run ${label} profile-json (log: ${log})"
+  if ! make -C "${NPC_HOME}" sim \
+    DIFFTEST= \
+    IMG="${img}" \
+    ARGS="--profile-json ${json} --progress=${progress}" \
+    > "${log}" 2>&1; then
+    echo "[profiler] ${label} sim failed; last 40 lines of ${log}:" >&2
+    tail -n 40 "${log}" >&2
+    exit 1
+  fi
+}
 
-echo "[profiler] run coremark full profile"
-make -C "${NPC_HOME}" sim \
-  DIFFTEST= \
-  IMG="${COREMARK_IMG}" \
-  ARGS="--bru-trace --stall-trace=20 --progress=1000000" \
-  > "${OUT_DIR}/coremark.log" 2>&1
+run_profile_sim dhrystone "${DHRYSTONE_IMG}" "${OUT_DIR}/dhrystone.json" 50000
+run_profile_sim coremark "${COREMARK_IMG}" "${OUT_DIR}/coremark.json" 1000000
 
-echo "[profiler] run coremark commit sample"
-make -C "${NPC_HOME}" sim \
-  DIFFTEST= \
-  IMG="${COREMARK_IMG}" \
-  ARGS="--max-cycles=2000000 --commit-trace" \
-  > "${OUT_DIR}/coremark_commit_sample.log" 2>&1 || true
-
-python3 "${SCRIPT_DIR}/parse_profile.py" \
-  --log-dir "${OUT_DIR}" \
-  --template "${SCRIPT_DIR}/report_template.md" \
-  --out-json "${OUT_DIR}/summary.json" \
-  --out-md "${OUT_DIR}/report.md"
+python3 "${SCRIPT_DIR}/merge_profile_json.py" --run-dir "${OUT_DIR}"
+python3 "${SCRIPT_DIR}/finalize_run.py" --run-dir "${OUT_DIR}"
 
 echo "[profiler] done"
-echo "[profiler] report: ${OUT_DIR}/report.md"
+echo "[profiler] summary: ${OUT_DIR}/summary.json"

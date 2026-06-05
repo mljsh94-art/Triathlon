@@ -75,8 +75,9 @@ Triathlon/
 ├── npc/csrc/                        # Verilator 仿真 C++ 宿主
 │   ├── npc_main.cpp                 # 仿真主循环骨架（tick/commit/difftest）
 │   ├── include/                     # args、memory_models、sim_observer 等
-│   └── lib/                         # args_parser、difftest、profile、sim_observer、sim_trap_exit
+│   └── lib/                         # args_parser、difftest、profile_collector_*、sim_observer、sim_trap_exit
 ├── npc/csrc/test/                   # C++ unit drivers for targeted Verilator testbenches
+├── npc/tools/profiler/              # 性能采集与看板（run_profile.sh、merge/build_*.py）
 ├── am-kernels/                      # Test programs and benchmarks
 ├── nemu/                            # Reference simulator
 ├── abstract-machine/                # Bare-metal runtime
@@ -259,10 +260,12 @@ Backend -> Frontend:
 | `default` / `all` | `make` 或 `make all` | 默认目标。编译 SystemVerilog 设计和 C++ 仿真源文件，生成二进制仿真程序 `build/tb_triathlon` |
 | `sim` | `make sim` | 编译并直接运行仿真。支持加载二进制镜像并传入仿真参数。 |
 | `gdb` | `make gdb` | 编译并在 GDB 调试器中运行仿真可执行文件，方便 C++ 侧的调试。 |
-| `profile-report` | `make profile-report` | 运行性能分析（Profiling）脚本 `run_profile.sh`，生成分析数据。 |
-| `profile-parse` | `make profile-parse` | 解析性能分析数据，并将结果输出为 Markdown 报告和 JSON 汇总。 |
-| `profile-task` | `make profile-task` | 一键执行：先运行性能分析，再解析生成对应的报告（存放在指定 tag 目录下）。|
-| `profile-baseline` | `make profile-baseline` | 以 `baseline` 为 tag 运行一键性能分析和解析，生成基准测试报告。 |
+| `profile-report` | `make profile-report` | 运行 `run_profile.sh`：dhrystone/coremark 仿真 `--profile-json`，merge 为 `summary.json`，写 `metadata.json`。 |
+| `profile-task` | `make profile-task` | 一键 profile 采集到 `npc/build/profile/<PROFILE_TAG>/`。 |
+| `profile-baseline` | `make profile-baseline` | 以 `baseline` 为 tag 运行 profile 采集，作为回归基线。 |
+| `profile-index` | `make profile-index` | 扫描 `npc/build/profile/*/summary.json` 生成 `index.json`。 |
+| `profile-dashboard` | `make profile-dashboard` | 生成看板 `dashboard/index.html`，并为每个 run 生成可读的 `summary.html`。 |
+| `profile-clean` | `make profile-clean` | 删除 `npc/build/profile/`（历次 run、`index.json`、看板 HTML 一并清除）。 |
 | `linux-smoke` | `make linux-smoke` | 运行 Linux 冒烟测试脚本 `run_linux_smoke.sh`。 |
 | `bench` | `make bench BENCH_IMG=...` | 使用当前仿真器执行固定镜像并打印墙钟耗时，便于对比仿真速度。 |
 | `clean` | `make clean` | 清理编译生成目录，删除整个 `build` 文件夹。 |
@@ -284,6 +287,11 @@ Backend -> Frontend:
 | `DEBUG` | `0` | 设为 `1` 时使用 `-O0 -g` 编译 host 仿真器，默认使用 `-O3 -march=native`。 |
 | `BENCH_IMG` | `$(IMG)` | `bench` 目标运行的镜像路径。 |
 | `BENCH_ARGS` | `--max-cycles=10000000 --progress=0` | `bench` 目标传给仿真器的参数。 |
+| `ARCH` | `riscv32i-npc` | `profile-report` 编译 AM benchmark 的架构标签。 |
+| `CROSS_COMPILE` | `riscv64-unknown-elf-` | AM benchmark 交叉编译前缀（WSL 常见安装名；勿与 OpenSBI 的 `riscv64-linux-gnu-` 混用）。 |
+| `PROFILE_OUT_DIR` | *(空，自动时间戳)* | `profile-report` 输出目录；从仓库根写 `npc/build/profile/<run_id>`。 |
+| `PROFILE_TAG` | `latest` | `profile-task` 写入 `npc/build/profile/<PROFILE_TAG>/`。 |
+| `PROFILE_ROOT` | `npc/build/profile` | `profile-index` / `profile-dashboard` 扫描根目录。 |
 
 ### 3. 典型使用示例
 
@@ -303,7 +311,70 @@ Backend -> Frontend:
   make ARCH=riscv32i-npc ALL=dummy run
   ```
 
-### 4. 仿真器命令行扩展参数（`ARGS`）
+### 4. Profile 性能采集与看板
+
+工具目录 `npc/tools/profiler/`（详见 `npc/tools/profiler/README.md`）。固定 benchmark：**dhrystone**、**coremark**；采集时 `DIFFTEST=` 禁用协同仿真。
+
+#### 数据流
+
+```
+run_profile.sh → make sim --profile-json → <run_id>/dhrystone.json、coremark.json
+  → merge_profile_json.py → summary.json
+  → finalize_run.py → metadata.json
+  → build_index.py → index.json
+  → build_dashboard.py → dashboard/index.html + <run_id>/summary.html
+```
+
+#### 目录约定
+
+每次采集写入 **`npc/build/profile/<run_id>/` 子目录**（不要落到 `profile/` 根目录）。省略 `PROFILE_OUT_DIR` 时 `run_profile.sh` 自动使用 `npc/build/profile/<timestamp>/`。
+
+| 路径 | 说明 |
+| :--- | :--- |
+| `<run_id>/dhrystone.json`、`<run_id>/coremark.json` | C++ `--profile-json` 单 benchmark 输出 |
+| `<run_id>/summary.json` | 聚合指标（CI/回归对比主接口） |
+| `<run_id>/summary.html` | 可读报告页（stall 条形图、predict、ifu_fq 等；`profile-dashboard` 生成） |
+| `<run_id>/metadata.json` | `run_id`、`git_sha`、`created_at`、`host` 等 |
+| `index.json` | 历次 run 索引（`make profile-index`） |
+| `dashboard/index.html` | 静态 HTML 看板 |
+
+`index.json`、看板 HTML 及 JSON 内的 `log_path`/`run_dir` 在生成时会写入**当时机器的绝对路径**；换路径或换机器后需重新执行 `profile-report` / `profile-dashboard`。
+
+#### 常用命令
+
+在**仓库根目录**、**WSL/Linux bash** 下执行（`$(date ...)` 勿在 PowerShell 中直接展开）：
+
+```bash
+# 采集（默认 ARCH=riscv32i-npc、CROSS_COMPILE=riscv64-unknown-elf-）
+make -C npc profile-report
+make -C npc profile-report PROFILE_OUT_DIR=npc/build/profile/$(date +%Y%m%d-%H%M%S)
+
+# 固定 tag 目录（回归基线）
+make -C npc profile-baseline          # 等价于 PROFILE_TAG=baseline 的 profile-task
+
+# 刷新看板（先 index 再 HTML）
+make -C npc profile-dashboard
+# 浏览器打开 npc/build/profile/dashboard/index.html
+
+# 清空全部 profile 数据后重采（含 baseline、看板）
+make -C npc profile-clean
+make -C npc profile-baseline
+make -C npc profile-report PROFILE_OUT_DIR=npc/build/profile/$(date +%Y%m%d-%H%M%S)
+make -C npc profile-dashboard
+
+# 两次 summary 回归门禁
+npc/scripts/check_perf_regression.sh \
+  npc/build/profile/baseline \
+  npc/build/profile/<run_id>
+
+# 单 benchmark 手动 JSON
+make -C npc sim DIFFTEST= IMG=.../dhrystone-riscv32i-npc.bin \
+  ARGS='--profile-json npc/build/out.json --progress=50000'
+```
+
+仿真失败时，`run_profile.sh` 在 `<run_id>/dhrystone.sim.log`、`<run_id>/coremark.sim.log` 保留日志。
+
+### 5. 仿真器命令行扩展参数（`ARGS`）
 
 仿真主程序为 `npc/build/tb_triathlon`，参数解析见 `npc/csrc/lib/args_parser.cpp` 与 `npc/csrc/include/args_parser.h`。
 
@@ -322,6 +393,8 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 
 #### 参数一览
 
+周期级 trace（`--commit-trace`、`--bru-trace` 等）与仿真结束 profile 汇总（`--profile`）**相互独立**，可任意组合。
+
 | 参数 | 默认值 | 说明 |
 | :--- | :--- | :--- |
 | `<IMG>` | — | 待加载二进制镜像路径（positional，必需） |
@@ -330,11 +403,13 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 | `--progress [N]` / `--progress=N` | 禁用；仅 `--progress` 时 `N=1000000` | 每 `N` 周期打印轻量 `[progress]` 心跳（cycles、commits、IPC、last_pc 等） |
 | `--progress-verbose` | 禁用 | 将 `[progress]` 扩展为详细快照（ROB、Store Buffer、LSU、DCache MSHR 等）；`--linux-early-debug` 也会启用详细进度输出。 |
 | `--trace [path]` / `--trace=path` | 默认 `npc.vcd` | 生成 VCD 波形；需编译时定义 `VM_TRACE`，否则忽略并打印 `[warn]` |
-| `--commit-trace [窗口]` | 禁用 | 启用 commit 级 trace 与仿真结束 profile 汇总（见下文「输出 Tag」） |
+| `--profile` | 禁用 | 仿真结束时 stdout 输出 `ProfileCollector` 文本汇总（`[commitm]`/`[stallm]`/`[pred ]` 等） |
+| `--profile-json <path>` / `--profile-json=path` | 禁用 | 仿真结束时写出单 benchmark JSON；自动启用 profile 统计（无需同时传 `--profile`） |
+| `--commit-trace [窗口]` | 禁用 | 周期级 commit/LSU/store trace（`[commit]`/`[stwb]`/`[ldreq]`/`[ldrsp]`，见「输出 Tag」） |
 | `--commit-trace=START:END` | — | 等价于 `--commit-trace START:END` |
 | `--commit-trace-start N` | `0` | 与 `--commit-trace` 配合：trace 起始 cycle（含） |
 | `--commit-trace-end N` | `0`（无上限） | 与 `--commit-trace` 配合：trace 结束 cycle（含）；`0` 表示不设上限 |
-| `--bru-trace` | 禁用 | BRU writeback trace（`[bruwb]`）+ pipeline flush trace（`[flush]`/`[flushp]`/`[bru]`，**无** cycle 窗口限制）+ profile 汇总 |
+| `--bru-trace` | 禁用 | 周期级 BRU/flush trace（`[bruwb]`、`[flush]`/`[flushp]`/`[bru]`，**无** cycle 窗口限制） |
 | `--fe-trace` | 禁用 | 取指校验：前端 bundle 与内存指令不一致，或 slot_valid 不完整时打印 `[fe]` |
 | `--stall-trace [N]` / `--stall-trace=N` | 禁用；`N=200` | 连续 `N` 周期无 commit 时打印 `[stall]`，之后每再 stall `N` 周期重复打印 |
 | `--boot-handoff` | 禁用 | Boot ROM handoff 启动链（见下文） |
@@ -345,7 +420,7 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 
 #### `--commit-trace` 窗口语法
 
-窗口仅抑制 stdout 上的 commit/LSU/store trace 以及（在与 `--bru-trace` 同开时）`[flush]`/`[flushp]`/`[bru]`；**profile 汇总统计仍全程收集**。
+窗口仅抑制 stdout 上的 commit/LSU/store trace 以及（在与 `--bru-trace` 同开时）`[flush]`/`[flushp]`/`[bru]`。结束汇总由 `--profile` 单独控制，与窗口无关。
 
 | 写法 | 含义 |
 | :--- | :--- |
@@ -378,7 +453,7 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 | `[progress]` | `--progress` | 周期性仿真心跳 |
 | `[linux-stage]` | `--linux-early-debug` | 启动里程碑（每 stage 仅一次，见下表） |
 | `[debug][...]` | `--linux-early-debug` | satp 变更、页表写、异常 flush、SV32 fault walk、UART 等细粒度调试 |
-| `[commitm]` / `[controlm]` / `[stallm]` / `[stallm2]`–`[stallm6]` / `[ifum]` / `[pred  ]` / `[hotpcm]` / `[hotinstm]` | `--commit-trace` 或 `--bru-trace` | 仿真结束由 `ProfileCollector` 输出的汇总（commit 宽度、控制流、stall 分类、IFU FQ、BPU 命中率、热 PC/指令等） |
+| `[commitm]` / `[controlm]` / `[stallm]` / `[stallm2]`–`[stallm6]` / `[ifum]` / `[pred  ]` / `[hotpcm]` / `[hotinstm]` | `--profile` | 仿真结束由 `ProfileCollector` 输出的汇总（commit 宽度、控制流、stall 分类、IFU FQ、BPU 命中率、热 PC/指令等） |
 | `HIT GOOD TRAP` / `HIT BAD TRAP` | — | AM 测试 `ebreak`：a0=0 成功 / 非 0 失败 |
 | `IPC=` / `CPI=` | — | 成功 trap 或超时前输出的性能指标 |
 
@@ -450,9 +525,9 @@ make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
 #### 常用组合示例
 
 ```bash
-# AM 基准测试 + profile（run_profile.sh 默认组合）
-make -C npc sim DIFFTEST= IMG=.../dhrystone-riscv32i-npc.bin \
-  ARGS='--commit-trace --bru-trace --stall-trace=100 --progress=50000'
+# Profile 采集/看板（完整说明见 §4）
+make -C npc profile-report PROFILE_OUT_DIR=npc/build/profile/$(date +%Y%m%d-%H%M%S)
+make -C npc profile-dashboard
 
 # 限定 commit trace 窗口
 make -C npc sim IMG=.../test.bin ARGS='--commit-trace 100000:150000'
@@ -471,7 +546,7 @@ make -C npc sim DIFFTEST= IMG=~/rv32-linux/out/fw_payload.bin \
 make -C npc sim IMG=.../test.bin ARGS='--trace wave.vcd --max-cycles=50000'
 ```
 
-### 5. OpenSBI + Linux 镜像合并与全系统仿真
+### 6. OpenSBI + Linux 镜像合并与全系统仿真
 
 `merge.py` 生成的是 **OpenSBI + Linux Kernel Image + DTB** 组合镜像，**不是** `echo_payload/payload.bin`。OpenSBI 通过 `FW_JUMP_ADDR=0x80400000` 跳转到 S-mode Linux 入口，并通过 `FW_JUMP_FDT_ADDR=0x83F00000` 将 DTB 地址传给 Linux 的 `a1`。设备树当前向 Linux 报告 64MB 可见内存（`0x80000000`–`0x83FFFFFF`），用于降低全系统仿真的 early memory/per-CPU 初始化成本。
 
@@ -644,15 +719,20 @@ make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
 
 #### 合并与仿真示例
 
+在**仓库根目录**执行（与上文「完整构建示例（WSL）」相同，路径均相对仓库根）：
+
 ```bash
 # 1. 重建 OpenSBI（修改 objects.mk 后必做）
-wsl bash -c "make -C /mnt/e/vivado_project/OOOcpu_design/Triathlon/opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-"
+make -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-
 
 # 2. 重建 Linux（修改内核源码/.config/临时补丁后必做）
-wsl bash -c "make -C /mnt/e/vivado_project/OOOcpu_design/Triathlon/linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(nproc) Image"
+make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(nproc) Image
 
 # 3. 合并镜像并仿真
-wsl bash -c "cd /mnt/e/vivado_project/OOOcpu_design/Triathlon && python3 linux_workspace/merge.py && make -C npc sim IMG=/mnt/e/vivado_project/OOOcpu_design/Triathlon/fw_combined.bin DIFFTEST_SO= ARGS='--max-cycles=100000000 --progress=1000000 --linux-early-debug' > npc/sim_final_verify.log 2>&1"
+python3 linux_workspace/merge.py
+make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
+  ARGS='--max-cycles=100000000 --progress=1000000 --linux-early-debug' \
+  > npc/sim_final_verify.log 2>&1
 ```
 
 #### 流程步骤

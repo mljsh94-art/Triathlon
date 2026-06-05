@@ -17,13 +17,13 @@ void print_trap_success(uint64_t cycles, ProfileCollector &profile, Vtb_triathlo
                          : 0.0;
   std::cout << "IPC=" << ipc << " CPI=" << cpi << " cycles=" << cycles
             << " commits=" << profile.total_commits() << "\n";
-  profile.emit_summary(cycles, top);
+  profile.emit_all_summaries(cycles, top);
 }
 
 void print_trap_failure(uint32_t code, uint64_t cycles, ProfileCollector &profile,
                         Vtb_triathlon *top) {
   std::cout << "HIT BAD TRAP (code=" << code << ")\n";
-  profile.emit_summary(cycles, top);
+  profile.emit_all_summaries(cycles, top);
 }
 
 std::optional<int> try_ebreak_on_exception_flush(const SimArgs &args, Vtb_triathlon *top,

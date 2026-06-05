@@ -8,23 +8,35 @@
 
 namespace npc {
 
-void ProfileCollector::emit_summary(uint64_t final_cycles, const Vtb_triathlon *top) {
-  if (!(args_.commit_trace || args_.bru_trace)) return;
-  emit_pred_summary(top);
-
-  if (has_prev_commit_) {
-    uint32_t opcode = prev_commit_inst_ & 0x7Fu;
-    if (opcode == 0x63u) {
-      control_branch_count_++;
-    } else if (opcode == 0x6Fu) {
-      control_jal_count_++;
-    } else if (opcode == 0x67u) {
-      control_jalr_count_++;
-    }
-    if (is_call_inst(prev_commit_inst_)) control_call_count_++;
-    if (is_ret_inst(prev_commit_inst_)) control_ret_count_++;
-    has_prev_commit_ = false;
+void ProfileCollector::finalize_control_tail() {
+  if (!has_prev_commit_) return;
+  uint32_t opcode = prev_commit_inst_ & 0x7Fu;
+  if (opcode == 0x63u) {
+    control_branch_count_++;
+  } else if (opcode == 0x6Fu) {
+    control_jal_count_++;
+  } else if (opcode == 0x67u) {
+    control_jalr_count_++;
   }
+  if (is_call_inst(prev_commit_inst_)) control_call_count_++;
+  if (is_ret_inst(prev_commit_inst_)) control_ret_count_++;
+  has_prev_commit_ = false;
+}
+
+void ProfileCollector::emit_all_summaries(uint64_t final_cycles, const Vtb_triathlon *top) {
+  if (!profile_enabled()) return;
+  finalize_control_tail();
+  if (args_.profile) {
+    emit_summary(final_cycles, top);
+  }
+  if (!args_.profile_json_path.empty()) {
+    emit_summary_json(final_cycles, top);
+  }
+}
+
+void ProfileCollector::emit_summary(uint64_t final_cycles, const Vtb_triathlon *top) {
+  if (!args_.profile) return;
+  emit_pred_summary(top);
 
   uint64_t stall_total_cycles = 0;
   for (uint64_t v : stall_cycle_hist_) stall_total_cycles += v;
@@ -119,7 +131,7 @@ void ProfileCollector::emit_summary(uint64_t final_cycles, const Vtb_triathlon *
 }
 
 void ProfileCollector::emit_pred_summary(const Vtb_triathlon *top) const {
-  if (!(args_.commit_trace || args_.bru_trace)) return;
+  if (!profile_enabled()) return;
 
   uint64_t pred_cond_hit = (pred_cond_total_ >= pred_cond_miss_) ? (pred_cond_total_ - pred_cond_miss_) : 0;
   uint64_t pred_jump_hit = (pred_jump_total_ >= pred_jump_miss_) ? (pred_jump_total_ - pred_jump_miss_) : 0;

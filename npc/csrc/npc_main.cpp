@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
     std::cerr << "Usage: " << argv[0]
               << " <IMG> [--max-cycles N] [-d REF_SO] [--trace [vcd]] [--commit-trace [START[:END]|START [END]]]"
               << " [--commit-trace-start N] [--commit-trace-end N]"
-              << " [--bru-trace] [--fe-trace] [--stall-trace [N]] [--boot-handoff]"
+              << " [--profile] [--profile-json <path>] [--bru-trace] [--fe-trace] [--stall-trace [N]] [--boot-handoff]"
               << " [--dtb <path>] [--firmware-load-base <addr>]"
               << " [--virtio-blk-image <path>]"
               << " [--progress [N]] [--progress-verbose] [--linux-early-debug]\n";
@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
 
       if (!difftest.step_and_check(cycles, slot.pc, slot.decoded_inst, slot.rf_before, rf)) {
         std::cerr << "[difftest] stop on first mismatch\n";
-        profile.emit_summary(cycles, top);
+        profile.emit_all_summaries(cycles, top);
         if (tfp) {
           tfp->close();
         }
@@ -196,7 +196,7 @@ int main(int argc, char **argv) {
         dut_csr.mcause = top->dbg_csr_mcause_o;
         if (!difftest.check_arch_state(cycles, rf, dut_csr)) {
           std::cerr << "[difftest] stop on arch-state mismatch\n";
-          profile.emit_summary(cycles, top);
+          profile.emit_all_summaries(cycles, top);
           if (tfp) {
             tfp->close();
           }
@@ -214,7 +214,7 @@ int main(int argc, char **argv) {
   }
 
   std::cerr << "TIMEOUT after " << args.max_cycles << " cycles\n";
-  profile.emit_summary(args.max_cycles, top);
+  profile.emit_all_summaries(args.max_cycles, top);
   if (tfp) {
     tfp->close();
   }

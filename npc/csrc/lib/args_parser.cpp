@@ -185,6 +185,19 @@ SimArgs parse_args(int argc, char **argv) {
       }
       continue;
     }
+    if (arg == "--profile") {
+      args.profile = true;
+      continue;
+    }
+    if (arg == "--profile-json" && i + 1 < argc) {
+      args.profile_json_path = argv[i + 1];
+      i++;
+      continue;
+    }
+    if (arg.rfind("--profile-json=", 0) == 0) {
+      args.profile_json_path = arg.substr(std::string("--profile-json=").size());
+      continue;
+    }
     if (arg == "--fe-trace") {
       args.fe_trace = true;
       continue;

@@ -26,6 +26,8 @@ class ProfileCollector {
   void on_commit_cycle(uint64_t cycles);
   void on_no_commit_cycle(uint64_t cycles, uint64_t no_commit_cycles, const Vtb_triathlon *top);
   void emit_summary(uint64_t final_cycles, const Vtb_triathlon *top);
+  void emit_summary_json(uint64_t final_cycles, const Vtb_triathlon *top);
+  void emit_all_summaries(uint64_t final_cycles, const Vtb_triathlon *top);
 
   uint64_t total_commits() const { return total_commits_; }
   uint32_t last_commit_pc() const { return last_commit_pc_; }
@@ -71,6 +73,10 @@ class ProfileCollector {
   static bool is_ret_inst(uint32_t inst);
   static bool is_indirect_jump_inst(uint32_t inst);
 
+  bool profile_enabled() const {
+    return args_.profile || !args_.profile_json_path.empty();
+  }
+  void finalize_control_tail();
   bool commit_trace_window_active(uint64_t cycle) const;
   bool should_log_verbose_flush(uint64_t cycle) const;
 
@@ -128,6 +134,13 @@ class ProfileCollector {
   uint64_t redirect_distance_samples_ = 0;
   uint64_t redirect_distance_max_ = 0;
   uint64_t wrong_path_killed_uops_ = 0;
+
+  uint64_t flush_count_ = 0;
+  uint64_t bru_count_ = 0;
+  uint64_t mispredict_flush_count_ = 0;
+  uint64_t branch_penalty_cycles_ = 0;
+  std::unordered_map<std::string, uint64_t> flush_reason_hist_;
+  std::unordered_map<std::string, uint64_t> flush_source_hist_;
 
   std::unordered_map<uint32_t, uint64_t> commit_pc_hist_;
   std::unordered_map<uint32_t, uint64_t> commit_inst_hist_;
