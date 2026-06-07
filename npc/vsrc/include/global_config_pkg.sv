@@ -10,6 +10,7 @@ package global_config_pkg;
   localparam int unsigned FTQ_DEPTH = (Cfg.FTQ_DEPTH >= 2) ? Cfg.FTQ_DEPTH : 2;
   localparam int unsigned FTQ_ID_W = (Cfg.FTQ_ID_W >= 1) ? Cfg.FTQ_ID_W : 1;
   localparam int unsigned FETCH_EPOCH_W = (Cfg.FETCH_EPOCH_W >= 1) ? Cfg.FETCH_EPOCH_W : 3;
+  localparam int unsigned FE_EXPAND_MAX = Cfg.INSTR_PER_FETCH * 2;
 
   typedef struct packed {
     logic valid;

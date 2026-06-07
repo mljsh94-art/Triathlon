@@ -14,9 +14,11 @@ module tb_backend (
     input  logic                                         frontend_ibuf_valid,
     output logic                                         frontend_ibuf_ready,
     input  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] frontend_ibuf_instrs,
-    input  logic [           Cfg.PLEN-1:0]               frontend_ibuf_pc,
+    input  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] frontend_ibuf_raw_instrs,
+    input  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] frontend_ibuf_pcs,
     input  logic [Cfg.INSTR_PER_FETCH-1:0]               frontend_ibuf_slot_valid,
     input  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] frontend_ibuf_pred_npc,
+    input  logic [Cfg.INSTR_PER_FETCH-1:0]               frontend_ibuf_is_rvc,
     input  logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] frontend_ibuf_ftq_id,
     input  logic [Cfg.INSTR_PER_FETCH-1:0][2:0] frontend_ibuf_fetch_epoch,
 
@@ -60,7 +62,6 @@ module tb_backend (
     output logic [Cfg.PLEN-1:0]                rob_flush_pc_o,
     output logic                               dbg_dec_ready_o,
     output logic                               dbg_dec_valid_o,
-    output logic                               dbg_ingress_dec_valid_o,
     output logic [((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] dbg_dec_uop0_ftq_id_o,
     output logic [2:0]                         dbg_dec_uop0_fetch_epoch_o,
     output logic [((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] dbg_bpu_update_ftq_id_o,
@@ -100,9 +101,11 @@ module tb_backend (
       .frontend_ibuf_valid,
       .frontend_ibuf_ready,
       .frontend_ibuf_instrs,
-      .frontend_ibuf_pc,
+      .frontend_ibuf_raw_instrs,
+      .frontend_ibuf_pcs,
       .frontend_ibuf_slot_valid,
       .frontend_ibuf_pred_npc,
+      .frontend_ibuf_is_rvc,
       .frontend_ibuf_ftq_id(frontend_ibuf_ftq_id),
       .frontend_ibuf_fetch_epoch(frontend_ibuf_fetch_epoch),
       .backend_flush_o(backend_flush_unused),
@@ -167,7 +170,6 @@ module tb_backend (
   assign rob_flush_pc_o = dut.rob_flush_pc;
   assign dbg_dec_ready_o = dut.decode_backend_ready;
   assign dbg_dec_valid_o = dut.dec_valid;
-  assign dbg_ingress_dec_valid_o = dut.ingress_dec_valid;
   assign dbg_dec_uop0_ftq_id_o = dut.dec_uops[0].ftq_id;
   assign dbg_dec_uop0_fetch_epoch_o = dut.dec_uops[0].fetch_epoch;
   assign dbg_bpu_update_ftq_id_o = dut.bpu_update_ftq_id_dbg;

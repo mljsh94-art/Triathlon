@@ -31,7 +31,7 @@ module ifu #(
 
     //--- 3.Ibuffer响应接口 (交付给后端译码阶段) ---
     output logic ifu_ibuffer_rsp_valid_o,           // 发送给 IBuffer 的交货有效信号
-    input  logic                      ibuffer_ifu_rsp_ready_i, // 后端 IBuffer 反馈的就绪信号 (可签收)
+    input  logic                      ibuffer_ifu_rsp_ready_i, // frontend aligner/ibuffer 反馈的就绪信号 (可签收)
     output logic [Cfg.PLEN-1:0] ifu_ibuffer_rsp_pc_o, // 这一包指令的起始虚拟 PC 地址
     output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ifu_ibuffer_rsp_data_o, // 发送给后端的指令数据包
     output logic [Cfg.INSTR_PER_FETCH-1:0] ifu_ibuffer_rsp_slot_valid_o, // 包内各指令槽位的有效性

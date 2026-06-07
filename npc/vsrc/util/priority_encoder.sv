@@ -1,3 +1,4 @@
+// vsrc/util/priority_encoder.sv
 module priority_encoder #(
     parameter int unsigned WIDTH = 8
 ) (

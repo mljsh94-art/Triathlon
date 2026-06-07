@@ -403,7 +403,7 @@ module tb_triathlon #(
   // Debug: frontend/backend handshakes
   assign dbg_fe_valid_o = dut.fe_ibuf_valid;
   assign dbg_fe_ready_o = dut.fe_ibuf_ready;
-  assign dbg_fe_pc_o    = dut.fe_ibuf_pc;
+  assign dbg_fe_pc_o    = dut.fe_ibuf_pcs[0];
   assign dbg_fe_instrs_o = dut.fe_ibuf_instrs;
   assign dbg_fe_slot_valid_o = dut.fe_ibuf_slot_valid;
   assign dbg_fe_pred_npc_o = dut.fe_ibuf_pred_npc;
@@ -445,8 +445,8 @@ module tb_triathlon #(
   assign dbg_ifetch_fault_ready_o = dut.ifetch_fault_ready;
   assign dbg_csr_en_o = dut.u_backend.csr_en;
   assign dbg_csr_ifetch_fault_inject_o = dut.u_backend.csr_ifetch_fault_inject;
-  assign dbg_dec_valid_o = dut.u_backend.decode_ibuf_valid;
-  assign dbg_dec_ready_o = dut.u_backend.decode_ibuf_ready;
+  assign dbg_dec_valid_o = dut.fe_ibuf_valid;
+  assign dbg_dec_ready_o = dut.fe_ibuf_ready;
   assign dbg_rob_ready_o = dut.u_backend.rob_ready;
   pipe_dbg_t pipe_bus;
   mem_dbg_t mem_bus;

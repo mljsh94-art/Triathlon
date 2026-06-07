@@ -1,6 +1,7 @@
 # Triathlon - Out-of-Order RISC-V CPU
 
 > **IMPORTANT DOCUMENTATION RULES:** 
+>
 > - **Update this MD after every modification** to the project.
 > - **Keep ONLY** system file descriptions, architecture descriptions, compilation toolchains, etc.
 > - **DO NOT add history records** or logs of past changes to this file.
@@ -16,14 +17,15 @@ Triathlon/
 ├── npc/vsrc/                        # RTL source
 │   ├── triathlon.sv                 # Top-level module
 │   ├── frontend/                    # Frontend pipeline
-│   │   ├── frontend.sv              # Frontend top (IFU + BPU + ICache)
+│   │   ├── frontend.sv              # Frontend top (IFU + BPU + ICache + aligner + ibuffer)
 │   │   ├── ifu.sv                   # Instruction fetch unit + FTQ
 │   │   ├── bpu.sv                   # Branch prediction unit
+│   │   ├── instr_aligner.sv         # RVC 半字展开 + carry（IFU fetch group → ibuf_entry_t）
+│   │   ├── ibuffer.sv               # 纯 FIFO（aligner → 4-wide decode-ready 出队）
 │   │   └── fetch_target_queue.sv    # Fetch target queue
 │   ├── backend/                     # Backend pipeline
-│   │   ├── backend.sv               # Backend top (all backend wiring)
+│   │   ├── backend.sv               # Backend top（含 decoder 例化）
 │   │   ├── buffer/
-│   │   │   ├── ibuffer.sv           # Instruction buffer (FIFO, 16 entries)
 │   │   │   └── store_buffer.sv      # Store buffer (16 entries)
 │   │   ├── decode/
 │   │   │   └── decoder.sv           # 4-wide instruction decoder
@@ -70,7 +72,8 @@ Triathlon/
 │   ├── platform/
 │   │   ├── plic.sv                  # Platform-Level Interrupt Controller
 │   │   └── virtio_blk.sv            # VirtIO Block Device Simulation
-│   └── util/
+│   └── util/                        # 可复用 RTL 原语
+│       ├── bundle_fifo.sv           # 宽数据 FIFO（支持同拍 bypass；IFU fetch queue）
 │       └── priority_encoder.sv      # Priority encoder
 ├── npc/csrc/                        # Verilator 仿真 C++ 宿主
 │   ├── npc_main.cpp                 # 仿真主循环骨架（tick/commit/difftest）
@@ -99,21 +102,22 @@ Triathlon/
 └── Makefile                         # Top-level build script
 ```
 
-
 ## Configuration (test_config_pkg)
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| XLEN | 32 | Integer register width |
-| PLEN | 32 | Physical address width |
-| INSTR_PER_FETCH | 4 | Fetch/decode/dispatch width |
-| NRET | 4 | Retire/commit width |
-| RS_DEPTH | 16 | Entries per reservation station |
-| ALU_COUNT | 2 | Configured ALU count (actual: 4 ALUs instantiated) |
-| FTQ_DEPTH | 8 | Fetch target queue depth |
-| ICACHE | 32KB, 4-way, 256-bit line | Instruction cache |
-| DCACHE | 32KB, 4-way, 256-bit line | Data cache |
-| ITLB / DTLB | 32 entries each | SV32 instruction/data TLB entries |
+
+| Parameter       | Value                     | Description                                        |
+| --------------- | ------------------------- | -------------------------------------------------- |
+| XLEN            | 32                        | Integer register width                             |
+| PLEN            | 32                        | Physical address width                             |
+| INSTR_PER_FETCH | 4                         | Fetch/decode/dispatch width                        |
+| NRET            | 4                         | Retire/commit width                                |
+| RS_DEPTH        | 16                        | Entries per reservation station                    |
+| ALU_COUNT       | 2                         | Configured ALU count (actual: 4 ALUs instantiated) |
+| FTQ_DEPTH       | 8                         | Fetch target queue depth                           |
+| ICACHE          | 32KB, 4-way, 256-bit line | Instruction cache                                  |
+| DCACHE          | 32KB, 4-way, 256-bit line | Data cache                                         |
+| ITLB / DTLB     | 32 entries each           | SV32 instruction/data TLB entries                  |
+
 
 ## Microarchitecture
 
@@ -135,22 +139,26 @@ Fetch -> Decode -> Rename -> Dispatch -> Issue -> Execute -> Writeback -> Commit
   - **RAS (Return Address Stack)**: Predicts function returns, updated speculatively.
 - **ICache**: 4-way set-associative, 32KB, 256-bit line (8 instructions). Non-blocking architecture with refill interface and 32-entry I-TLB.
 - **Fetch Target Queue (FTQ)**: Tracks fetch PCs, epochs, and prediction metadata for branch resolution and redirect recovery.
+- **Instr Aligner**: 将 IFU 4-word fetch group 半字展开为 ≤8 条 `ibuf_entry_t`（含 RVC `compressed_decoder`、carry、预测截断）。
+- **IBuffer**: 16-entry 纯 FIFO，接收 aligner 对齐条目，4-wide decode-ready 出队；与 IFU/aligner 一同位于 frontend。
 
-Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the backend IBuffer.
+Frontend→Backend 交界 = **ibuffer 出队口**（`fe_be_bundle_t`）：每拍 ≤4 条 decode-ready 指令束（`instrs`/`raw_instrs`/`pcs`/`slot_valid`/`pred_npc`/`is_rvc`/`ftq_id`/`fetch_epoch` + valid/ready）。
 
 ### Backend (backend.sv)
 
 #### Decode
-- **IBuffer**: 16-entry FIFO between frontend and decode. Absorbs fetch/decode rate mismatch.
-- **Decoder**: 4-wide decode. Converts 32-bit RISC-V instructions into uop_t micro-ops. Illegal instructions are routed to the CSR FU so they retire as precise illegal-instruction traps.
+
+- **Decoder** (`decoder.sv`，在 `backend.sv` 内例化): 4-wide decode，直接消费 frontend 出队的 decode-ready 束。Converts 32-bit RISC-V instructions into uop_t micro-ops. Illegal instructions are routed to the CSR FU so they retire as precise illegal-instruction traps.
 
 #### Rename & Dispatch
+
 - **Rename**: Allocates ROB entries, queries RAT for source register mappings, allocates Store Buffer entries for stores.
 - **RAT**: 32-entry register alias table mapping logical registers to ROB indices (speculative) or ARF (committed). Flushed on branch misprediction.
 - **Operand Read**: Reads ARF (8 read ports), queries ROB for in-flight results, supports commit-to-rename bypass in the same cycle.
 - **FU Demux**: Distributes uops to per-FU issue queues based on fu_type field.
 
 #### Issue
+
 - **ALU RS** (issue.sv): 4-way issue, 16-entry depth. 4 independent ALU outputs.
 - **BRU RS** (issue_single.sv): Single issue, 16-entry depth.
 - **LSU RS** (issue_lsu.sv): Single issue, coupled with Store Buffer allocation.
@@ -159,6 +167,7 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 - **Backpressure**: Rename stalls if any needed FU's RS lacks free entries.
 
 #### Execute (7 functional units)
+
 - **ALU0-ALU3** (`execute_alu`): Single-cycle integer ALU. Operations: ADD, SUB, SLT, SLTU, XOR, OR, AND, SLL, SRL, SRA, LUI, AUIPC
 - **BRU** (uses `execute_alu`): Branch resolution (BEQ/BNE/BLT/BGE/BLTU/BGEU/JAL/JALR). Checks predictions and triggers backend flush on mispredict.
 - **LSU Group** (`lsu_group.sv` & `lsu_lane.sv`): Advanced Out-of-Order Load/Store Unit.
@@ -169,10 +178,12 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 - **CSR** (`csr.sv`): CSR read/modify/write and exception/interrupt handling. Single-issue, ROB-head ordered. CSR/system exceptions are reported to the ROB first, then applied through the commit-time trap injection path so trap CSRs and `mstatus.MPP`/`SPP` are updated precisely once. External platform interrupts support both machine and supervisor delivery; the Linux device-tree PLIC context drives `SEIP` through `sip/mip`, `sie.SEIE`, `sstatus.SIE`, and `mideleg.SEIP`, allowing S-mode UART/PLIC interrupt handlers to run. `cycle`/`time`/`instret` and their high-half aliases return monotonic counter values for OpenSBI/Linux delay and probe paths. `satp` exposes SV32 mode and PPN fields with ASIDLEN=0; ASID bits are WARL-masked to zero because the current TLB is not ASID-tagged.
 
 #### Writeback & CDB
+
 - **Writeback Arbiter** (`writeback.sv`): 7 FU inputs -> 4 CDB ports. Priority arbitration broadcasts execution results.
 - **CDB (Common Data Bus)**: Broadcasts (valid, tag, value) to all RS modules for operand wake-up and to the ROB for completion tracking.
 
 #### Commit
+
 - **ROB** (rob.sv): 64-entry circular buffer. In-order retirement, up to 4 per cycle.
   - Stores raw and decoded instruction words for each uop and exports retired instruction metadata to the simulator.
   - Stores: 1 per cycle max
@@ -182,18 +193,21 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 - On misprediction: flush pipeline, redirect frontend.
 
 #### Store Buffer
+
 - 16-entry buffer. LSU fills store data; ROB commit triggers DCache writeback.
 - Supports load-to-store forwarding (store buffer hit check before DCache access).
 
 ### Cache & Memory Interface
 
 #### ICache (icache.sv)
+
 - 32KB, 4-way set-associative, 256-bit (32-byte) line
 - Tag: 19 bits, Index: 8 bits, Offset: 5 bits
 - Ports: IFU request/response
 - Miss interface: valid/ready handshake to external memory (refill)
 
 #### DCache (dcache.sv)
+
 - 32KB, 4-way set-associative, 256-bit line (same structure as ICache)
 - **Load port**: From LSU (ld_req/ld_rsp)
 - **Store port**: From Store Buffer (st_req)
@@ -204,6 +218,7 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 - The simulator-side refill model uses side-effectful MMIO reads for DCache line fills, so volatile registers such as the PLIC claim/complete register perform their architectural claim action when serviced through the cache miss path.
 
 #### External Memory Interface & Platform
+
 - Custom refill/writeback protocol at the triathlon top level.
 - Incorporates AXI wrappers (`icache_axi_wrapper.sv`, `dcache_axi_wrapper.sv`) for system integration.
 - PMA marks addresses outside the DRAM window (`0x80000000`-`0x87FFFFFF`) as uncacheable/MMIO, covering low platform devices and the UART window at `0xA0000000`.
@@ -217,6 +232,7 @@ Frontend outputs: 4 instructions + PC per cycle via valid/ready handshake to the
 ### Key Data Structures
 
 #### uop_t (decode_pkg.sv)
+
 ```systemverilog
 struct packed {
   logic valid, illegal;
@@ -255,44 +271,48 @@ Backend -> Frontend:
 
 ### 1. 编译与执行目标 (Makefile Targets)
 
-| 目标 (Target) | 常用指令 | 功能描述 |
-| :--- | :--- | :--- |
-| `default` / `all` | `make` 或 `make all` | 默认目标。编译 SystemVerilog 设计和 C++ 仿真源文件，生成二进制仿真程序 `build/tb_triathlon` |
-| `sim` | `make sim` | 编译并直接运行仿真。支持加载二进制镜像并传入仿真参数。 |
-| `gdb` | `make gdb` | 编译并在 GDB 调试器中运行仿真可执行文件，方便 C++ 侧的调试。 |
-| `profile-report` | `make profile-report` | 运行 `run_profile.sh`：dhrystone/coremark 仿真 `--profile-json`，merge 为 `summary.json`，写 `metadata.json`。 |
-| `profile-task` | `make profile-task` | 一键 profile 采集到 `npc/build/profile/<PROFILE_TAG>/`。 |
-| `profile-baseline` | `make profile-baseline` | 以 `baseline` 为 tag 运行 profile 采集，作为回归基线。 |
-| `profile-index` | `make profile-index` | 扫描 `npc/build/profile/*/summary.json` 生成 `index.json`。 |
-| `profile-dashboard` | `make profile-dashboard` | 生成看板 `dashboard/index.html`，并为每个 run 生成可读的 `summary.html`。 |
-| `profile-clean` | `make profile-clean` | 删除 `npc/build/profile/`（历次 run、`index.json`、看板 HTML 一并清除）。 |
-| `linux-smoke` | `make linux-smoke` | 运行 Linux 冒烟测试脚本 `run_linux_smoke.sh`。 |
-| `bench` | `make bench BENCH_IMG=...` | 使用当前仿真器执行固定镜像并打印墙钟耗时，便于对比仿真速度。 |
-| `clean` | `make clean` | 清理编译生成目录，删除整个 `build` 文件夹。 |
+
+| 目标 (Target)         | 常用指令                       | 功能描述                                                                                                 |
+| ------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `default` / `all`   | `make` 或 `make all`        | 默认目标。编译 SystemVerilog 设计和 C++ 仿真源文件，生成二进制仿真程序 `build/tb_triathlon`                                   |
+| `sim`               | `make sim`                 | 编译并直接运行仿真。支持加载二进制镜像并传入仿真参数。                                                                          |
+| `gdb`               | `make gdb`                 | 编译并在 GDB 调试器中运行仿真可执行文件，方便 C++ 侧的调试。                                                                  |
+| `profile-report`    | `make profile-report`      | 运行 `run_profile.sh`：dhrystone/coremark 仿真 `--profile-json`，merge 为 `summary.json`，写 `metadata.json`。 |
+| `profile-task`      | `make profile-task`        | 一键 profile 采集到 `npc/build/profile/<PROFILE_TAG>/`。                                                   |
+| `profile-baseline`  | `make profile-baseline`    | 以 `baseline` 为 tag 运行 profile 采集，作为回归基线。                                                             |
+| `profile-index`     | `make profile-index`       | 扫描 `npc/build/profile/*/summary.json` 生成 `index.json`。                                               |
+| `profile-dashboard` | `make profile-dashboard`   | 生成看板 `dashboard/index.html`，并为每个 run 生成可读的 `summary.html`。                                           |
+| `profile-clean`     | `make profile-clean`       | 删除 `npc/build/profile/`（历次 run、`index.json`、看板 HTML 一并清除）。                                           |
+| `linux-smoke`       | `make linux-smoke`         | 运行 Linux 冒烟测试脚本 `run_linux_smoke.sh`。                                                                |
+| `bench`             | `make bench BENCH_IMG=...` | 使用当前仿真器执行固定镜像并打印墙钟耗时，便于对比仿真速度。                                                                       |
+| `clean`             | `make clean`               | 清理编译生成目录，删除整个 `build` 文件夹。                                                                           |
+
 
 ### 2. 常用控制参数/变量 (Configuration Variables)
 
 可以在命令行中通过 `VAR=value` 的形式传入以下变量控制构建和运行：
 
-| 变量名 (Variable) | 默认值 | 作用说明 |
-| :--- | :--- | :--- |
-| `TOPNAME` | `tb_triathlon` | 指定仿真的顶层模块名（对应 `vsrc/` 目录下的 `.sv` 文件）。 |
-| `IMG` | *(空)* | 待运行的程序镜像路径（例如编译好的 RISC-V 测试 bin/elf 文件）。 |
-| `ARGS` | *(空)* | 传给仿真器的扩展参数，详见 **§4**。 |
-| `DIFFTEST_SO` | `$(NPC_HOME)/ref/riscv32-nemu-interpreter-so` | DiffTest 动态链接库的路径，用于与 NEMU 进行协同仿真比对。 |
-| `VL_THREADS` | `2` | Verilator 多线程仿真线程数；当前设计在 Verilator 5.008 下 4 线程会出现 `UNOPTTHREADS`，需要时可手动调整。 |
-| `VL_JOBS` | `$(nproc)` | Verilator/host C++ 并行编译任务数。 |
-| `VL_OPTFLAGS` | `-O3 -march=native -fno-plt` | 传给 Verilator generated make 的 `OPT_FAST` / `OPT_SLOW` / `OPT_GLOBAL` 与 host C++ 的默认优化参数。 |
-| `VL_OPTLEVEL` | `-O3` | 通过 Verilator `-MAKEFLAGS` 覆盖 generated make 的默认 `-Os`，确保 generated C++ 以 `-O3` 编译。 |
-| `DEBUG` | `0` | 设为 `1` 时使用 `-O0 -g` 编译 host 仿真器，默认使用 `-O3 -march=native`。 |
-| `BENCH_IMG` | `$(IMG)` | `bench` 目标运行的镜像路径。 |
-| `BENCH_ARGS` | `--max-cycles=10000000 --progress=0` | `bench` 目标传给仿真器的参数。 |
-| `ARCH` | `riscv32i-npc` | `profile-report` 编译 AM benchmark 的架构标签。 |
-| `CROSS_COMPILE` | `riscv64-unknown-elf-` | AM benchmark 交叉编译前缀（WSL 常见安装名；勿与 OpenSBI 的 `riscv64-linux-gnu-` 混用）。 |
-| `PROFILE_OUT_DIR` | *(空，自动时间戳)* | `profile-report` 输出目录；从仓库根写 `npc/build/profile/<run_id>`。 |
-| `PROFILE_TAG` | `latest` | `profile-task` 写入 `npc/build/profile/<PROFILE_TAG>/`。 |
-| `PROFILE_DISPLAY_NAME` | *(空，用目录名)* | 看板/图表显示名，写入 `metadata.json` 的 `display_name`。 |
-| `PROFILE_ROOT` | `npc/build/profile` | `profile-index` / `profile-dashboard` 扫描根目录。 |
+
+| 变量名 (Variable)         | 默认值                                           | 作用说明                                                                                     |
+| ---------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `TOPNAME`              | `tb_triathlon`                                | 指定仿真的顶层模块名（对应 `vsrc/` 目录下的 `.sv` 文件）。                                                    |
+| `IMG`                  | *(空)*                                         | 待运行的程序镜像路径（例如编译好的 RISC-V 测试 bin/elf 文件）。                                                 |
+| `ARGS`                 | *(空)*                                         | 传给仿真器的扩展参数，详见 **§4**。                                                                    |
+| `DIFFTEST_SO`          | `$(NPC_HOME)/ref/riscv32-nemu-interpreter-so` | DiffTest 动态链接库的路径，用于与 NEMU 进行协同仿真比对。                                                     |
+| `VL_THREADS`           | `2`                                           | Verilator 多线程仿真线程数；当前设计在 Verilator 5.008 下 4 线程会出现 `UNOPTTHREADS`，需要时可手动调整。              |
+| `VL_JOBS`              | `$(nproc)`                                    | Verilator/host C++ 并行编译任务数。                                                              |
+| `VL_OPTFLAGS`          | `-O3 -march=native -fno-plt`                  | 传给 Verilator generated make 的 `OPT_FAST` / `OPT_SLOW` / `OPT_GLOBAL` 与 host C++ 的默认优化参数。 |
+| `VL_OPTLEVEL`          | `-O3`                                         | 通过 Verilator `-MAKEFLAGS` 覆盖 generated make 的默认 `-Os`，确保 generated C++ 以 `-O3` 编译。       |
+| `DEBUG`                | `0`                                           | 设为 `1` 时使用 `-O0 -g` 编译 host 仿真器，默认使用 `-O3 -march=native`。                                |
+| `BENCH_IMG`            | `$(IMG)`                                      | `bench` 目标运行的镜像路径。                                                                       |
+| `BENCH_ARGS`           | `--max-cycles=10000000 --progress=0`          | `bench` 目标传给仿真器的参数。                                                                      |
+| `ARCH`                 | `riscv32i-npc`                                | `profile-report` 编译 AM benchmark 的架构标签。                                                  |
+| `CROSS_COMPILE`        | `riscv64-unknown-elf-`                        | AM benchmark 交叉编译前缀（WSL 常见安装名；勿与 OpenSBI 的 `riscv64-linux-gnu-` 混用）。                     |
+| `PROFILE_OUT_DIR`      | *(空，自动时间戳)*                                   | `profile-report` 输出目录；从仓库根写 `npc/build/profile/<run_id>`。                                |
+| `PROFILE_TAG`          | `latest`                                      | `profile-task` 写入 `npc/build/profile/<PROFILE_TAG>/`。                                    |
+| `PROFILE_DISPLAY_NAME` | *(空，用目录名)*                                    | 看板/图表显示名，写入 `metadata.json` 的 `display_name`。                                            |
+| `PROFILE_ROOT`         | `npc/build/profile`                           | `profile-index` / `profile-dashboard` 扫描根目录。                                             |
+
 
 ### 3. 典型使用示例
 
@@ -328,16 +348,18 @@ run_profile.sh → make sim --profile-json → <run_id>/dhrystone.json、coremar
 
 #### 目录约定
 
-每次采集写入 **`npc/build/profile/<run_id>/` 子目录**（不要落到 `profile/` 根目录）。省略 `PROFILE_OUT_DIR` 时 `run_profile.sh` 自动使用 `npc/build/profile/<timestamp>/`。
+每次采集写入 `**npc/build/profile/<run_id>/` 子目录**（不要落到 `profile/` 根目录）。省略 `PROFILE_OUT_DIR` 时 `run_profile.sh` 自动使用 `npc/build/profile/<timestamp>/`。
 
-| 路径 | 说明 |
-| :--- | :--- |
-| `<run_id>/dhrystone.json`、`<run_id>/coremark.json` | C++ `--profile-json` 单 benchmark 输出 |
-| `<run_id>/summary.json` | 聚合指标（CI/回归对比主接口） |
-| `<run_id>/summary.html` | 可读报告页（stall 条形图、predict、ifu_fq 等；`profile-dashboard` 生成） |
-| `<run_id>/metadata.json` | `run_id`、`git_sha`、`created_at`、`host` 等 |
-| `index.json` | 历次 run 索引（`make profile-index`） |
-| `dashboard/index.html` | 静态 HTML 看板 |
+
+| 路径                                                 | 说明                                                       |
+| -------------------------------------------------- | -------------------------------------------------------- |
+| `<run_id>/dhrystone.json`、`<run_id>/coremark.json` | C++ `--profile-json` 单 benchmark 输出                      |
+| `<run_id>/summary.json`                            | 聚合指标（CI/回归对比主接口）                                         |
+| `<run_id>/summary.html`                            | 可读报告页（stall 条形图、predict、ifu_fq 等；`profile-dashboard` 生成） |
+| `<run_id>/metadata.json`                           | `run_id`、`git_sha`、`created_at`、`host` 等                 |
+| `index.json`                                       | 历次 run 索引（`make profile-index`）                          |
+| `dashboard/index.html`                             | 静态 HTML 看板                                               |
+
 
 `index.json`、看板 HTML 及 JSON 内的 `log_path`/`run_dir` 在生成时会写入**当时机器的绝对路径**；换路径或换机器后需重新执行 `profile-report` / `profile-dashboard`。
 
@@ -404,67 +426,75 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 
 周期级 trace（`--commit-trace`、`--bru-trace` 等）与仿真结束 profile 汇总（`--profile`）**相互独立**，可任意组合。
 
-| 参数 | 默认值 | 说明 |
-| :--- | :--- | :--- |
-| `<IMG>` | — | 待加载二进制镜像路径（positional，必需） |
-| `--max-cycles N` / `--max-cycles=N` | `600000000` | 最大仿真周期；超出后打印 `TIMEOUT after N cycles` 并以退出码 1 结束 |
-| `-d REF_SO` / `--difftest=REF_SO` | Makefile 自动注入 | NEMU DiffTest 共享库；`DIFFTEST_SO=` 或 `DIFFTEST=` 可禁用 |
-| `--progress [N]` / `--progress=N` | 禁用；仅 `--progress` 时 `N=1000000` | 每 `N` 周期打印轻量 `[progress]` 心跳（cycles、commits、IPC、last_pc 等） |
-| `--progress-verbose` | 禁用 | 将 `[progress]` 扩展为详细快照（ROB、Store Buffer、LSU、DCache MSHR 等）；`--linux-early-debug` 也会启用详细进度输出。 |
-| `--trace [path]` / `--trace=path` | 默认 `npc.vcd` | 生成 VCD 波形；需编译时定义 `VM_TRACE`，否则忽略并打印 `[warn]` |
-| `--profile` | 禁用 | 仿真结束时 stdout 输出 `ProfileCollector` 文本汇总（`[commitm]`/`[stallm]`/`[pred ]` 等） |
-| `--profile-json <path>` / `--profile-json=path` | 禁用 | 仿真结束时写出单 benchmark JSON；自动启用 profile 统计（无需同时传 `--profile`） |
-| `--commit-trace [窗口]` | 禁用 | 周期级 commit/LSU/store trace（`[commit]`/`[stwb]`/`[ldreq]`/`[ldrsp]`，见「输出 Tag」） |
-| `--commit-trace=START:END` | — | 等价于 `--commit-trace START:END` |
-| `--commit-trace-start N` | `0` | 与 `--commit-trace` 配合：trace 起始 cycle（含） |
-| `--commit-trace-end N` | `0`（无上限） | 与 `--commit-trace` 配合：trace 结束 cycle（含）；`0` 表示不设上限 |
-| `--bru-trace` | 禁用 | 周期级 BRU/flush trace（`[bruwb]`、`[flush]`/`[flushp]`/`[bru]`，**无** cycle 窗口限制） |
-| `--fe-trace` | 禁用 | 取指校验：前端 bundle 与内存指令不一致，或 slot_valid 不完整时打印 `[fe]` |
-| `--stall-trace [N]` / `--stall-trace=N` | 禁用；`N=200` | 连续 `N` 周期无 commit 时打印 `[stall]`，之后每再 stall `N` 周期重复打印 |
-| `--boot-handoff` | 禁用 | Boot ROM handoff 启动链（见下文） |
-| `--dtb <path>` / `--dtb=path` | 内置最小 FDT | `--boot-handoff` 下加载外部 DTB；省略则在 `0x83F00000` 写入占位 FDT |
-| `--firmware-load-base <addr>` / `=addr` | `0x80020000`（OpenSBI 区） | `--boot-handoff` 下固件加载基址；须 **4MiB 对齐**（RV32 Linux `setup_vm()` 要求），推荐 `0x80400000`；不得与复位 PC `0x80000000` 重叠 |
-| `--virtio-blk-image <path>` / `=path` | 无 | VirtIO block 后端磁盘镜像 |
-| `--linux-early-debug` | 禁用 | Linux/OpenSBI 早期启动调试：一次性 `[linux-stage]` 里程碑 + 条件 `[debug][...]` 细粒度日志 |
+
+| 参数                                              | 默认值                             | 说明                                                                                                          |
+| ----------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `<IMG>`                                         | —                               | 待加载二进制镜像路径（positional，必需）                                                                                   |
+| `--max-cycles N` / `--max-cycles=N`             | `600000000`                     | 最大仿真周期；超出后打印 `TIMEOUT after N cycles` 并以退出码 1 结束                                                            |
+| `-d REF_SO` / `--difftest=REF_SO`               | Makefile 自动注入                   | NEMU DiffTest 共享库；`DIFFTEST_SO=` 或 `DIFFTEST=` 可禁用                                                          |
+| `--progress [N]` / `--progress=N`               | 禁用；仅 `--progress` 时 `N=1000000` | 每 `N` 周期打印轻量 `[progress]` 心跳（cycles、commits、IPC、last_pc 等）                                                  |
+| `--progress-verbose`                            | 禁用                              | 将 `[progress]` 扩展为详细快照（ROB、Store Buffer、LSU、DCache MSHR 等）；`--linux-early-debug` 也会启用详细进度输出。                |
+| `--trace [path]` / `--trace=path`               | 默认 `npc.vcd`                    | 生成 VCD 波形；需编译时定义 `VM_TRACE`，否则忽略并打印 `[warn]`                                                                |
+| `--profile`                                     | 禁用                              | 仿真结束时 stdout 输出 `ProfileCollector` 文本汇总（`[commitm]`/`[stallm]`/`[pred ]` 等）                                 |
+| `--profile-json <path>` / `--profile-json=path` | 禁用                              | 仿真结束时写出单 benchmark JSON；自动启用 profile 统计（无需同时传 `--profile`）                                                  |
+| `--commit-trace [窗口]`                           | 禁用                              | 周期级 commit/LSU/store trace（`[commit]`/`[stwb]`/`[ldreq]`/`[ldrsp]`，见「输出 Tag」）                               |
+| `--commit-trace=START:END`                      | —                               | 等价于 `--commit-trace START:END`                                                                              |
+| `--commit-trace-start N`                        | `0`                             | 与 `--commit-trace` 配合：trace 起始 cycle（含）                                                                     |
+| `--commit-trace-end N`                          | `0`（无上限）                        | 与 `--commit-trace` 配合：trace 结束 cycle（含）；`0` 表示不设上限                                                          |
+| `--bru-trace`                                   | 禁用                              | 周期级 BRU/flush trace（`[bruwb]`、`[flush]`/`[flushp]`/`[bru]`，**无** cycle 窗口限制）                                |
+| `--fe-trace`                                    | 禁用                              | 取指校验：前端 bundle 与内存指令不一致，或 slot_valid 不完整时打印 `[fe]`                                                          |
+| `--stall-trace [N]` / `--stall-trace=N`         | 禁用；`N=200`                      | 连续 `N` 周期无 commit 时打印 `[stall]`，之后每再 stall `N` 周期重复打印                                                       |
+| `--boot-handoff`                                | 禁用                              | Boot ROM handoff 启动链（见下文）                                                                                   |
+| `--dtb <path>` / `--dtb=path`                   | 内置最小 FDT                        | `--boot-handoff` 下加载外部 DTB；省略则在 `0x83F00000` 写入占位 FDT                                                       |
+| `--firmware-load-base <addr>` / `=addr`         | `0x80020000`（OpenSBI 区）         | `--boot-handoff` 下固件加载基址；须 **4MiB 对齐**（RV32 Linux `setup_vm()` 要求），推荐 `0x80400000`；不得与复位 PC `0x80000000` 重叠 |
+| `--virtio-blk-image <path>` / `=path`           | 无                               | VirtIO block 后端磁盘镜像                                                                                         |
+| `--linux-early-debug`                           | 禁用                              | Linux/OpenSBI 早期启动调试：一次性 `[linux-stage]` 里程碑 + 条件 `[debug][...]` 细粒度日志                                      |
+
 
 #### `--commit-trace` 窗口语法
 
 窗口仅抑制 stdout 上的 commit/LSU/store trace 以及（在与 `--bru-trace` 同开时）`[flush]`/`[flushp]`/`[bru]`。结束汇总由 `--profile` 单独控制，与窗口无关。
 
-| 写法 | 含义 |
-| :--- | :--- |
-| `--commit-trace` | 全周期 |
-| `--commit-trace START:END` 或 `--commit-trace=START:END` | cycle `[START, END]`（含首尾） |
-| `--commit-trace START` | 单点 cycle `START` |
-| `--commit-trace START END` | 两个 positional：`START` 与 `END` |
-| `--commit-trace-start N` + `--commit-trace-end M` | 分别指定起止；`end=0` 无上限 |
+
+| 写法                                                      | 含义                            |
+| ------------------------------------------------------- | ----------------------------- |
+| `--commit-trace`                                        | 全周期                           |
+| `--commit-trace START:END` 或 `--commit-trace=START:END` | cycle `[START, END]`（含首尾）     |
+| `--commit-trace START`                                  | 单点 cycle `START`              |
+| `--commit-trace START END`                              | 两个 positional：`START` 与 `END` |
+| `--commit-trace-start N` + `--commit-trace-end M`       | 分别指定起止；`end=0` 无上限            |
+
 
 #### 镜像加载模式
 
-| 模式 | 条件 | 行为 |
-| :--- | :--- | :--- |
-| **整镜像加载**（默认） | 无 `--boot-handoff` | `<IMG>` 加载到 `0x80000000`（`kPmemBase`）；适用于 `merge.py` 输出的 `fw_combined.bin` |
-| **Boot handoff** | `--boot-handoff` | `<IMG>` 加载到 `--firmware-load-base`；在 `0x00001000` 安装 handoff stub（a0/a1/satp → 跳固件），复位 PC `0x80000000` 经 jump stub 进入 boot ROM；适用于 `fw_payload.bin` + 独立 DTB（见 `linux-smoke`） |
+
+| 模式               | 条件                 | 行为                                                                                                                                                                            |
+| ---------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **整镜像加载**（默认）    | 无 `--boot-handoff` | `<IMG>` 加载到 `0x80000000`（`kPmemBase`）；适用于 `merge.py` 输出的 `fw_combined.bin`                                                                                                    |
+| **Boot handoff** | `--boot-handoff`   | `<IMG>` 加载到 `--firmware-load-base`；在 `0x00001000` 安装 handoff stub（a0/a1/satp → 跳固件），复位 PC `0x80000000` 经 jump stub 进入 boot ROM；适用于 `fw_payload.bin` + 独立 DTB（见 `linux-smoke`） |
+
 
 #### 输出 Tag 速查
 
-| Tag | 触发条件 | 内容 |
-| :--- | :--- | :--- |
-| `[commit]` | `--commit-trace`（窗口内） | ROB retire：slot、pc、inst、we、rd、wdata、a0 |
-| `[stwb]` | `--commit-trace`（窗口内） | Store Buffer → DCache 写：`addr`、`data`、`op` |
-| `[ldreq]` / `[ldrsp]` | `--commit-trace`（窗口内） | LSU load 请求 / 响应：addr、tag、data、err |
-| `[flush]` | `--commit-trace`（窗口内）或 `--bru-trace` | Pipeline flush：reason、src_pc、redirect_pc、BPU RAS、miss 分类 |
-| `[flushp]` | 同上 | flush 后首个有 commit 的 cycle：惩罚周期数 |
-| `[bru]` | 同上（flush 同拍且 BRU mispred） | BRU 执行细节 |
-| `[bruwb]` | `--bru-trace` | 每拍 BRU writeback 有效：pc、操作数、redirect、mispred |
-| `[fe]` | `--fe-trace` | 取指 PC、slot_valid、FE/内存指令 mismatch、预测 NPC |
-| `[stall]` | `--stall-trace` | 无 commit stall：前端/IFU/解码/rename/ROB/LSU 等快照 |
-| `[progress]` | `--progress` | 周期性仿真心跳 |
-| `[linux-stage]` | `--linux-early-debug` | 启动里程碑（每 stage 仅一次，见下表） |
-| `[debug][...]` | `--linux-early-debug` | satp 变更、页表写、异常 flush、SV32 fault walk、UART 等细粒度调试 |
-| `[commitm]` / `[controlm]` / `[stallm]` / `[stallm2]`–`[stallm6]` / `[ifum]` / `[pred  ]` / `[hotpcm]` / `[hotinstm]` | `--profile` | 仿真结束由 `ProfileCollector` 输出的汇总（commit 宽度、控制流、stall 分类、IFU FQ、BPU 命中率、热 PC/指令等） |
-| `HIT GOOD TRAP` / `HIT BAD TRAP` | — | AM 测试 `ebreak`：a0=0 成功 / 非 0 失败 |
-| `IPC=` / `CPI=` | — | 成功 trap 或超时前输出的性能指标 |
+
+| Tag                                                                                                                  | 触发条件                                 | 内容                                                                             |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------ |
+| `[commit]`                                                                                                           | `--commit-trace`（窗口内）                | ROB retire：slot、pc、inst、we、rd、wdata、a0                                         |
+| `[stwb]`                                                                                                             | `--commit-trace`（窗口内）                | Store Buffer → DCache 写：`addr`、`data`、`op`                                     |
+| `[ldreq]` / `[ldrsp]`                                                                                                | `--commit-trace`（窗口内）                | LSU load 请求 / 响应：addr、tag、data、err                                             |
+| `[flush]`                                                                                                            | `--commit-trace`（窗口内）或 `--bru-trace` | Pipeline flush：reason、src_pc、redirect_pc、BPU RAS、miss 分类                       |
+| `[flushp]`                                                                                                           | 同上                                   | flush 后首个有 commit 的 cycle：惩罚周期数                                                |
+| `[bru]`                                                                                                              | 同上（flush 同拍且 BRU mispred）            | BRU 执行细节                                                                       |
+| `[bruwb]`                                                                                                            | `--bru-trace`                        | 每拍 BRU writeback 有效：pc、操作数、redirect、mispred                                    |
+| `[fe]`                                                                                                               | `--fe-trace`                         | 取指 PC、slot_valid、FE/内存指令 mismatch、预测 NPC                                       |
+| `[stall]`                                                                                                            | `--stall-trace`                      | 无 commit stall：前端/IFU/解码/rename/ROB/LSU 等快照                                    |
+| `[progress]`                                                                                                         | `--progress`                         | 周期性仿真心跳                                                                        |
+| `[linux-stage]`                                                                                                      | `--linux-early-debug`                | 启动里程碑（每 stage 仅一次，见下表）                                                         |
+| `[debug][...]`                                                                                                       | `--linux-early-debug`                | satp 变更、页表写、异常 flush、SV32 fault walk、UART 等细粒度调试                               |
+| `[commitm]` / `[controlm]` / `[stallm]` / `[stallm2]`–`[stallm6]` / `[ifum]` / `[pred ]` / `[hotpcm]` / `[hotinstm]` | `--profile`                          | 仿真结束由 `ProfileCollector` 输出的汇总（commit 宽度、控制流、stall 分类、IFU FQ、BPU 命中率、热 PC/指令等） |
+| `HIT GOOD TRAP` / `HIT BAD TRAP`                                                                                     | —                                    | AM 测试 `ebreak`：a0=0 成功 / 非 0 失败                                                |
+| `IPC=` / `CPI=`                                                                                                      | —                                    | 成功 trap 或超时前输出的性能指标                                                            |
+
 
 #### NDJSON 故障排查日志（`debug-*.log`）
 
@@ -472,26 +502,30 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 
 **文件位置与命名**
 
-| 项 | 说明 |
-| :--- | :--- |
-| 默认路径 | 工作区根目录 `debug-<sessionId>.log`（例如 `debug-fd94f9.log`） |
-| 写入方式 | RTL（`npc/vsrc/**/*.sv`）与 C++（`npc/csrc/npc_main.cpp`）通过 `$fopen("../debug-....log","a")` / `std::ofstream` 追加写入 |
-| 运行目录 | 须从 `npc/` 执行 `make sim`，保证 `../debug-*.log` 落在仓库根目录 |
-| stdout 分流 | NDJSON **不进** stdout；完整仿真日志仍可重定向到 `npc/sim_*.log` |
+
+| 项         | 说明                                                                                                              |
+| --------- | --------------------------------------------------------------------------------------------------------------- |
+| 默认路径      | 工作区根目录 `debug-<sessionId>.log`（例如 `debug-fd94f9.log`）                                                           |
+| 写入方式      | RTL（`npc/vsrc/**/*.sv`）与 C++（`npc/csrc/npc_main.cpp`）通过 `$fopen("../debug-....log","a")` / `std::ofstream` 追加写入 |
+| 运行目录      | 须从 `npc/` 执行 `make sim`，保证 `../debug-*.log` 落在仓库根目录                                                             |
+| stdout 分流 | NDJSON **不进** stdout；完整仿真日志仍可重定向到 `npc/sim_*.log`                                                               |
+
 
 **日志格式（NDJSON）**
 
 每行一个 JSON 对象，典型字段：
 
-| 字段 | 含义 |
-| :--- | :--- |
-| `sessionId` | 调试会话 ID，与文件名中的 `<sessionId>` 一致 |
-| `runId` | 日志来源/主题，如 `arch-truth`、`ifu-ctrl-flow`、`backend-ifetch-flow`、`backend-csr-arb` |
-| `hypothesisId` | 对应待验证假设编号 |
-| `location` | 源文件位置 |
-| `message` | 简短描述 |
-| `timestamp` | 仿真 cycle（C++ 侧）或 `$time`（RTL 侧） |
-| `data` | 结构化 payload（priv、PC、ROB 状态、flush 信号等） |
+
+| 字段             | 含义                                                                             |
+| -------------- | ------------------------------------------------------------------------------ |
+| `sessionId`    | 调试会话 ID，与文件名中的 `<sessionId>` 一致                                                |
+| `runId`        | 日志来源/主题，如 `arch-truth`、`ifu-ctrl-flow`、`backend-ifetch-flow`、`backend-csr-arb` |
+| `hypothesisId` | 对应待验证假设编号                                                                      |
+| `location`     | 源文件位置                                                                          |
+| `message`      | 简短描述                                                                           |
+| `timestamp`    | 仿真 cycle（C++ 侧）或 `$time`（RTL 侧）                                                |
+| `data`         | 结构化 payload（priv、PC、ROB 状态、flush 信号等）                                          |
+
 
 **排查流程约定**
 
@@ -514,20 +548,22 @@ make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
 
 启用后，每个关键阶段仅打印一次 `[linux-stage]` 行（含 cycle、pc、inst、priv、satp、CSR、a0/a1/sp/gp 等），典型顺序：
 
-| stage | 含义 |
-| :--- | :--- |
-| `opensbi-reset` | M-mode 复位入口 @ 0x80000000 |
-| `opensbi-dtb-a0` | OpenSBI 将 DTB 地址装入 a0 |
-| `opensbi-init` | OpenSBI 固件主路径 |
-| `opensbi-pre-jump` | 跳转 Linux 前 (hart_switch_mode) |
-| `linux-handoff` | 进入 Linux S-mode 物理入口 |
-| `linux-head` / `linux-decompress` / `linux-gp-init` | head.S / 解压 / gp 初始化 |
-| `linux-dtb-a1` | Linux 收到 a1=DTB |
-| `linux-mmu-enable` | 写 satp 开启 SV32 |
-| `linux-first-ipf` | 开 MMU 后首次 instruction page fault |
-| `linux-trap-redirect` / `linux-trap-vec` | fixmap trap 入口 |
-| `linux-swap-pgdir` | trap 路径切换页表 |
-| `linux-vtext` | 进入内核高地址虚拟文本区 |
+
+| stage                                               | 含义                               |
+| --------------------------------------------------- | -------------------------------- |
+| `opensbi-reset`                                     | M-mode 复位入口 @ 0x80000000         |
+| `opensbi-dtb-a0`                                    | OpenSBI 将 DTB 地址装入 a0            |
+| `opensbi-init`                                      | OpenSBI 固件主路径                    |
+| `opensbi-pre-jump`                                  | 跳转 Linux 前 (hart_switch_mode)    |
+| `linux-handoff`                                     | 进入 Linux S-mode 物理入口             |
+| `linux-head` / `linux-decompress` / `linux-gp-init` | head.S / 解压 / gp 初始化             |
+| `linux-dtb-a1`                                      | Linux 收到 a1=DTB                  |
+| `linux-mmu-enable`                                  | 写 satp 开启 SV32                   |
+| `linux-first-ipf`                                   | 开 MMU 后首次 instruction page fault |
+| `linux-trap-redirect` / `linux-trap-vec`            | fixmap trap 入口                   |
+| `linux-swap-pgdir`                                  | trap 路径切换页表                      |
+| `linux-vtext`                                       | 进入内核高地址虚拟文本区                     |
+
 
 实现：`npc/csrc/include/linux_boot_stage.h`。`--linux-early-debug` 及 commit/LSU/progress 等可选 trace 由 `npc/csrc/lib/sim_observer.cpp` 打印；当 `cause` 为 instruction/load/store page fault 时，会额外输出 `[debug][sv32-fault-walk]`，按当前 `satp` 与 CSR trap tval 对故障虚拟地址执行只读 SV32 页表 walk，并打印 L1/L0 PTE、权限位与可解析的物理地址。
 
@@ -561,22 +597,26 @@ make -C npc sim IMG=.../test.bin ARGS='--trace wave.vcd --max-cycles=50000'
 
 #### 内存布局（`fw_combined.bin`）
 
-| 组件 | 物理地址 | 来源 |
-| :--- | :--- | :--- |
-| OpenSBI (`fw_jump.bin`) | `0x80000000` | `opensbi/build/platform/triathlon/firmware/fw_jump.bin` |
-| Linux Kernel Image | `0x80400000` | `linux_workspace/linux/arch/riscv/boot/Image` |
-| DTB | `0x83F00000` | `linux_workspace/build/triathlon.dtb`（由 `linux_workspace/merge.py` 生成） |
+
+| 组件                      | 物理地址         | 来源                                                                     |
+| ----------------------- | ------------ | ---------------------------------------------------------------------- |
+| OpenSBI (`fw_jump.bin`) | `0x80000000` | `opensbi/build/platform/triathlon/firmware/fw_jump.bin`                |
+| Linux Kernel Image      | `0x80400000` | `linux_workspace/linux/arch/riscv/boot/Image`                          |
+| DTB                     | `0x83F00000` | `linux_workspace/build/triathlon.dtb`（由 `linux_workspace/merge.py` 生成） |
+
 
 仿真器将 `fw_combined.bin` 加载到 `0x80000000`（`npc/csrc/include/platform_contract.h` 中 `kPmemBase`）。OpenSBI 启动 banner 中应出现 `Domain0 Next Arg1 : 0x83f00000`（即 Linux 的 `a1`）。
 
 #### OpenSBI 平台配置（`opensbi/platform/triathlon/`）
 
-| 文件 | 作用 |
-| :--- | :--- |
-| `objects.mk` | 平台构建参数与 `FW_JUMP` 跳转地址 |
-| `platform.c` | PLIC / CLINT / UART8250 等外设初始化 |
-| `triathlon.dts` | 设备树源文件（memory、cpu、clint、plic、uart） |
+
+| 文件                  | 作用                                    |
+| ------------------- | ------------------------------------- |
+| `objects.mk`        | 平台构建参数与 `FW_JUMP` 跳转地址                |
+| `platform.c`        | PLIC / CLINT / UART8250 等外设初始化        |
+| `triathlon.dts`     | 设备树源文件（memory、cpu、clint、plic、uart）    |
 | `configs/defconfig` | Kconfig：`CONFIG_PLATFORM_TRIATHLON=y` |
+
 
 设备树中的 PLIC 仅向 Linux 暴露 S-mode external interrupt context（`interrupts-extended = <&cpu0_intc 9>`），与仿真平台当前单 context PLIC MMIO 布局保持一致。
 
@@ -597,12 +637,14 @@ FW_JUMP_FDT_ADDR=0x83F00000  # OpenSBI 传给 Linux 的 a1（DTB 物理地址）
 
 #### 工具链
 
-| 用途 | 工具链前缀 | 说明 |
-| :--- | :--- | :--- |
-| **OpenSBI（Triathlon 平台）** | `riscv64-linux-gnu-` | WSL 下推荐；需支持 PIE（OpenSBI 固件链接要求） |
-| **echo_payload / 裸机测试** | `riscv64-unknown-elf-` | 见 `echo_payload/Makefile`；**不能**用于 OpenSBI（linker 不支持 PIE 时会报错） |
-| **Verilator 仿真** | 宿主机 `g++` + Verilator 5.008 | 见 `npc/Makefile`；与 OpenSBI 交叉编译无关 |
-| **DTB 编译（可选）** | `dtc`（device-tree-compiler） | 有则优先从 `triathlon.dts` 生成 DTB；无则 `merge.py` 使用内置等价 DTB |
+
+| 用途                        | 工具链前缀                       | 说明                                                              |
+| ------------------------- | --------------------------- | --------------------------------------------------------------- |
+| **OpenSBI（Triathlon 平台）** | `riscv64-linux-gnu-`        | WSL 下推荐；需支持 PIE（OpenSBI 固件链接要求）                                 |
+| **echo_payload / 裸机测试**   | `riscv64-unknown-elf-`      | 见 `echo_payload/Makefile`；**不能**用于 OpenSBI（linker 不支持 PIE 时会报错） |
+| **Verilator 仿真**          | 宿主机 `g++` + Verilator 5.008 | 见 `npc/Makefile`；与 OpenSBI 交叉编译无关                               |
+| **DTB 编译（可选）**            | `dtc`（device-tree-compiler） | 有则优先从 `triathlon.dts` 生成 DTB；无则 `merge.py` 使用内置等价 DTB           |
+
 
 编译命令与参数见下方 **OpenSBI / Linux 编译流程与参数**。
 
@@ -618,20 +660,24 @@ DTB     (triathlon.dts)─┘
 
 ##### 何时需要重编
 
-| 修改内容 | 需要重编 | 需要重跑 merge.py |
-| :--- | :--- | :--- |
-| `opensbi/platform/triathlon/objects.mk` | OpenSBI | 是 |
-| `opensbi/platform/triathlon/triathlon.dts` | 否（merge 时编 DTB） | 是 |
-| `opensbi/platform/triathlon/platform.c` | OpenSBI | 是 |
-| Linux 源码 / `.config` / 临时验证补丁 | Linux `Image` | 是 |
-| RTL / `npc/csrc` / 仿真参数 | `make -C npc` | 否 |
+
+| 修改内容                                       | 需要重编            | 需要重跑 merge.py |
+| ------------------------------------------ | --------------- | ------------- |
+| `opensbi/platform/triathlon/objects.mk`    | OpenSBI         | 是             |
+| `opensbi/platform/triathlon/triathlon.dts` | 否（merge 时编 DTB） | 是             |
+| `opensbi/platform/triathlon/platform.c`    | OpenSBI         | 是             |
+| Linux 源码 / `.config` / 临时验证补丁              | Linux `Image`   | 是             |
+| RTL / `npc/csrc` / 仿真参数                    | `make -C npc`   | 否             |
+
 
 ##### OpenSBI 编译
 
-| Make 变量 | 值 | 说明 |
-| :--- | :--- | :--- |
-| `PLATFORM` | `triathlon` | 平台目录 `opensbi/platform/triathlon/` |
+
+| Make 变量         | 值                    | 说明                                                         |
+| --------------- | -------------------- | ---------------------------------------------------------- |
+| `PLATFORM`      | `triathlon`          | 平台目录 `opensbi/platform/triathlon/`                         |
 | `CROSS_COMPILE` | `riscv64-linux-gnu-` | 工具链前缀；目标 XLEN 由 `objects.mk` 中 `PLATFORM_RISCV_XLEN=32` 决定 |
+
 
 ```bash
 make -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-
@@ -645,11 +691,13 @@ make -B -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-
 
 Linux 工作树位于 `linux_workspace/linux/`（`.gitignore` 中）。工具链前缀为 `riscv64-linux-gnu-`，但内核配置为 **RV32**（`CONFIG_32BIT=y`），与 Triathlon RTL 的 32 位 ISA 一致；banner 中出现 `riscv64-linux-gnu-gcc` 不代表 64 位内核。
 
-| Make 变量 | 值 | 说明 |
-| :--- | :--- | :--- |
-| `ARCH` | `riscv` | 必传 |
-| `CROSS_COMPILE` | `riscv64-linux-gnu-` | 与 OpenSBI 相同前缀 |
-| 目标 | `Image` | 输出裸内核镜像，非 `vmlinux` ELF |
+
+| Make 变量         | 值                    | 说明                      |
+| --------------- | -------------------- | ----------------------- |
+| `ARCH`          | `riscv`              | 必传                      |
+| `CROSS_COMPILE` | `riscv64-linux-gnu-` | 与 OpenSBI 相同前缀          |
+| 目标              | `Image`              | 输出裸内核镜像，非 `vmlinux` ELF |
+
 
 ```bash
 # 首次配置（可选起点：arch/riscv/configs/rv32_defconfig）
@@ -664,14 +712,16 @@ make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(np
 
 关键 Kconfig（须与 Triathlon RV32 + SV32 对齐）：
 
-| 选项 | 典型值 | 说明 |
-| :--- | :--- | :--- |
-| `CONFIG_32BIT` | `y` | 32 位 RISC-V 内核 |
-| `CONFIG_ARCH_RV32I` | `y` | RV32I 基座 |
-| `CONFIG_PAGE_OFFSET` | `0xC0000000` | 内核虚拟地址起点 |
-| `CONFIG_RISCV_ISA_C` | `y` | 压缩指令（与 RTL 一致） |
-| `CONFIG_INITRAMFS_SOURCE` | `../rootfs ../rootfs_extra.list` | 内置 initramfs 根文件系统；`rootfs_extra.list` 预置 `/proc`、`/sys`、`/dev` 目录与 `/dev/console` |
-| `CONFIG_INITRAMFS_COMPRESSION_NONE` | `y` | initramfs 不压缩，减少 gzip 解压热点在 RTL 仿真中的启动开销 |
+
+| 选项                                  | 典型值                              | 说明                                                                                 |
+| ----------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------- |
+| `CONFIG_32BIT`                      | `y`                              | 32 位 RISC-V 内核                                                                     |
+| `CONFIG_ARCH_RV32I`                 | `y`                              | RV32I 基座                                                                           |
+| `CONFIG_PAGE_OFFSET`                | `0xC0000000`                     | 内核虚拟地址起点                                                                           |
+| `CONFIG_RISCV_ISA_C`                | `y`                              | 压缩指令（与 RTL 一致）                                                                     |
+| `CONFIG_INITRAMFS_SOURCE`           | `../rootfs ../rootfs_extra.list` | 内置 initramfs 根文件系统；`rootfs_extra.list` 预置 `/proc`、`/sys`、`/dev` 目录与 `/dev/console` |
+| `CONFIG_INITRAMFS_COMPRESSION_NONE` | `y`                              | initramfs 不压缩，减少 gzip 解压热点在 RTL 仿真中的启动开销                                           |
+
 
 启动命令行（`CONFIG_CMDLINE` 或 bootargs）常用：`earlycon=sbi console=ttyS0 root=/dev/ram0`（initramfs 根文件系统）。
 
@@ -681,23 +731,27 @@ make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(np
 
 脚本顶部常量（须与 `objects.mk` 中 `FW_JUMP_*` 保持一致）：
 
-| 变量 | 值 | 说明 |
-| :--- | :--- | :--- |
-| `PMEM_BASE` | `0x80000000` | 仿真器加载 `fw_combined.bin` 的物理基址 |
-| `PMEM_SIZE` | `0x08000000` | 物理内存窗口大小（128MB） |
-| `LINUX_LOAD_ADDR` | `0x80400000` | 对应 `FW_JUMP_ADDR` |
-| `DTB_LOAD_ADDR` | `0x83F00000` | 对应 `FW_JUMP_FDT_ADDR` |
-| `LINUX_VISIBLE_MEM_SIZE` | `0x04000000` | DTB 向 Linux 报告的可见内存（64MB） |
+
+| 变量                       | 值            | 说明                            |
+| ------------------------ | ------------ | ----------------------------- |
+| `PMEM_BASE`              | `0x80000000` | 仿真器加载 `fw_combined.bin` 的物理基址 |
+| `PMEM_SIZE`              | `0x08000000` | 物理内存窗口大小（128MB）               |
+| `LINUX_LOAD_ADDR`        | `0x80400000` | 对应 `FW_JUMP_ADDR`             |
+| `DTB_LOAD_ADDR`          | `0x83F00000` | 对应 `FW_JUMP_FDT_ADDR`         |
+| `LINUX_VISIBLE_MEM_SIZE` | `0x04000000` | DTB 向 Linux 报告的可见内存（64MB）     |
+
 
 输入/输出路径：
 
-| 路径 | 角色 |
-| :--- | :--- |
-| `opensbi/build/platform/triathlon/firmware/fw_jump.bin` | OpenSBI 输入 |
-| `linux_workspace/linux/arch/riscv/boot/Image` | Linux 输入 |
-| `opensbi/platform/triathlon/triathlon.dts` | DTB 源（有 `dtc` 时编译） |
-| `build/triathlon.dtb` | 生成的 DTB |
-| `fw_combined.bin` | 合并输出（仓库根目录） |
+
+| 路径                                                      | 角色                 |
+| ------------------------------------------------------- | ------------------ |
+| `opensbi/build/platform/triathlon/firmware/fw_jump.bin` | OpenSBI 输入         |
+| `linux_workspace/linux/arch/riscv/boot/Image`           | Linux 输入           |
+| `opensbi/platform/triathlon/triathlon.dts`              | DTB 源（有 `dtc` 时编译） |
+| `build/triathlon.dtb`                                   | 生成的 DTB            |
+| `fw_combined.bin`                                       | 合并输出（仓库根目录）        |
+
 
 ```bash
 python3 linux_workspace/merge.py
@@ -747,20 +801,20 @@ make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
 #### 流程步骤
 
 1. **编译 OpenSBI**
-   - `make -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-`
-   - 确认 `objects.mk` 中 `FW_JUMP_ADDR` / `FW_JUMP_FDT_ADDR` 与 `merge.py` 中 `LINUX_LOAD_ADDR` / `DTB_LOAD_ADDR` 一致
+  - `make -C opensbi PLATFORM=triathlon CROSS_COMPILE=riscv64-linux-gnu-`
+  - 确认 `objects.mk` 中 `FW_JUMP_ADDR` / `FW_JUMP_FDT_ADDR` 与 `merge.py` 中 `LINUX_LOAD_ADDR` / `DTB_LOAD_ADDR` 一致
 2. **编译 Linux**
-   - `make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(nproc) Image`
-   - 确认 `.config` 中 `CONFIG_32BIT=y`（RV32 内核，非 64 位）
+  - `make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(nproc) Image`
+  - 确认 `.config` 中 `CONFIG_32BIT=y`（RV32 内核，非 64 位）
 3. **合并镜像 (`python3 linux_workspace/merge.py`)**
-   - 读取 `opensbi/build/platform/triathlon/firmware/fw_jump.bin`
-   - 读取 `linux_workspace/linux/arch/riscv/boot/Image`
-   - 生成 `linux_workspace/build/triathlon.dtb`（优先 `dtc` + `triathlon.dts`，否则内置 DTB）
-   - 输出 `fw_combined.bin`（布局见上表）
+  - 读取 `opensbi/build/platform/triathlon/firmware/fw_jump.bin`
+  - 读取 `linux_workspace/linux/arch/riscv/boot/Image`
+  - 生成 `linux_workspace/build/triathlon.dtb`（优先 `dtc` + `triathlon.dts`，否则内置 DTB）
+  - 输出 `fw_combined.bin`（布局见上表）
 4. **启动 Verilator 仿真 (`make -C npc sim ...`)**
-   - **`IMG=...`**: 加载 `fw_combined.bin` 到 `0x80000000`
-   - **`DIFFTEST_SO=`**: 置空以禁用 DiffTest（OpenSBI/Linux 涉及 SV32 MMU、特权级 CSR 与外设，bare-metal NEMU 无法对齐）
-   - 仿真扩展参数见 **§4 仿真器命令行扩展参数**（常用：`--max-cycles`、`--progress`、`--linux-early-debug`、`--commit-trace` 等）
+  - `**IMG=...`**: 加载 `fw_combined.bin` 到 `0x80000000`
+  - `**DIFFTEST_SO=**`: 置空以禁用 DiffTest（OpenSBI/Linux 涉及 SV32 MMU、特权级 CSR 与外设，bare-metal NEMU 无法对齐）
+  - 仿真扩展参数见 **§4 仿真器命令行扩展参数**（常用：`--max-cycles`、`--progress`、`--linux-early-debug`、`--commit-trace` 等）
 
 #### echo_payload（可选，独立测试）
 

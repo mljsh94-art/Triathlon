@@ -234,13 +234,15 @@ static void reset(Vtb_backend *top, MemModel &mem) {
   top->ext_irq_i = 0;
   top->flush_from_backend = 0;
   top->frontend_ibuf_valid = 0;
-  top->frontend_ibuf_pc = 0;
   for (int i = 0; i < INSTR_PER_FETCH; i++) {
     top->frontend_ibuf_instrs[i] = 0;
+    top->frontend_ibuf_raw_instrs[i] = 0;
+    top->frontend_ibuf_pcs[i] = 0;
     top->frontend_ibuf_pred_npc[i] = 0;
   }
   set_frontend_meta(top, 0, 0);
   top->frontend_ibuf_slot_valid = 0;
+  top->frontend_ibuf_is_rvc = 0;
 
   mem.reset();
   tick(top, mem);
@@ -274,30 +276,6 @@ static void send_group(Vtb_backend *top, MemModel &mem,
                        uint32_t fetch_epoch);
 static void expect(bool cond, const char *msg);
 
-static void test_ingress_cluster_dec_valid_matches_backend_dec_valid(Vtb_backend *top,
-                                                                     MemModel &mem) {
-  std::array<uint32_t, 32> rf{};
-  std::vector<uint32_t> commits;
-
-  reset(top, mem);
-  send_group(top, mem, rf, commits, 0x80001000,
-             {insn_addi(1, 0, 1), insn_addi(2, 0, 2), insn_addi(3, 0, 3), insn_addi(4, 0, 4)}, 0, 0);
-
-  bool mismatch = false;
-  for (int cyc = 0; cyc < 64; cyc++) {
-    tick(top, mem);
-    update_commits(top, rf, commits);
-    bool dec_valid = top->dbg_dec_valid_o != 0;
-    bool ingress_dec_valid = top->dbg_ingress_dec_valid_o != 0;
-    if (dec_valid != ingress_dec_valid) {
-      mismatch = true;
-      break;
-    }
-  }
-
-  expect(!mismatch, "Ingress cluster: dbg_dec_valid matches dbg_ingress_dec_valid");
-}
-
 static void test_cfg_instr_per_fetch_matches_backend_width(Vtb_backend *top, MemModel &mem) {
   reset(top, mem);
   expect(static_cast<uint32_t>(top->dbg_cfg_instr_per_fetch_o) ==
@@ -315,10 +293,12 @@ static void send_group(Vtb_backend *top, MemModel &mem,
   bool sent = false;
   while (!sent) {
     top->frontend_ibuf_valid = 1;
-    top->frontend_ibuf_pc = base_pc;
     top->frontend_ibuf_slot_valid = 0;
+    top->frontend_ibuf_is_rvc = 0;
     for (int i = 0; i < INSTR_PER_FETCH; i++) {
       top->frontend_ibuf_instrs[i] = instrs[i];
+      top->frontend_ibuf_raw_instrs[i] = instrs[i];
+      top->frontend_ibuf_pcs[i] = base_pc + static_cast<uint32_t>(i * 4);
       top->frontend_ibuf_slot_valid |= (1u << i);
       top->frontend_ibuf_pred_npc[i] = base_pc + static_cast<uint32_t>((i + 1) * 4);
     }
@@ -343,10 +323,12 @@ static void send_group_masked(Vtb_backend *top, MemModel &mem,
   bool sent = false;
   while (!sent) {
     top->frontend_ibuf_valid = 1;
-    top->frontend_ibuf_pc = base_pc;
     top->frontend_ibuf_slot_valid = 0;
+    top->frontend_ibuf_is_rvc = 0;
     for (int i = 0; i < INSTR_PER_FETCH; i++) {
       top->frontend_ibuf_instrs[i] = instrs[i];
+      top->frontend_ibuf_raw_instrs[i] = instrs[i];
+      top->frontend_ibuf_pcs[i] = base_pc + static_cast<uint32_t>(i * 4);
       if ((slot_valid_mask >> i) & 0x1u) {
         top->frontend_ibuf_slot_valid |= (1u << i);
       }
@@ -372,10 +354,12 @@ static bool try_send_group_limited(Vtb_backend *top, MemModel &mem,
                                    uint32_t fetch_epoch = 0) {
   for (int cyc = 0; cyc < max_cycles; cyc++) {
     top->frontend_ibuf_valid = 1;
-    top->frontend_ibuf_pc = base_pc;
     top->frontend_ibuf_slot_valid = 0;
+    top->frontend_ibuf_is_rvc = 0;
     for (int i = 0; i < INSTR_PER_FETCH; i++) {
       top->frontend_ibuf_instrs[i] = instrs[i];
+      top->frontend_ibuf_raw_instrs[i] = instrs[i];
+      top->frontend_ibuf_pcs[i] = base_pc + static_cast<uint32_t>(i * 4);
       top->frontend_ibuf_slot_valid |= (1u << i);
       top->frontend_ibuf_pred_npc[i] = base_pc + static_cast<uint32_t>((i + 1) * 4);
     }
@@ -402,10 +386,12 @@ static bool try_send_group_masked_limited(Vtb_backend *top, MemModel &mem,
                                           uint32_t fetch_epoch = 0) {
   for (int cyc = 0; cyc < max_cycles; cyc++) {
     top->frontend_ibuf_valid = 1;
-    top->frontend_ibuf_pc = base_pc;
     top->frontend_ibuf_slot_valid = 0;
+    top->frontend_ibuf_is_rvc = 0;
     for (int i = 0; i < INSTR_PER_FETCH; i++) {
       top->frontend_ibuf_instrs[i] = instrs[i];
+      top->frontend_ibuf_raw_instrs[i] = instrs[i];
+      top->frontend_ibuf_pcs[i] = base_pc + static_cast<uint32_t>(i * 4);
       if ((slot_valid_mask >> i) & 0x1u) {
         top->frontend_ibuf_slot_valid |= (1u << i);
       }
@@ -435,10 +421,12 @@ static void send_group_with_pred(Vtb_backend *top, MemModel &mem,
   bool sent = false;
   while (!sent) {
     top->frontend_ibuf_valid = 1;
-    top->frontend_ibuf_pc = base_pc;
     top->frontend_ibuf_slot_valid = 0;
+    top->frontend_ibuf_is_rvc = 0;
     for (int i = 0; i < INSTR_PER_FETCH; i++) {
       top->frontend_ibuf_instrs[i] = instrs[i];
+      top->frontend_ibuf_raw_instrs[i] = instrs[i];
+      top->frontend_ibuf_pcs[i] = base_pc + static_cast<uint32_t>(i * 4);
       top->frontend_ibuf_slot_valid |= (1u << i);
       top->frontend_ibuf_pred_npc[i] = pred_npcs[i];
     }
@@ -467,10 +455,12 @@ static void send_group_masked_with_pred(Vtb_backend *top, MemModel &mem,
   bool sent = false;
   while (!sent) {
     top->frontend_ibuf_valid = 1;
-    top->frontend_ibuf_pc = base_pc;
     top->frontend_ibuf_slot_valid = 0;
+    top->frontend_ibuf_is_rvc = 0;
     for (int i = 0; i < INSTR_PER_FETCH; i++) {
       top->frontend_ibuf_instrs[i] = instrs[i];
+      top->frontend_ibuf_raw_instrs[i] = instrs[i];
+      top->frontend_ibuf_pcs[i] = base_pc + static_cast<uint32_t>(i * 4);
       if ((slot_valid_mask >> i) & 0x1u) {
         top->frontend_ibuf_slot_valid |= (1u << i);
       }
@@ -621,6 +611,12 @@ static void test_branch_flush(Vtb_backend *top, MemModel &mem) {
 
   expect(flush_seen, "Branch mispred flush asserted");
   expect(!wrong_commit, "Wrong-path instructions not committed before re-fetch");
+
+  for (int i = 0; i < 8; i++) {
+    top->frontend_ibuf_valid = 0;
+    tick(top, mem);
+    update_commits(top, rf, commits);
+  }
 
   // Re-fetch correct-path instruction at target PC (0x8000 + 12)
   std::array<uint32_t, 4> group2 = {
@@ -1374,7 +1370,6 @@ int main(int argc, char **argv) {
   std::cout << "--- [START] Backend Verification ---" << std::endl;
 
   test_cfg_instr_per_fetch_matches_backend_width(top, mem);
-  test_ingress_cluster_dec_valid_matches_backend_dec_valid(top, mem);
   test_alu_and_deps(top, mem);
   test_m_extension_basic_commit(top, mem);
   test_branch_flush(top, mem);

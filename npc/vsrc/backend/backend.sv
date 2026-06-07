@@ -13,9 +13,11 @@ module backend #(
     input logic frontend_ibuf_valid,
     output logic frontend_ibuf_ready,
     input logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] frontend_ibuf_instrs,
-    input logic [Cfg.PLEN-1:0] frontend_ibuf_pc,
+    input logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] frontend_ibuf_raw_instrs,
+    input logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] frontend_ibuf_pcs,
     input logic [Cfg.INSTR_PER_FETCH-1:0] frontend_ibuf_slot_valid,
     input logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] frontend_ibuf_pred_npc,
+    input logic [Cfg.INSTR_PER_FETCH-1:0] frontend_ibuf_is_rvc,
     input logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] frontend_ibuf_ftq_id,
     input logic [Cfg.INSTR_PER_FETCH-1:0][2:0] frontend_ibuf_fetch_epoch,
     // Redirect/flush to frontend
@@ -88,7 +90,6 @@ module backend #(
   localparam int unsigned ROB_IDX_WIDTH = $clog2(ROB_DEPTH);
   localparam int unsigned SB_DEPTH = (Cfg.SB_DEPTH >= 4) ? Cfg.SB_DEPTH : 16;
   localparam int unsigned SB_IDX_WIDTH = $clog2(SB_DEPTH);
-  localparam int unsigned IBUFFER_DEPTH = (Cfg.IBUFFER_DEPTH >= DISPATCH_WIDTH) ? Cfg.IBUFFER_DEPTH : 16;
   localparam int unsigned RS_DEPTH = Cfg.RS_DEPTH;
   localparam int unsigned WB_WIDTH = 7;
   localparam int unsigned NUM_FUS = 7;  // ALU0, ALU1, BRU, LSU, ALU2, ALU3, CSR
@@ -117,10 +118,12 @@ module backend #(
 
   assign frontend_ibuf_bus.valid = frontend_ibuf_valid;
   assign frontend_ibuf_bus.ready = frontend_ibuf_ready;
-  assign frontend_ibuf_bus.pc = frontend_ibuf_pc;
   assign frontend_ibuf_bus.instrs = frontend_ibuf_instrs;
+  assign frontend_ibuf_bus.raw_instrs = frontend_ibuf_raw_instrs;
+  assign frontend_ibuf_bus.pcs = frontend_ibuf_pcs;
   assign frontend_ibuf_bus.slot_valid = frontend_ibuf_slot_valid;
   assign frontend_ibuf_bus.pred_npc = frontend_ibuf_pred_npc;
+  assign frontend_ibuf_bus.is_rvc = frontend_ibuf_is_rvc;
   assign frontend_ibuf_bus.ftq_id = frontend_ibuf_ftq_id;
   assign frontend_ibuf_bus.fetch_epoch = frontend_ibuf_fetch_epoch;
 
@@ -151,43 +154,36 @@ module backend #(
   endgenerate
 
   // =========================================================
-  // Frontend ingress (IBuffer + Decoder)
+  // Decode (fe→be decode-ready 束 → uops)
   // =========================================================
   logic backend_flush;
   logic dec_valid;
-  logic ingress_dec_valid;
-  logic decode_ibuf_valid;
-  logic decode_ibuf_ready;
   logic [DISPATCH_WIDTH-1:0] dec_slot_valid;
   decode_pkg::uop_t [DISPATCH_WIDTH-1:0] dec_uops;
   logic decode_backend_ready;
 
-  frontend_ingress_cluster #(
+  decoder #(
       .Cfg(Cfg),
-      .DISPATCH_WIDTH(DISPATCH_WIDTH),
-      .IBUFFER_DEPTH(IBUFFER_DEPTH)
-  ) u_frontend_ingress (
-      .clk_i,
-      .rst_ni,
-      .flush_i(backend_flush),
+      .DECODE_WIDTH(DISPATCH_WIDTH)
+  ) u_decoder (
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-      .fe_valid_i(frontend_ibuf_valid),
-      .fe_ready_o(frontend_ibuf_ready),
-      .fe_instrs_i(frontend_ibuf_instrs),
-      .fe_pc_i(frontend_ibuf_pc),
-      .fe_slot_valid_i(frontend_ibuf_slot_valid),
-      .fe_pred_npc_i(frontend_ibuf_pred_npc),
-      .fe_ftq_id_i(frontend_ibuf_ftq_id),
-      .fe_fetch_epoch_i(frontend_ibuf_fetch_epoch),
+      .ibuf2dec_valid_i (frontend_ibuf_valid),
+      .dec2ibuf_ready_o (frontend_ibuf_ready),
+      .ibuf_instrs_i    (frontend_ibuf_instrs),
+      .ibuf_raw_instrs_i(frontend_ibuf_raw_instrs),
+      .ibuf_pcs_i       (frontend_ibuf_pcs),
+      .ibuf_slot_valid_i(frontend_ibuf_slot_valid),
+      .ibuf_pred_npc_i  (frontend_ibuf_pred_npc),
+      .ibuf_is_rvc_i    (frontend_ibuf_is_rvc),
+      .ibuf_ftq_id_i    (frontend_ibuf_ftq_id),
+      .ibuf_fetch_epoch_i(frontend_ibuf_fetch_epoch),
 
-      .dec_valid_o(dec_valid),
-      .dec_slot_valid_o(dec_slot_valid),
-      .dec_uops_o(dec_uops),
-      .decode_ready_i(decode_backend_ready),
-
-      .ingress_dec_valid_o(ingress_dec_valid),
-      .decode_ibuf_valid_o(decode_ibuf_valid),
-      .decode_ibuf_ready_o(decode_ibuf_ready)
+      .dec2backend_valid_o(dec_valid),
+      .backend2dec_ready_i(decode_backend_ready),
+      .dec_slot_valid_o   (dec_slot_valid),
+      .dec_uops_o         (dec_uops)
   );
 
   // =========================================================

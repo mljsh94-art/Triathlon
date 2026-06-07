@@ -1,5 +1,4 @@
 ./vsrc/backend/backend.sv
-./vsrc/backend/buffer/ibuffer.sv
 ./vsrc/backend/buffer/store_buffer.sv
 ./vsrc/backend/decode/decoder.sv
 ./vsrc/backend/execute/alu.sv
@@ -29,6 +28,7 @@
 ./vsrc/cache/tag_array.sv
 ./vsrc/frontend/bpu.sv
 ./vsrc/frontend/frontend.sv
+./vsrc/frontend/ibuffer.sv
 ./vsrc/frontend/ifu.sv
 ./vsrc/include/build_config_pkg.sv
 ./vsrc/include/config_pkg.sv
@@ -46,6 +46,8 @@
 ./vsrc/test/tb_execute.sv
 ./vsrc/test/tb_frontend.sv
 ./vsrc/test/tb_ibuffer.sv
+./vsrc/test/tb_instr_aligner.sv
+./vsrc/frontend/instr_aligner.sv
 ./vsrc/test/tb_icache.sv
 ./vsrc/test/tb_issue.sv
 ./vsrc/test/tb_lsu.sv
@@ -53,4 +55,5 @@
 ./vsrc/test/tb_tag_array.sv
 ./vsrc/test/tb_triathlon.sv
 ./vsrc/triathlon.sv
+./vsrc/util/bundle_fifo.sv
 ./vsrc/util/priority_encoder.sv

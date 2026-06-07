@@ -9,15 +9,16 @@ module frontend #(
     input logic rst_ni,
 
     // ============================================
-    // 1. 后端/IBuffer 接口 (To Backend)
+    // 1. 后端接口 (ibuffer 出队口 = decode-ready 束)
     // ============================================
-    // IBuffer 握手与数据 (Output to IBuffer)
     output logic                                         ibuffer_valid_o,
     input  logic                                         ibuffer_ready_i,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ibuffer_data_o,
-    output logic [           Cfg.PLEN-1:0]               ibuffer_pc_o,     // Fetch Group 的 PC
+    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ibuffer_instrs_o,
+    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ibuffer_raw_instrs_o,
+    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ibuffer_pcs_o,
     output logic [Cfg.INSTR_PER_FETCH-1:0]               ibuffer_slot_valid_o,
     output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ibuffer_pred_npc_o,
+    output logic [Cfg.INSTR_PER_FETCH-1:0]               ibuffer_is_rvc_o,
     output logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] ibuffer_ftq_id_o,
     output logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ibuffer_fetch_epoch_o,
 
@@ -66,14 +67,12 @@ module frontend #(
     // ============================================
     // 2. 存储器系统接口 (To Memory/L2/Bus)
     // ============================================
-    // Miss Request (Output)
     output logic                                  miss_req_valid_o,
     input  logic                                  miss_req_ready_i,
     output logic [                  Cfg.PLEN-1:0] miss_req_paddr_o,
     output logic [Cfg.ICACHE_SET_ASSOC_WIDTH-1:0] miss_req_victim_way_o,
     output logic [    Cfg.ICACHE_INDEX_WIDTH-1:0] miss_req_index_o,
 
-    // Refill (Input)
     input  logic                                  refill_valid_i,
     output logic                                  refill_ready_o,
     input  logic [                  Cfg.PLEN-1:0] refill_paddr_i,
@@ -81,9 +80,8 @@ module frontend #(
     input  logic [     Cfg.ICACHE_LINE_WIDTH-1:0] refill_data_i
 );
 
-  // =================================================================
-  // 内部信号定义
-  // =================================================================
+  localparam int unsigned IBUFFER_DEPTH = (Cfg.IBUFFER_DEPTH >= Cfg.INSTR_PER_FETCH) ?
+      Cfg.IBUFFER_DEPTH : 16;
 
   // --- IFU <-> BPU 互联信号 ---
   handshake_t ifu2bpu_handshake;
@@ -94,7 +92,6 @@ module frontend #(
   logic [$clog2(Cfg.INSTR_PER_FETCH)-1:0] bpu2ifu_pred_slot_idx;
   logic [Cfg.PLEN-1:0] bpu2ifu_pred_target;
 
-  // BPU 接口结构体 (用于适配 BPU 端口定义)
   ifu_to_bpu_t ifu_to_bpu_struct;
   bpu_to_ifu_t bpu_to_ifu_struct;
 
@@ -104,43 +101,46 @@ module frontend #(
   logic [Cfg.VLEN-1:0] ifu2icache_req_addr;
   logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] icache2ifu_rsp_data;
   logic flush_icache;
+
+  // --- IFU -> aligner -> ibuffer 内部链路 ---
+  logic ifu_ibuf_valid;
+  logic ifu_ibuf_ready;
+  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ifu_ibuf_data;
+  logic [Cfg.PLEN-1:0] ifu_ibuf_pc;
+  logic [Cfg.INSTR_PER_FETCH-1:0] ifu_ibuf_slot_valid;
+  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ifu_ibuf_pred_npc;
+  logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] ifu_ibuf_ftq_id;
+  logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ifu_ibuf_fetch_epoch;
+
+  logic [$clog2(FE_EXPAND_MAX + 1)-1:0] aln_entry_count;
+  ibuf_entry_t [FE_EXPAND_MAX-1:0] aln_entries;
+  logic ibuf_aln_ready;
+
   fe_be_bundle_t fe_be_view;
 
-  // =================================================================
-  // 逻辑连接与适配
-  // =================================================================
-
-  // 1. BPU 结构体适配
-  // IFU 输出的扁平 PC -> 打包进 BPU 输入结构体
   assign ifu_to_bpu_struct.pc = ifu2bpu_pc;
-  // BPU 输出的结构体 -> 解包给 IFU 的扁平 Predicted PC
   assign bpu2ifu_predicted_pc = bpu_to_ifu_struct.npc;
   assign bpu2ifu_pred_slot_valid = bpu_to_ifu_struct.pred_slot_valid;
   assign bpu2ifu_pred_slot_idx = bpu_to_ifu_struct.pred_slot_idx;
   assign bpu2ifu_pred_target = bpu_to_ifu_struct.pred_slot_target;
+
   assign fe_be_view.valid = ibuffer_valid_o;
   assign fe_be_view.ready = ibuffer_ready_i;
-  assign fe_be_view.pc = ibuffer_pc_o;
-  assign fe_be_view.instrs = ibuffer_data_o;
+  assign fe_be_view.instrs = ibuffer_instrs_o;
+  assign fe_be_view.raw_instrs = ibuffer_raw_instrs_o;
+  assign fe_be_view.pcs = ibuffer_pcs_o;
   assign fe_be_view.slot_valid = ibuffer_slot_valid_o;
   assign fe_be_view.pred_npc = ibuffer_pred_npc_o;
+  assign fe_be_view.is_rvc = ibuffer_is_rvc_o;
   assign fe_be_view.ftq_id = ibuffer_ftq_id_o;
   assign fe_be_view.fetch_epoch = ibuffer_fetch_epoch_o;
 
-  // =================================================================
-  // 模块实例化
-  // =================================================================
-
-  // -------------------
-  // 1. Instruction Fetch Unit (IFU)
-  // -------------------
   ifu #(
       .Cfg(Cfg)
   ) i_ifu (
       .clk(clk_i),
-      .rst(~rst_ni), // IFU 使用高电平复位 (rst)，需取反
+      .rst(~rst_ni),
 
-      // --- BPU Handshake ---
       .ifu2bpu_handshake_o   (ifu2bpu_handshake),
       .bpu2ifu_handshake_i   (bpu2ifu_handshake),
       .ifu2bpu_pc_o          (ifu2bpu_pc),
@@ -149,24 +149,21 @@ module frontend #(
       .bpu2ifu_pred_slot_idx_i(bpu2ifu_pred_slot_idx),
       .bpu2ifu_pred_target_i(bpu2ifu_pred_target),
 
-      // --- ICache Request Interface ---
       .ifu2icache_req_handshake_o(ifu2icache_req_handshake),
       .icache2ifu_rsp_handshake_i(icache2ifu_rsp_handshake),
       .ifu2icache_req_addr_o     (ifu2icache_req_addr),
       .icache2ifu_rsp_data_i     (icache2ifu_rsp_data),
       .flush_icache_o            (flush_icache),
 
-      // --- IBuffer Response Interface (To Backend) ---
-      .ifu_ibuffer_rsp_valid_o(ibuffer_valid_o),
-      .ifu_ibuffer_rsp_pc_o   (ibuffer_pc_o),
-      .ibuffer_ifu_rsp_ready_i(ibuffer_ready_i),
-      .ifu_ibuffer_rsp_data_o (ibuffer_data_o),
-      .ifu_ibuffer_rsp_slot_valid_o(ibuffer_slot_valid_o),
-      .ifu_ibuffer_rsp_pred_npc_o(ibuffer_pred_npc_o),
-      .ifu_ibuffer_rsp_ftq_id_o(ibuffer_ftq_id_o),
-      .ifu_ibuffer_rsp_fetch_epoch_o(ibuffer_fetch_epoch_o),
+      .ifu_ibuffer_rsp_valid_o(ifu_ibuf_valid),
+      .ifu_ibuffer_rsp_pc_o   (ifu_ibuf_pc),
+      .ibuffer_ifu_rsp_ready_i(ifu_ibuf_ready),
+      .ifu_ibuffer_rsp_data_o (ifu_ibuf_data),
+      .ifu_ibuffer_rsp_slot_valid_o(ifu_ibuf_slot_valid),
+      .ifu_ibuffer_rsp_pred_npc_o(ifu_ibuf_pred_npc),
+      .ifu_ibuffer_rsp_ftq_id_o(ifu_ibuf_ftq_id),
+      .ifu_ibuffer_rsp_fetch_epoch_o(ifu_ibuf_fetch_epoch),
 
-      // --- Backend Control ---
       .flush_i      (flush_i),
       .redirect_pc_i(redirect_pc_i),
 
@@ -191,9 +188,54 @@ module frontend #(
       .ifetch_fault_cause_o(ifetch_fault_cause_o)
   );
 
-  // -------------------
-  // 2. Branch Prediction Unit (BPU)
-  // -------------------
+  instr_aligner #(
+      .Cfg(Cfg)
+  ) i_instr_aligner (
+      .clk_i(clk_i),
+      .rst_ni(rst_ni),
+      .flush_i(flush_i),
+
+      .fe_valid_i(ifu_ibuf_valid),
+      .fe_ready_o(ifu_ibuf_ready),
+      .fe_instrs_i(ifu_ibuf_data),
+      .fe_pc_i(ifu_ibuf_pc),
+      .fe_slot_valid_i(ifu_ibuf_slot_valid),
+      .fe_pred_npc_i(ifu_ibuf_pred_npc),
+      .fe_ftq_id_i(ifu_ibuf_ftq_id),
+      .fe_fetch_epoch_i(ifu_ibuf_fetch_epoch),
+      .ibuf_aln_ready_i(ibuf_aln_ready),
+
+      .aln_entry_count_o(aln_entry_count),
+      .aln_entries_o(aln_entries)
+  );
+
+  ibuffer #(
+      .Cfg(Cfg),
+      .IB_DEPTH(IBUFFER_DEPTH),
+      .DECODE_WIDTH(Cfg.INSTR_PER_FETCH)
+  ) i_ibuffer (
+      .clk_i(clk_i),
+      .rst_ni(rst_ni),
+
+      .aln_valid_i(ifu_ibuf_valid),
+      .aln_ready_o(ibuf_aln_ready),
+      .aln_entries_i(aln_entries),
+      .aln_entry_count_i(aln_entry_count),
+
+      .ibuf_valid_o(ibuffer_valid_o),
+      .ibuf_ready_i(ibuffer_ready_i),
+      .ibuf_instrs_o(ibuffer_instrs_o),
+      .ibuf_raw_instrs_o(ibuffer_raw_instrs_o),
+      .ibuf_pcs_o(ibuffer_pcs_o),
+      .ibuf_slot_valid_o(ibuffer_slot_valid_o),
+      .ibuf_pred_npc_o(ibuffer_pred_npc_o),
+      .ibuf_is_rvc_o(ibuffer_is_rvc_o),
+      .ibuf_ftq_id_o(ibuffer_ftq_id_o),
+      .ibuf_fetch_epoch_o(ibuffer_fetch_epoch_o),
+
+      .flush_i(flush_i)
+  );
+
   bpu #(
       .Cfg(Cfg),
       .BTB_ENTRIES(Cfg.BPU_BTB_ENTRIES),
@@ -229,7 +271,7 @@ module frontend #(
       .TRACK_DEPTH(Cfg.BPU_TRACK_DEPTH)
   ) i_bpu (
       .clk_i(clk_i),
-      .rst_i(~rst_ni), // 高电平复位
+      .rst_i(~rst_ni),
 
       .ifu_to_bpu_i          (ifu_to_bpu_struct),
       .ifu_to_bpu_handshake_i(ifu2bpu_handshake),
@@ -251,24 +293,19 @@ module frontend #(
       .bpu_to_ifu_o          (bpu_to_ifu_struct)
   );
 
-  // -------------------
-  // 3. Instruction Cache (ICache)
-  // -------------------
   icache #(
       .Cfg(Cfg),
       .HIT_PIPELINE_EN(Cfg.ICACHE_HIT_PIPELINE_EN != 0)
   ) i_icache (
       .clk_i (clk_i),
-      .rst_ni(rst_ni), // 低电平复位
+      .rst_ni(rst_ni),
 
-      // --- IFU Interface ---
       .ifu_req_handshake_i(ifu2icache_req_handshake),
       .ifu_rsp_handshake_o(icache2ifu_rsp_handshake),
       .ifu_req_pc_i       (ifu2icache_req_addr),
       .ifu_rsp_instrs_o   (icache2ifu_rsp_data),
       .ifu_req_flush_i    (flush_icache),
 
-      // --- Miss / Refill Interface (To Memory) ---
       .miss_req_valid_o     (miss_req_valid_o),
       .miss_req_ready_i     (miss_req_ready_i),
       .miss_req_paddr_o     (miss_req_paddr_o),
