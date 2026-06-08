@@ -17,8 +17,8 @@ Triathlon/
 ├── npc/vsrc/                        # RTL source
 │   ├── triathlon.sv                 # Top-level module
 │   ├── frontend/                    # Frontend pipeline
-│   │   ├── frontend.sv              # Frontend top (IFU + BPU + ICache + aligner + ibuffer)
-│   │   ├── ifu.sv                   # Instruction fetch unit + FTQ
+│   │   ├── frontend.sv              # Frontend top (IFU + BPU + ICache + FTQ + aligner + ibuffer)
+│   │   ├── ifu.sv                   # Instruction fetch unit
 │   │   ├── bpu.sv                   # Branch prediction unit
 │   │   ├── instr_aligner.sv         # RVC 半字展开 + carry（IFU fetch group → ibuf_entry_t）
 │   │   ├── ibuffer.sv               # 纯 FIFO（aligner → 4-wide decode-ready 出队）
@@ -130,7 +130,7 @@ Fetch -> Decode -> Rename -> Dispatch -> Issue -> Execute -> Writeback -> Commit
 
 ### Frontend (frontend.sv)
 
-- **IFU (Instruction Fetch Unit)**: Manages PC register, sends fetch requests to ICache/MMU, interfaces with BPU for next-PC prediction. Incorporates an SV32 MMU for instruction page walks. Instruction page fault capture quiesces further fetch enqueue/issue until the backend trap redirect flush arrives, preventing younger user fetch requests from being translated under the trap handler privilege.
+- **IFU (Instruction Fetch Unit)**: Decoupled from BPU via the Fetch Target Queue (FTQ). It retrieves predicted target PCs from the FTQ dequeue interface and drives ICache/MMU fetch requests. The internal PC register and FTQ instance are removed; it uses a Pending Request FIFO and an Inflight FIFO to track outstanding fetches. Incorporates an SV32 MMU for instruction page walks. Instruction page fault capture quiesces further fetch enqueue/issue until the backend trap redirect flush arrives, preventing younger user fetch requests from being translated under the trap handler privilege.
 - **BPU (Branch Prediction Unit)**: Highly advanced tournament predictor supporting speculative fetching. Components include:
   - **TAGE**: Primary conditional branch predictor.
   - **SC_L (Statistical Correlator)**: Assists TAGE for hard-to-predict branches.
@@ -138,7 +138,7 @@ Fetch -> Decode -> Rename -> Dispatch -> Issue -> Execute -> Writeback -> Commit
   - **ITTAGE**: Indirect Target TAGE for indirect jumps.
   - **RAS (Return Address Stack)**: Predicts function returns, updated speculatively.
 - **ICache**: 4-way set-associative, 32KB, 256-bit line (8 instructions). Non-blocking architecture with refill interface and 32-entry I-TLB.
-- **Fetch Target Queue (FTQ)**: Tracks fetch PCs, epochs, and prediction metadata for branch resolution and redirect recovery.
+- **Fetch Target Queue (FTQ)**: Now at the frontend top level (decoupled from IFU). It manages speculative PC generation, handshakes with BPU for next-PC prediction, and provides target fetch packets to the IFU through a decoupling dequeue interface. It tracks fetch PCs, epochs, and prediction metadata for branch resolution and redirect recovery.
 - **Instr Aligner**: 将 IFU 4-word fetch group 半字展开为 ≤8 条 `ibuf_entry_t`（含 RVC `compressed_decoder`、carry、预测截断）。
 - **IBuffer**: 16-entry 纯 FIFO，接收 aligner 对齐条目，4-wide decode-ready 出队；与 IFU/aligner 一同位于 frontend。
 
@@ -255,14 +255,24 @@ struct packed {
 ### Frontend-Backend Interface
 
 ```
-Frontend -> Backend:
-  fe_ibuf_valid/ready     (handshake)
-  fe_ibuf_instrs [4][32]  (instruction bundle)
-  fe_ibuf_pc [32]         (fetch group PC)
+Frontend -> Backend (via fe_be_bundle_t):
+  ibuffer_valid_o / ibuffer_ready_i                             (handshake)
+  ibuffer_instrs_o [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0]      (aligned instruction bundle)
+  ibuffer_raw_instrs_o [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0]  (raw instruction bundle for commit tracking)
+  ibuffer_pcs_o [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0]         (virtual PCs of instructions)
+  ibuffer_slot_valid_o [Cfg.INSTR_PER_FETCH-1:0]                (validity per slot)
+  ibuffer_pred_npc_o [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0]    (predicted next PC per instruction)
+  ibuffer_is_rvc_o [Cfg.INSTR_PER_FETCH-1:0]                    (RVC indication per instruction)
+  ibuffer_ftq_id_o [Cfg.INSTR_PER_FETCH-1:0][((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] (assigned FTQ ID)
+  ibuffer_fetch_epoch_o [Cfg.INSTR_PER_FETCH-1:0][2:0]          (fetch epoch)
 
 Backend -> Frontend:
-  backend_flush           (ROB flush signal)
-  backend_redirect_pc [32] (redirect target PC)
+  flush_i                                                       (pipeline flush signal)
+  redirect_pc_i [Cfg.PLEN-1:0]                                  (redirect target PC)
+  bpu_update_valid_i / bpu_update_pc_i / ...                    (BPU branch/jump resolution updates)
+  bpu_ras_update_valid_i / bpu_ras_update_pc_i / ...            (speculative RAS restoration)
+  mmu_satp_i / mmu_priv_i / mmu_sum_i / mmu_mxr_i               (MMU translation status)
+  mmu_sfence_vma_i                                              (Sfence flush signal)
 ```
 
 ## Build, Test & Toolchain (编译工具链说明)
@@ -308,7 +318,7 @@ Backend -> Frontend:
 | `BENCH_ARGS`           | `--max-cycles=10000000 --progress=0`          | `bench` 目标传给仿真器的参数。                                                                      |
 | `ARCH`                 | `riscv32i-npc`                                | `profile-report` 编译 AM benchmark 的架构标签。                                                  |
 | `CROSS_COMPILE`        | `riscv64-unknown-elf-`                        | AM benchmark 交叉编译前缀（WSL 常见安装名；勿与 OpenSBI 的 `riscv64-linux-gnu-` 混用）。                     |
-| `PROFILE_OUT_DIR`      | *(空，自动时间戳)*                                   | `profile-report` 输出目录；从仓库根写 `npc/build/profile/<run_id>`。                                |
+| `PROFILE_OUT_DIR`      | *(空，自动时间戳)*                                   | `profile-report` 输出目录；从仓库根写 `npc/profile/<run_id>`。                                |
 | `PROFILE_TAG`          | `latest`                                      | `profile-task` 写入 `npc/build/profile/<PROFILE_TAG>/`。                                    |
 | `PROFILE_DISPLAY_NAME` | *(空，用目录名)*                                    | 看板/图表显示名，写入 `metadata.json` 的 `display_name`。                                            |
 | `PROFILE_ROOT`         | `npc/build/profile`                           | `profile-index` / `profile-dashboard` 扫描根目录。                                             |
@@ -348,7 +358,7 @@ run_profile.sh → make sim --profile-json → <run_id>/dhrystone.json、coremar
 
 #### 目录约定
 
-每次采集写入 `**npc/build/profile/<run_id>/` 子目录**（不要落到 `profile/` 根目录）。省略 `PROFILE_OUT_DIR` 时 `run_profile.sh` 自动使用 `npc/build/profile/<timestamp>/`。
+每次采集写入 `**npc/build/profile/<run_id>/` 子目录**（不要落到 `profile/` 根目录）。省略 `PROFILE_OUT_DIR` 时 `run_profile.sh` 自动使用 `npc/profile/<timestamp>/`。
 
 
 | 路径                                                 | 说明                                                       |
@@ -370,7 +380,7 @@ run_profile.sh → make sim --profile-json → <run_id>/dhrystone.json、coremar
 ```bash
 # 采集（默认 ARCH=riscv32i-npc、CROSS_COMPILE=riscv64-unknown-elf-）
 make -C npc profile-report
-make -C npc profile-report PROFILE_OUT_DIR=npc/build/profile/$(date +%Y%m%d-%H%M%S)
+make -C npc profile-report PROFILE_OUT_DIR=npc/profile/$(date +%Y%m%d-%H%M%S)
 
 # 固定 tag 目录（回归基线）
 make -C npc profile-baseline          # 等价于 PROFILE_TAG=baseline 的 profile-task
@@ -382,7 +392,7 @@ make -C npc profile-dashboard
 # 清空全部 profile 数据后重采（含 baseline、看板）
 make -C npc profile-clean
 make -C npc profile-baseline
-make -C npc profile-report PROFILE_OUT_DIR=npc/build/profile/$(date +%Y%m%d-%H%M%S)
+make -C npc profile-report PROFILE_OUT_DIR=npc/profile/$(date +%Y%m%d-%H%M%S)
 make -C npc profile-dashboard
 
 # 两次 summary 回归门禁
@@ -571,7 +581,7 @@ make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
 
 ```bash
 # Profile 采集/看板（完整说明见 §4）
-make -C npc profile-report PROFILE_OUT_DIR=npc/build/profile/$(date +%Y%m%d-%H%M%S)
+make -C npc profile-report PROFILE_OUT_DIR=npc/profile/$(date +%Y%m%d-%H%M%S)
 make -C npc profile-dashboard
 
 # 限定 commit trace 窗口

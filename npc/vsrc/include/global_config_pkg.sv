@@ -17,6 +17,16 @@ package global_config_pkg;
     logic ready;
   } handshake_t;
 
+  // FTQ 条目类型（BPU 写入、IFU 读取）
+  typedef struct packed {
+    logic [Cfg.PLEN-1:0] pc;              // fetch block 起始 PC
+    logic                pred_slot_valid;  // 预测是否有跳转
+    logic [$clog2(Cfg.INSTR_PER_FETCH)-1:0] pred_slot_idx;
+    logic [Cfg.PLEN-1:0] pred_target;     // 跳转目标
+    logic [Cfg.PLEN-1:0] pred_npc;        // 预测的下一个 fetch block PC
+  } ftq_entry_t;
+
+  // [DEPRECATED] 旧 BPU↔IFU 直连类型，仅供 test bench 兼容使用
   typedef struct packed {logic [Cfg.PLEN-1:0] pc;} ifu_to_bpu_t;
 
   typedef struct packed {

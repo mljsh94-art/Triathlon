@@ -19,7 +19,7 @@ module frontend #(
     output logic [Cfg.INSTR_PER_FETCH-1:0]               ibuffer_slot_valid_o,
     output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ibuffer_pred_npc_o,
     output logic [Cfg.INSTR_PER_FETCH-1:0]               ibuffer_is_rvc_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] ibuffer_ftq_id_o,
+    output logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] ibuffer_ftq_id_o,
     output logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ibuffer_fetch_epoch_o,
 
     // 冲刷与重定向 (Input from Backend)
@@ -82,18 +82,49 @@ module frontend #(
 
   localparam int unsigned IBUFFER_DEPTH = (Cfg.IBUFFER_DEPTH >= Cfg.INSTR_PER_FETCH) ?
       Cfg.IBUFFER_DEPTH : 16;
+  localparam int unsigned SLOT_IDX_W = (Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1;
+  localparam int unsigned EPOCH_W = 3;
+  localparam int unsigned FTQ_DEPTH = (Cfg.FTQ_DEPTH >= 2) ? Cfg.FTQ_DEPTH : 2;
+  localparam int unsigned FTQ_ID_W = (FTQ_DEPTH > 1) ? $clog2(FTQ_DEPTH) : 1;
+  localparam int unsigned FTQ_CNT_W = (FTQ_DEPTH > 1) ? $clog2(FTQ_DEPTH + 1) : 1;
 
-  // --- IFU <-> BPU 互联信号 ---
-  handshake_t ifu2bpu_handshake;
-  handshake_t bpu2ifu_handshake;
-  logic [Cfg.PLEN-1:0] ifu2bpu_pc;
-  logic [Cfg.PLEN-1:0] bpu2ifu_predicted_pc;
-  logic bpu2ifu_pred_slot_valid;
-  logic [$clog2(Cfg.INSTR_PER_FETCH)-1:0] bpu2ifu_pred_slot_idx;
-  logic [Cfg.PLEN-1:0] bpu2ifu_pred_target;
+  // === BPU → FTQ enqueue 信号 ===
+  logic                    bpu_ftq_enq_valid;
+  logic                    bpu_ftq_enq_ready;
+  logic [Cfg.PLEN-1:0]    bpu_ftq_enq_pc;
+  logic                    bpu_ftq_enq_pred_slot_valid;
+  logic [SLOT_IDX_W-1:0]  bpu_ftq_enq_pred_slot_idx;
+  logic [Cfg.PLEN-1:0]    bpu_ftq_enq_pred_target;
+  logic [Cfg.PLEN-1:0]    bpu_ftq_enq_pred_npc;
 
-  ifu_to_bpu_t ifu_to_bpu_struct;
-  bpu_to_ifu_t bpu_to_ifu_struct;
+  // === FTQ → IFU dequeue 信号 ===
+  logic                    ftq_ifu_deq_valid;
+  logic                    ftq_ifu_deq_ready;
+  logic [Cfg.PLEN-1:0]    ftq_ifu_deq_pc;
+  logic                    ftq_ifu_deq_pred_slot_valid;
+  logic [SLOT_IDX_W-1:0]  ftq_ifu_deq_pred_slot_idx;
+  logic [Cfg.PLEN-1:0]    ftq_ifu_deq_pred_target;
+  logic [Cfg.PLEN-1:0]    ftq_ifu_deq_pred_npc;
+  logic [EPOCH_W-1:0]     ftq_ifu_deq_epoch;
+  logic [FTQ_ID_W-1:0]    ftq_ifu_deq_ftq_id;
+
+  // === FTQ 状态 ===
+  logic [FTQ_CNT_W-1:0]   ftq_count;
+
+  // === Epoch 管理 (frontend 级别) ===
+  logic [EPOCH_W-1:0] frontend_epoch_q;
+  logic [EPOCH_W-1:0] frontend_epoch_next_w;
+  assign frontend_epoch_next_w = frontend_epoch_q + EPOCH_W'(1);
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      frontend_epoch_q <= '0;
+    end else begin
+      if (flush_i) begin
+        frontend_epoch_q <= frontend_epoch_next_w;
+      end
+    end
+  end
 
   // --- IFU <-> ICache 互联信号 ---
   handshake_t ifu2icache_req_handshake;
@@ -109,7 +140,7 @@ module frontend #(
   logic [Cfg.PLEN-1:0] ifu_ibuf_pc;
   logic [Cfg.INSTR_PER_FETCH-1:0] ifu_ibuf_slot_valid;
   logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ifu_ibuf_pred_npc;
-  logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] ifu_ibuf_ftq_id;
+  logic [Cfg.INSTR_PER_FETCH-1:0][FTQ_ID_W-1:0] ifu_ibuf_ftq_id;
   logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ifu_ibuf_fetch_epoch;
 
   logic [$clog2(FE_EXPAND_MAX + 1)-1:0] aln_entry_count;
@@ -117,12 +148,6 @@ module frontend #(
   logic ibuf_aln_ready;
 
   fe_be_bundle_t fe_be_view;
-
-  assign ifu_to_bpu_struct.pc = ifu2bpu_pc;
-  assign bpu2ifu_predicted_pc = bpu_to_ifu_struct.npc;
-  assign bpu2ifu_pred_slot_valid = bpu_to_ifu_struct.pred_slot_valid;
-  assign bpu2ifu_pred_slot_idx = bpu_to_ifu_struct.pred_slot_idx;
-  assign bpu2ifu_pred_target = bpu_to_ifu_struct.pred_slot_target;
 
   assign fe_be_view.valid = ibuffer_valid_o;
   assign fe_be_view.ready = ibuffer_ready_i;
@@ -135,19 +160,58 @@ module frontend #(
   assign fe_be_view.ftq_id = ibuffer_ftq_id_o;
   assign fe_be_view.fetch_epoch = ibuffer_fetch_epoch_o;
 
+  // === FTQ 实例 (提升到 frontend 顶层) ===
+  ftq #(
+      .Cfg(Cfg),
+      .DEPTH(FTQ_DEPTH),
+      .EPOCH_W(EPOCH_W)
+  ) u_ftq (
+      .clk_i(clk_i),
+      .rst_ni(rst_ni),
+      .flush_i(flush_i),
+
+      // BPU 写入端
+      .enq_valid_i       (bpu_ftq_enq_valid),
+      .enq_ready_o       (bpu_ftq_enq_ready),
+      .enq_pc_i          (bpu_ftq_enq_pc),
+      .enq_pred_slot_valid_i(bpu_ftq_enq_pred_slot_valid),
+      .enq_pred_slot_idx_i(bpu_ftq_enq_pred_slot_idx),
+      .enq_pred_target_i (bpu_ftq_enq_pred_target),
+      .enq_pred_npc_i    (bpu_ftq_enq_pred_npc),
+      .enq_epoch_i       (flush_i ? frontend_epoch_next_w : frontend_epoch_q),
+
+      // IFU 读取端
+      .deq_valid_o       (ftq_ifu_deq_valid),
+      .deq_ready_i       (ftq_ifu_deq_ready),
+      .deq_pc_o          (ftq_ifu_deq_pc),
+      .deq_pred_slot_valid_o(ftq_ifu_deq_pred_slot_valid),
+      .deq_pred_slot_idx_o(ftq_ifu_deq_pred_slot_idx),
+      .deq_pred_target_o (ftq_ifu_deq_pred_target),
+      .deq_pred_npc_o    (ftq_ifu_deq_pred_npc),
+      .deq_epoch_o       (ftq_ifu_deq_epoch),
+      .deq_ftq_id_o      (ftq_ifu_deq_ftq_id),
+
+      // 状态
+      .count_o           (ftq_count)
+  );
+
+  // === IFU 实例 (从 FTQ deq 读取) ===
   ifu #(
       .Cfg(Cfg)
   ) i_ifu (
       .clk(clk_i),
       .rst(~rst_ni),
 
-      .ifu2bpu_handshake_o   (ifu2bpu_handshake),
-      .bpu2ifu_handshake_i   (bpu2ifu_handshake),
-      .ifu2bpu_pc_o          (ifu2bpu_pc),
-      .bpu2ifu_predicted_pc_i(bpu2ifu_predicted_pc),
-      .bpu2ifu_pred_slot_valid_i(bpu2ifu_pred_slot_valid),
-      .bpu2ifu_pred_slot_idx_i(bpu2ifu_pred_slot_idx),
-      .bpu2ifu_pred_target_i(bpu2ifu_pred_target),
+      // FTQ 读取接口
+      .ftq_deq_valid_i      (ftq_ifu_deq_valid),
+      .ftq_deq_ready_o      (ftq_ifu_deq_ready),
+      .ftq_deq_pc_i         (ftq_ifu_deq_pc),
+      .ftq_deq_pred_slot_valid_i(ftq_ifu_deq_pred_slot_valid),
+      .ftq_deq_pred_slot_idx_i(ftq_ifu_deq_pred_slot_idx),
+      .ftq_deq_pred_target_i(ftq_ifu_deq_pred_target),
+      .ftq_deq_pred_npc_i   (ftq_ifu_deq_pred_npc),
+      .ftq_deq_epoch_i      (ftq_ifu_deq_epoch),
+      .ftq_deq_ftq_id_i     (ftq_ifu_deq_ftq_id),
 
       .ifu2icache_req_handshake_o(ifu2icache_req_handshake),
       .icache2ifu_rsp_handshake_i(icache2ifu_rsp_handshake),
@@ -236,6 +300,7 @@ module frontend #(
       .flush_i(flush_i)
   );
 
+  // === BPU 实例 (FTQ enq + redirect 接口) ===
   bpu #(
       .Cfg(Cfg),
       .BTB_ENTRIES(Cfg.BPU_BTB_ENTRIES),
@@ -273,8 +338,20 @@ module frontend #(
       .clk_i(clk_i),
       .rst_i(~rst_ni),
 
-      .ifu_to_bpu_i          (ifu_to_bpu_struct),
-      .ifu_to_bpu_handshake_i(ifu2bpu_handshake),
+      // FTQ enqueue 接口
+      .ftq_enq_valid_o          (bpu_ftq_enq_valid),
+      .ftq_enq_ready_i          (bpu_ftq_enq_ready),
+      .ftq_enq_pc_o             (bpu_ftq_enq_pc),
+      .ftq_enq_pred_slot_valid_o(bpu_ftq_enq_pred_slot_valid),
+      .ftq_enq_pred_slot_idx_o  (bpu_ftq_enq_pred_slot_idx),
+      .ftq_enq_pred_target_o    (bpu_ftq_enq_pred_target),
+      .ftq_enq_pred_npc_o       (bpu_ftq_enq_pred_npc),
+
+      // 后端重定向
+      .redirect_valid_i (flush_i),
+      .redirect_pc_i    (redirect_pc_i),
+
+      // Predictor update
       .update_valid_i        (bpu_update_valid_i),
       .update_pc_i           (bpu_update_pc_i),
       .update_is_cond_i      (bpu_update_is_cond_i),
@@ -288,9 +365,7 @@ module frontend #(
       .ras_update_is_ret_i   (bpu_ras_update_is_ret_i),
       .ras_update_is_rvc_i   (bpu_ras_update_is_rvc_i),
       .ras_update_pc_i       (bpu_ras_update_pc_i),
-      .flush_i               (flush_i),
-      .bpu_to_ifu_handshake_o(bpu2ifu_handshake),
-      .bpu_to_ifu_o          (bpu_to_ifu_struct)
+      .flush_i               (flush_i)
   );
 
   icache #(
