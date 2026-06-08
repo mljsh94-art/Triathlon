@@ -111,7 +111,7 @@ def main() -> int:
     ap.add_argument(
         "--profile-root",
         default=None,
-        help="Profile root directory (default: npc/build/profile)",
+        help="Profile root directory (default: npc/profile)",
     )
     ap.add_argument("--out", default=None, help="Output index.json path")
     ap.add_argument("--baseline-run-id", default="baseline")
@@ -119,7 +119,7 @@ def main() -> int:
 
     script_dir = Path(__file__).resolve().parent
     npc_home = script_dir.parent.parent
-    profile_root = Path(args.profile_root) if args.profile_root else npc_home / "build" / "profile"
+    profile_root = Path(args.profile_root) if args.profile_root else npc_home / "profile"
     out_path = Path(args.out) if args.out else profile_root / "index.json"
 
     index = build_index(profile_root, baseline_run_id=args.baseline_run_id)

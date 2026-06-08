@@ -9,16 +9,16 @@ make -C npc profile-report
 
 Default output directory:
 
-- `npc/build/profile/<timestamp>/dhrystone.json`
-- `npc/build/profile/<timestamp>/coremark.json`
-- `npc/build/profile/<timestamp>/summary.json`
-- `npc/build/profile/<timestamp>/metadata.json`
+- `npc/profile/<timestamp>/dhrystone.json`
+- `npc/profile/<timestamp>/coremark.json`
+- `npc/profile/<timestamp>/summary.json`
+- `npc/profile/<timestamp>/metadata.json`
 
 Fixed output directory example:
 
 ```bash
 # 从仓库根目录：可省略 PROFILE_OUT_DIR（自动时间戳目录）
-make -C npc profile-report PROFILE_OUT_DIR=npc/build/profile/$(date +%Y%m%d-%H%M%S)
+make -C npc profile-report PROFILE_OUT_DIR=npc/profile/$(date +%Y%m%d-%H%M%S)
 
 # 或固定 tag 目录（profile-baseline 等价于 PROFILE_TAG=baseline）
 make -C npc profile-baseline
@@ -28,19 +28,19 @@ make -C npc profile-baseline
 
 ```bash
 make -C npc profile-dashboard
-# open npc/build/profile/dashboard/index.html
+# open npc/profile/dashboard/index.html
 ```
 
 ## Clean and re-run
 
 ```bash
-make -C npc profile-clean   # removes npc/build/profile/ entirely
+make -C npc profile-clean   # removes npc/profile/ entirely
 make -C npc profile-baseline
-make -C npc profile-report PROFILE_OUT_DIR=npc/build/profile/$(date +%Y%m%d-%H%M%S)
+make -C npc profile-report PROFILE_OUT_DIR=npc/profile/$(date +%Y%m%d-%H%M%S)
 make -C npc profile-dashboard
 ```
 
-`profile-dashboard` runs `build_index.py` then `build_dashboard.py` under `npc/build/profile/`.
+`profile-dashboard` runs `build_index.py` then `build_dashboard.py` under `npc/profile/`.
 Each run also gets a rendered `summary.html` (click **查看完整报告** on the dashboard).
 
 ## Rename dashboard labels
@@ -49,12 +49,12 @@ Chart/table labels use `display_name` from `metadata.json` (falls back to direct
 
 ```bash
 # At collection time
-make -C npc profile-report PROFILE_OUT_DIR=npc/build/profile/my-run \
+make -C npc profile-report PROFILE_OUT_DIR=npc/profile/my-run \
   PROFILE_DISPLAY_NAME='BPU修复v1'
 
 # Rename an existing run, then refresh dashboard
 python3 npc/tools/profiler/set_display_name.py \
-  --run-dir npc/build/profile/20260605-164936 \
+  --run-dir npc/profile/20260605-164936 \
   --display-name 'BPU修复v1'
 make -C npc profile-dashboard
 ```
@@ -65,8 +65,8 @@ Or edit `metadata.json` manually: add `"display_name": "你的名称"` (keep `ru
 
 ```bash
 python3 npc/tools/profiler/compare_summary.py \
-  --base npc/build/profile/baseline/summary.json \
-  --current npc/build/profile/latest/summary.json
+  --base npc/profile/baseline/summary.json \
+  --current npc/profile/latest/summary.json
 ```
 
 Thresholds:
@@ -81,8 +81,8 @@ Convenience gate script:
 
 ```bash
 npc/scripts/check_perf_regression.sh \
-  npc/build/profile/baseline \
-  npc/build/profile/latest
+  npc/profile/baseline \
+  npc/profile/latest
 ```
 
 ## Single benchmark JSON (manual)

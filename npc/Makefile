@@ -128,10 +128,10 @@ PROFILE_TOOL_DIR := $(abspath ./tools/profiler)
 ARCH ?= riscv32im-npc
 CROSS_COMPILE ?= riscv64-unknown-elf-
 PROFILE_OUT_DIR ?=
-PROFILE_ROOT ?= $(abspath ./build/profile)
+PROFILE_ROOT ?= $(abspath ./profile)
 PROFILE_TAG ?= latest
 PROFILE_DISPLAY_NAME ?=
-PROFILE_TAG_DIR ?= $(abspath ./build/profile/$(PROFILE_TAG))
+PROFILE_TAG_DIR ?= $(abspath ./profile/$(PROFILE_TAG))
 
 profile-report:
 	@if [ -n "$(PROFILE_OUT_DIR)" ]; then \

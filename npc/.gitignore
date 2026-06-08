@@ -25,4 +25,5 @@
 !scripts/*.sh
 build/
 build-cmake/
+profile/
 .history/

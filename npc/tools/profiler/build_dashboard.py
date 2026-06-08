@@ -183,7 +183,7 @@ def main() -> int:
 
     script_dir = Path(__file__).resolve().parent
     npc_home = script_dir.parent.parent
-    profile_root = Path(args.profile_root) if args.profile_root else npc_home / "build" / "profile"
+    profile_root = Path(args.profile_root) if args.profile_root else npc_home / "profile"
     out_dir = profile_root / "dashboard"
     out_path = Path(args.out) if args.out else out_dir / "index.html"
 

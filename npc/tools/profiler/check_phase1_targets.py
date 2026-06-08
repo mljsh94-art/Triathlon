@@ -19,7 +19,7 @@ class Baseline:
 
 
 PHASE1_BASELINE = Baseline(
-    # Frozen from npc/build/profile/latest/summary.json on 2026-02-21.
+    # Frozen from npc/profile/latest/summary.json on 2026-02-21.
     coremark_hol_incomplete_sum=560_529.0,
     coremark_decode_blocked_lsu_sum=132_936.0,
 )

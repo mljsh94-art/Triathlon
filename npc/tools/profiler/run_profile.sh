@@ -9,15 +9,17 @@ TRIATHLON_HOME=$(cd "${NPC_HOME}/.." && pwd)
 : "${CROSS_COMPILE:=riscv64-unknown-elf-}"
 
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-OUT_DIR=${OUT_DIR:-"${NPC_HOME}/build/profile/${TIMESTAMP}"}
+OUT_DIR=${OUT_DIR:-"${NPC_HOME}/profile/${TIMESTAMP}"}
 case "${OUT_DIR}" in
   /*) ;;
+  npc/profile|npc/profile/*) OUT_DIR="${TRIATHLON_HOME}/${OUT_DIR}" ;;
+  profile|profile/*) OUT_DIR="${NPC_HOME}/${OUT_DIR}" ;;
   npc/build/profile|npc/build/profile/*) OUT_DIR="${TRIATHLON_HOME}/${OUT_DIR}" ;;
   build/profile|build/profile/*) OUT_DIR="${NPC_HOME}/${OUT_DIR}" ;;
   *) OUT_DIR="${NPC_HOME}/${OUT_DIR}" ;;
 esac
 OUT_DIR="${OUT_DIR%/}"
-PROFILE_COLLECTION="${NPC_HOME}/build/profile"
+PROFILE_COLLECTION="${NPC_HOME}/profile"
 if [[ "${OUT_DIR}" == "${PROFILE_COLLECTION}" ]]; then
   OUT_DIR="${PROFILE_COLLECTION}/${TIMESTAMP}"
 fi
