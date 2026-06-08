@@ -35,11 +35,12 @@ module bpu #(
 ) (
     input logic clk_i,
     input logic rst_i,
-
+    //IFU 负责告诉 BPU 当前正在取哪里的指令
     input  ifu_to_bpu_t ifu_to_bpu_i,
     input  handshake_t  ifu_to_bpu_handshake_i,
 
     // Commit-time predictor update
+  
     input logic                update_valid_i,
     input logic [Cfg.PLEN-1:0] update_pc_i,
     input logic                update_is_cond_i,
