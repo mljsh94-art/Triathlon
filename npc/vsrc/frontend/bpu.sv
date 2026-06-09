@@ -35,22 +35,12 @@ module bpu #(
 ) (
     input logic clk_i,
     input logic rst_i,
-
-    // === FTQ 写入接口 (Enqueue) ===
-    output logic                    ftq_enq_valid_o,
-    input  logic                    ftq_enq_ready_i,    // FTQ 背压
-    output logic [Cfg.PLEN-1:0]    ftq_enq_pc_o,
-    output logic                    ftq_enq_pred_slot_valid_o,
-    output logic [((Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1)-1:0]  ftq_enq_pred_slot_idx_o,
-    output logic [Cfg.PLEN-1:0]    ftq_enq_pred_target_o,
-    output logic [Cfg.PLEN-1:0]    ftq_enq_pred_npc_o,
-
-    // === 后端重定向 ===
-    input  logic                    redirect_valid_i,
-    input  logic [Cfg.PLEN-1:0]    redirect_pc_i,
+    //IFU 负责告诉 BPU 当前正在取哪里的指令
+    input  ifu_to_bpu_t ifu_to_bpu_i,
+    input  handshake_t  ifu_to_bpu_handshake_i,
 
     // Commit-time predictor update
-
+  
     input logic                update_valid_i,
     input logic [Cfg.PLEN-1:0] update_pc_i,
     input logic                update_is_cond_i,
@@ -64,7 +54,11 @@ module bpu #(
     input logic [Cfg.NRET-1:0] ras_update_is_ret_i,
     input logic [Cfg.NRET-1:0] ras_update_is_rvc_i,
     input logic [Cfg.NRET-1:0][Cfg.PLEN-1:0] ras_update_pc_i,
-    input logic                flush_i
+    input logic                flush_i,
+
+    // from IFU
+    output handshake_t  bpu_to_ifu_handshake_o,
+    output bpu_to_ifu_t bpu_to_ifu_o
 );
 
   localparam int unsigned SLOT_IDX_W = (Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1;
@@ -100,9 +94,6 @@ module bpu #(
   logic [RAS_DEPTH-1:0][Cfg.PLEN-1:0] spec_ras_stack_q;
   logic [RAS_CNT_W-1:0] arch_ras_count_q;
   logic [RAS_CNT_W-1:0] spec_ras_count_q;
-  // === BPU 自主 PC 寄存器 ===
-  logic [Cfg.PLEN-1:0] pc_reg_q;
-
   logic pred_event_valid_q;
   logic pred_event_is_call_q;
   logic pred_event_is_ret_q;
@@ -319,7 +310,7 @@ module bpu #(
   ) u_tage (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .predict_base_pc_i(pc_reg_q),
+      .predict_base_pc_i(ifu_to_bpu_i.pc),
       .predict_ghr_i(spec_ghr_q),
       .predict_hit_o(tage_hit_w),
       .predict_taken_o(tage_taken_w),
@@ -341,7 +332,7 @@ module bpu #(
   ) u_sc_l (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .predict_base_pc_i(pc_reg_q),
+      .predict_base_pc_i(ifu_to_bpu_i.pc),
       .predict_ghr_i(spec_ghr_q),
       .predict_taken_o(sc_taken_w),
       .predict_confident_o(sc_confident_w),
@@ -360,7 +351,7 @@ module bpu #(
   ) u_loop_predictor (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .predict_base_pc_i(pc_reg_q),
+      .predict_base_pc_i(ifu_to_bpu_i.pc),
       .predict_taken_o(loop_taken_w),
       .predict_confident_o(loop_confident_w),
       .predict_hit_o(loop_hit_w),
@@ -379,7 +370,7 @@ module bpu #(
   ) u_ittage (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .predict_base_pc_i(pc_reg_q),
+      .predict_base_pc_i(ifu_to_bpu_i.pc),
       .predict_ctx_i(ittage_predict_ctx_w),
       .predict_hit_o(ittage_raw_hit_w),
       .predict_target_o(ittage_target_w),
@@ -427,7 +418,7 @@ module bpu #(
       logic tage_provider_ok;
       logic tage_allow_override;
       logic sc_allow_override;
-      slot_pc = pc_reg_q + Cfg.PLEN'(INSTR_BYTES * i);
+      slot_pc = ifu_to_bpu_i.pc + Cfg.PLEN'(INSTR_BYTES * i);
       idx = btb_index(slot_pc);
       local_idx = bht_pc_index(slot_pc);
       global_idx = bht_global_index(slot_pc, spec_ghr_q);
@@ -550,23 +541,17 @@ module bpu #(
     end
   end
 
-  assign pred_npc_w = pred_slot_valid_w ? pred_slot_target_w : (pc_reg_q + Cfg.FETCH_WIDTH);
+  assign pred_npc_w = pred_slot_valid_w ? pred_slot_target_w : (ifu_to_bpu_i.pc + Cfg.FETCH_WIDTH);
 
-  // === FTQ Enqueue 输出 ===
-  assign ftq_enq_valid_o = !flush_i && !redirect_valid_i;
-  assign ftq_enq_pc_o = pc_reg_q;
-  assign ftq_enq_pred_slot_valid_o = pred_slot_valid_w;
-  assign ftq_enq_pred_slot_idx_o = pred_slot_idx_w;
-  assign ftq_enq_pred_target_o = pred_slot_target_w;
-  assign ftq_enq_pred_npc_o = pred_npc_w;
-
-  // === FTQ enqueue fire 信号 ===
-  logic ftq_enq_fire_w;
-  assign ftq_enq_fire_w = ftq_enq_valid_o && ftq_enq_ready_i;
+  assign bpu_to_ifu_o.pred_slot_valid = pred_slot_valid_w;
+  assign bpu_to_ifu_o.pred_slot_idx = pred_slot_idx_w;
+  assign bpu_to_ifu_o.pred_slot_target = pred_slot_target_w;
+  assign bpu_to_ifu_o.npc = pred_npc_w;
+  assign bpu_to_ifu_handshake_o.ready = 1'b1;
+  assign bpu_to_ifu_handshake_o.valid = 1'b1;
 
   always_ff @(posedge clk_i or posedge rst_i) begin
     if (rst_i) begin
-      pc_reg_q <= Cfg.PLEN'(Cfg.RESET_VECTOR);
       btb_valid_q   <= '0;
       btb_is_cond_q <= '0;
       btb_is_backward_q <= '0;
@@ -984,10 +969,6 @@ module bpu #(
         end
       end
 
-      if (flush_i || redirect_valid_i) begin
-        // Redirect: 从后端重定向 PC 重新开始预测
-        pc_reg_q <= redirect_pc_i;
-      end
       if (flush_i) begin
         spec_stack_n = arch_stack_n;
         spec_count_n = arch_count_n;
@@ -1063,12 +1044,8 @@ module bpu #(
         pred_event_taken_q <= 1'b0;
         pred_event_pc_q <= '0;
       end else begin
-        // === PC 更新逻辑 ===
-        if (ftq_enq_fire_w) begin
-          pc_reg_q <= pred_npc_w;
-        end
-        // FTQ enqueue fire 驱动投机 RAS/GHR 更新
-        pred_fire_w = ftq_enq_fire_w && pred_slot_valid_w;
+        // IFU consumes prediction when ready pulses (valid may be low in WAIT states).
+        pred_fire_w = ifu_to_bpu_handshake_i.ready && pred_slot_valid_w;
         if (USE_TAGE && pred_fire_w && pred_slot_is_cond_w) begin
           dbg_tage_lookup_total_q <= dbg_tage_lookup_total_q + 64'd1;
           if (tage_hit_w[pred_slot_idx_w]) begin

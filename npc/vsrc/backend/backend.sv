@@ -18,7 +18,7 @@ module backend #(
     input logic [Cfg.INSTR_PER_FETCH-1:0] frontend_ibuf_slot_valid,
     input logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] frontend_ibuf_pred_npc,
     input logic [Cfg.INSTR_PER_FETCH-1:0] frontend_ibuf_is_rvc,
-    input logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] frontend_ibuf_ftq_id,
+    input logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] frontend_ibuf_ftq_id,
     input logic [Cfg.INSTR_PER_FETCH-1:0][2:0] frontend_ibuf_fetch_epoch,
     // Redirect/flush to frontend
     output logic backend_flush_o,

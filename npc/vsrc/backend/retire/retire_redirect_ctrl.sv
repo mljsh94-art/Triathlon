@@ -3,7 +3,7 @@ import config_pkg::*;
 module retire_redirect_ctrl #(
     parameter config_pkg::cfg_t Cfg = config_pkg::EmptyCfg,
     parameter int unsigned COMMIT_WIDTH = Cfg.NRET,
-    parameter int unsigned FTQ_ID_W = ((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1),
+    parameter int unsigned FTQ_ID_W = ((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1),
     parameter int unsigned FETCH_EPOCH_W = 3,
     parameter int unsigned COMMIT_SEL_W = (COMMIT_WIDTH > 1) ? $clog2(COMMIT_WIDTH) : 1,
     parameter bit ENABLE_COMMIT_RAS_UPDATE = 1'b1
