@@ -61,40 +61,11 @@ module triathlon #(
 );
 
   // --------------
-  // Frontend
+  // Frontend <-> Backend
   // --------------
-  logic fe_ibuf_valid;
-  logic fe_ibuf_ready;
-  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] fe_ibuf_instrs;
-  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] fe_ibuf_raw_instrs;
-  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] fe_ibuf_pcs;
-  logic [Cfg.INSTR_PER_FETCH-1:0] fe_ibuf_slot_valid;
-  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] fe_ibuf_pred_npc;
-  logic [Cfg.INSTR_PER_FETCH-1:0] fe_ibuf_is_rvc;
-  logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] fe_ibuf_ftq_id;
-  logic [Cfg.INSTR_PER_FETCH-1:0][2:0] fe_ibuf_fetch_epoch;
-  fe_be_bundle_t fe_be_bus;
+  fe_be_bundle_t fe2be;
+  be2fe_ctrl_if_t be2fe;
 
-  logic backend_flush;
-  logic [Cfg.PLEN-1:0] backend_redirect_pc;
-  logic bpu_update_valid;
-  logic [Cfg.PLEN-1:0] bpu_update_pc;
-  logic bpu_update_is_cond;
-  logic bpu_update_taken;
-  logic [Cfg.PLEN-1:0] bpu_update_target;
-  logic bpu_update_is_call;
-  logic bpu_update_is_ret;
-  logic bpu_update_is_rvc;
-  logic [Cfg.NRET-1:0] bpu_ras_update_valid;
-  logic [Cfg.NRET-1:0] bpu_ras_update_is_call;
-  logic [Cfg.NRET-1:0] bpu_ras_update_is_ret;
-  logic [Cfg.NRET-1:0] bpu_ras_update_is_rvc;
-  logic [Cfg.NRET-1:0][Cfg.PLEN-1:0] bpu_ras_update_pc;
-  logic [31:0] mmu_satp_state;
-  logic [1:0] mmu_priv_mode;
-  logic mmu_mstatus_sum;
-  logic mmu_mstatus_mxr;
-  logic mmu_sfence_vma_flush;
   logic ifetch_fault_valid;
   logic ifetch_fault_ready;
   logic [Cfg.PLEN-1:0] ifetch_fault_pc;
@@ -110,54 +81,15 @@ module triathlon #(
   logic [31:0] ifu_pte_upd_paddr;
   logic [31:0] ifu_pte_upd_data;
 
-  assign fe_ibuf_ready = fe_be_bus.ready;
-  assign fe_be_bus.valid = fe_ibuf_valid;
-  assign fe_be_bus.instrs = fe_ibuf_instrs;
-  assign fe_be_bus.raw_instrs = fe_ibuf_raw_instrs;
-  assign fe_be_bus.pcs = fe_ibuf_pcs;
-  assign fe_be_bus.slot_valid = fe_ibuf_slot_valid;
-  assign fe_be_bus.pred_npc = fe_ibuf_pred_npc;
-  assign fe_be_bus.is_rvc = fe_ibuf_is_rvc;
-  assign fe_be_bus.ftq_id = fe_ibuf_ftq_id;
-  assign fe_be_bus.fetch_epoch = fe_ibuf_fetch_epoch;
-
   frontend #(
       .Cfg(Cfg)
   ) u_frontend (
       .clk_i,
       .rst_ni,
 
-      .ibuffer_valid_o(fe_ibuf_valid),
-      .ibuffer_ready_i(fe_be_bus.ready),
-      .ibuffer_instrs_o(fe_ibuf_instrs),
-      .ibuffer_raw_instrs_o(fe_ibuf_raw_instrs),
-      .ibuffer_pcs_o(fe_ibuf_pcs),
-      .ibuffer_slot_valid_o(fe_ibuf_slot_valid),
-      .ibuffer_pred_npc_o(fe_ibuf_pred_npc),
-      .ibuffer_is_rvc_o(fe_ibuf_is_rvc),
-      .ibuffer_ftq_id_o(fe_ibuf_ftq_id),
-      .ibuffer_fetch_epoch_o(fe_ibuf_fetch_epoch),
+      .fe2be_o(fe2be),
+      .be2fe_i(be2fe),
 
-      .flush_i      (backend_flush),
-      .redirect_pc_i(backend_redirect_pc),
-      .bpu_update_valid_i(bpu_update_valid),
-      .bpu_update_pc_i(bpu_update_pc),
-      .bpu_update_is_cond_i(bpu_update_is_cond),
-      .bpu_update_taken_i(bpu_update_taken),
-      .bpu_update_target_i(bpu_update_target),
-      .bpu_update_is_call_i(bpu_update_is_call),
-      .bpu_update_is_ret_i(bpu_update_is_ret),
-      .bpu_update_is_rvc_i(bpu_update_is_rvc),
-      .bpu_ras_update_valid_i(bpu_ras_update_valid),
-      .bpu_ras_update_is_call_i(bpu_ras_update_is_call),
-      .bpu_ras_update_is_ret_i(bpu_ras_update_is_ret),
-      .bpu_ras_update_is_rvc_i(bpu_ras_update_is_rvc),
-      .bpu_ras_update_pc_i(bpu_ras_update_pc),
-      .mmu_satp_i(mmu_satp_state),
-      .mmu_priv_i(mmu_priv_mode),
-      .mmu_sum_i(mmu_mstatus_sum),
-      .mmu_mxr_i(mmu_mstatus_mxr),
-      .mmu_sfence_vma_i(mmu_sfence_vma_flush),
       .ifetch_fault_valid_o(ifetch_fault_valid),
       .ifetch_fault_ready_i(ifetch_fault_ready),
       .ifetch_fault_pc_o(ifetch_fault_pc),
@@ -198,37 +130,9 @@ module triathlon #(
       .ext_irq_i(ext_irq_i),
       .flush_from_backend(1'b0),
 
-      .frontend_ibuf_valid (fe_be_bus.valid),
-      .frontend_ibuf_ready (fe_be_bus.ready),
-      .frontend_ibuf_instrs(fe_be_bus.instrs),
-      .frontend_ibuf_raw_instrs(fe_be_bus.raw_instrs),
-      .frontend_ibuf_pcs(fe_be_bus.pcs),
-      .frontend_ibuf_slot_valid(fe_be_bus.slot_valid),
-      .frontend_ibuf_pred_npc(fe_be_bus.pred_npc),
-      .frontend_ibuf_is_rvc(fe_be_bus.is_rvc),
-      .frontend_ibuf_ftq_id(fe_be_bus.ftq_id),
-      .frontend_ibuf_fetch_epoch(fe_be_bus.fetch_epoch),
-
-      .backend_flush_o      (backend_flush),
-      .backend_redirect_pc_o(backend_redirect_pc),
-      .bpu_update_valid_o(bpu_update_valid),
-      .bpu_update_pc_o(bpu_update_pc),
-      .bpu_update_is_cond_o(bpu_update_is_cond),
-      .bpu_update_taken_o(bpu_update_taken),
-      .bpu_update_target_o(bpu_update_target),
-      .bpu_update_is_call_o(bpu_update_is_call),
-      .bpu_update_is_ret_o(bpu_update_is_ret),
-      .bpu_update_is_rvc_o(bpu_update_is_rvc),
-      .bpu_ras_update_valid_o(bpu_ras_update_valid),
-      .bpu_ras_update_is_call_o(bpu_ras_update_is_call),
-      .bpu_ras_update_is_ret_o(bpu_ras_update_is_ret),
-      .bpu_ras_update_is_rvc_o(bpu_ras_update_is_rvc),
-      .bpu_ras_update_pc_o(bpu_ras_update_pc),
-      .mmu_satp_o(mmu_satp_state),
-      .mmu_priv_o(mmu_priv_mode),
-      .mmu_sum_o(mmu_mstatus_sum),
-      .mmu_mxr_o(mmu_mstatus_mxr),
-      .mmu_sfence_vma_o(mmu_sfence_vma_flush),
+      .fe2be_i(fe2be),
+      .fe2be_ready_o(fe2be.ready),
+      .be2fe_o(be2fe),
       .ifu_pte_ld_req_valid_i(ifu_pte_req_valid),
       .ifu_pte_ld_req_ready_o(ifu_pte_req_ready),
       .ifu_pte_ld_req_paddr_i(ifu_pte_req_paddr),

@@ -120,8 +120,8 @@ module tb_plic #(
   assign dbg_rob_async_valid_o = dut.u_backend.u_rob.async_exception_valid_i;
   assign dbg_rob_async_redirect_pc_o = dut.u_backend.u_rob.async_exception_redirect_pc_i;
 
-  assign backend_flush_o = dut.u_backend.backend_flush_o;
-  assign backend_redirect_pc_o = dut.u_backend.backend_redirect_pc_o;
+  assign backend_flush_o = dut.be2fe.flush;
+  assign backend_redirect_pc_o = dut.be2fe.redirect_pc;
   assign dbg_rob_flush_o = dut.u_backend.rob_flush;
   assign dbg_rob_flush_pc_o = dut.u_backend.rob_flush_pc;
   assign dbg_rob_flush_cause_o = dut.u_backend.rob_flush_cause;

@@ -10,37 +10,9 @@ module backend #(
     input logic timer_irq_i,
     input logic ext_irq_i,
     input logic flush_from_backend,
-    input logic frontend_ibuf_valid,
-    output logic frontend_ibuf_ready,
-    input logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] frontend_ibuf_instrs,
-    input logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] frontend_ibuf_raw_instrs,
-    input logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] frontend_ibuf_pcs,
-    input logic [Cfg.INSTR_PER_FETCH-1:0] frontend_ibuf_slot_valid,
-    input logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] frontend_ibuf_pred_npc,
-    input logic [Cfg.INSTR_PER_FETCH-1:0] frontend_ibuf_is_rvc,
-    input logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] frontend_ibuf_ftq_id,
-    input logic [Cfg.INSTR_PER_FETCH-1:0][2:0] frontend_ibuf_fetch_epoch,
-    // Redirect/flush to frontend
-    output logic backend_flush_o,
-    output logic [Cfg.PLEN-1:0] backend_redirect_pc_o,
-    output logic bpu_update_valid_o,
-    output logic [Cfg.PLEN-1:0] bpu_update_pc_o,
-    output logic bpu_update_is_cond_o,
-    output logic bpu_update_taken_o,
-    output logic [Cfg.PLEN-1:0] bpu_update_target_o,
-    output logic bpu_update_is_call_o,
-    output logic bpu_update_is_ret_o,
-    output logic bpu_update_is_rvc_o,
-    output logic [Cfg.NRET-1:0] bpu_ras_update_valid_o,
-    output logic [Cfg.NRET-1:0] bpu_ras_update_is_call_o,
-    output logic [Cfg.NRET-1:0] bpu_ras_update_is_ret_o,
-    output logic [Cfg.NRET-1:0] bpu_ras_update_is_rvc_o,
-    output logic [Cfg.NRET-1:0][Cfg.PLEN-1:0] bpu_ras_update_pc_o,
-    output logic [31:0] mmu_satp_o,
-    output logic [1:0] mmu_priv_o,
-    output logic mmu_sum_o,
-    output logic mmu_mxr_o,
-    output logic mmu_sfence_vma_o,
+    input  fe_be_bundle_t fe2be_i,
+    output logic fe2be_ready_o,
+    output be2fe_ctrl_if_t be2fe_o,
     input logic ifu_pte_ld_req_valid_i,
     output logic ifu_pte_ld_req_ready_o,
     input logic [31:0] ifu_pte_ld_req_paddr_i,
@@ -114,19 +86,6 @@ module backend #(
   localparam int unsigned COMPLETION_Q_DEPTH = 32;
   // A2.2: 开启 commit-time call/ret 更新，配合 BPU speculative RAS 降低 return miss。
   localparam bit ENABLE_COMMIT_RAS_UPDATE = (Cfg.ENABLE_COMMIT_RAS_UPDATE != 0);
-  fe_be_bundle_t frontend_ibuf_bus;
-
-  assign frontend_ibuf_bus.valid = frontend_ibuf_valid;
-  assign frontend_ibuf_bus.ready = frontend_ibuf_ready;
-  assign frontend_ibuf_bus.instrs = frontend_ibuf_instrs;
-  assign frontend_ibuf_bus.raw_instrs = frontend_ibuf_raw_instrs;
-  assign frontend_ibuf_bus.pcs = frontend_ibuf_pcs;
-  assign frontend_ibuf_bus.slot_valid = frontend_ibuf_slot_valid;
-  assign frontend_ibuf_bus.pred_npc = frontend_ibuf_pred_npc;
-  assign frontend_ibuf_bus.is_rvc = frontend_ibuf_is_rvc;
-  assign frontend_ibuf_bus.ftq_id = frontend_ibuf_ftq_id;
-  assign frontend_ibuf_bus.fetch_epoch = frontend_ibuf_fetch_epoch;
-
   generate
     if (Cfg.ROB_DEPTH < DISPATCH_WIDTH) begin : g_cfg_invalid_rob_depth
       initial begin
@@ -169,16 +128,16 @@ module backend #(
       .clk_i (clk_i),
       .rst_ni(rst_ni),
 
-      .ibuf2dec_valid_i (frontend_ibuf_valid),
-      .dec2ibuf_ready_o (frontend_ibuf_ready),
-      .ibuf_instrs_i    (frontend_ibuf_instrs),
-      .ibuf_raw_instrs_i(frontend_ibuf_raw_instrs),
-      .ibuf_pcs_i       (frontend_ibuf_pcs),
-      .ibuf_slot_valid_i(frontend_ibuf_slot_valid),
-      .ibuf_pred_npc_i  (frontend_ibuf_pred_npc),
-      .ibuf_is_rvc_i    (frontend_ibuf_is_rvc),
-      .ibuf_ftq_id_i    (frontend_ibuf_ftq_id),
-      .ibuf_fetch_epoch_i(frontend_ibuf_fetch_epoch),
+      .ibuf2dec_valid_i (fe2be_i.valid),
+      .dec2ibuf_ready_o (fe2be_ready_o),
+      .ibuf_instrs_i    (fe2be_i.instrs),
+      .ibuf_raw_instrs_i(fe2be_i.raw_instrs),
+      .ibuf_pcs_i       (fe2be_i.pcs),
+      .ibuf_slot_valid_i(fe2be_i.slot_valid),
+      .ibuf_pred_npc_i  (fe2be_i.pred_npc),
+      .ibuf_is_rvc_i    (fe2be_i.is_rvc),
+      .ibuf_ftq_id_i    (fe2be_i.ftq_id),
+      .ibuf_fetch_epoch_i(fe2be_i.fetch_epoch),
 
       .dec2backend_valid_o(dec_valid),
       .backend2dec_ready_i(decode_backend_ready),
@@ -371,28 +330,66 @@ module backend #(
       .commit_ftq_id_i(commit_ftq_id),
       .commit_fetch_epoch_i(commit_fetch_epoch),
 
-      .backend_flush_o(backend_flush),
-      .backend_redirect_pc_o(backend_redirect_pc_o),
+      .backend_flush_o(be2fe_flush_w),
+      .backend_redirect_pc_o(be2fe_redirect_pc_w),
       .retire_redirect_pc_dbg_o(retire_redirect_pc_dbg),
 
-      .bpu_update_valid_o(bpu_update_valid_o),
-      .bpu_update_pc_o(bpu_update_pc_o),
-      .bpu_update_is_cond_o(bpu_update_is_cond_o),
-      .bpu_update_taken_o(bpu_update_taken_o),
-      .bpu_update_target_o(bpu_update_target_o),
-      .bpu_update_is_call_o(bpu_update_is_call_o),
-      .bpu_update_is_ret_o(bpu_update_is_ret_o),
-      .bpu_update_is_rvc_o(bpu_update_is_rvc_o),
+      .bpu_update_valid_o(be2fe_bpu_update_valid_w),
+      .bpu_update_pc_o(be2fe_bpu_update_pc_w),
+      .bpu_update_is_cond_o(be2fe_bpu_update_is_cond_w),
+      .bpu_update_taken_o(be2fe_bpu_update_taken_w),
+      .bpu_update_target_o(be2fe_bpu_update_target_w),
+      .bpu_update_is_call_o(be2fe_bpu_update_is_call_w),
+      .bpu_update_is_ret_o(be2fe_bpu_update_is_ret_w),
+      .bpu_update_is_rvc_o(be2fe_bpu_update_is_rvc_w),
       .bpu_update_ftq_id_dbg_o(bpu_update_ftq_id_dbg),
       .bpu_update_fetch_epoch_dbg_o(bpu_update_fetch_epoch_dbg),
       .bpu_update_sel_idx_dbg_o(bpu_update_sel_idx_dbg),
 
-      .bpu_ras_update_valid_o(bpu_ras_update_valid_o),
-      .bpu_ras_update_is_call_o(bpu_ras_update_is_call_o),
-      .bpu_ras_update_is_ret_o(bpu_ras_update_is_ret_o),
-      .bpu_ras_update_is_rvc_o(bpu_ras_update_is_rvc_o),
-      .bpu_ras_update_pc_o(bpu_ras_update_pc_o)
+      .bpu_ras_update_valid_o(be2fe_bpu_ras_update_valid_w),
+      .bpu_ras_update_is_call_o(be2fe_bpu_ras_update_is_call_w),
+      .bpu_ras_update_is_ret_o(be2fe_bpu_ras_update_is_ret_w),
+      .bpu_ras_update_is_rvc_o(be2fe_bpu_ras_update_is_rvc_w),
+      .bpu_ras_update_pc_o(be2fe_bpu_ras_update_pc_w)
   );
+
+  logic be2fe_flush_w;
+  logic [Cfg.PLEN-1:0] be2fe_redirect_pc_w;
+  logic be2fe_bpu_update_valid_w;
+  logic [Cfg.PLEN-1:0] be2fe_bpu_update_pc_w;
+  logic be2fe_bpu_update_is_cond_w;
+  logic be2fe_bpu_update_taken_w;
+  logic [Cfg.PLEN-1:0] be2fe_bpu_update_target_w;
+  logic be2fe_bpu_update_is_call_w;
+  logic be2fe_bpu_update_is_ret_w;
+  logic be2fe_bpu_update_is_rvc_w;
+  logic [Cfg.NRET-1:0] be2fe_bpu_ras_update_valid_w;
+  logic [Cfg.NRET-1:0] be2fe_bpu_ras_update_is_call_w;
+  logic [Cfg.NRET-1:0] be2fe_bpu_ras_update_is_ret_w;
+  logic [Cfg.NRET-1:0] be2fe_bpu_ras_update_is_rvc_w;
+  logic [Cfg.NRET-1:0][Cfg.PLEN-1:0] be2fe_bpu_ras_update_pc_w;
+
+  assign be2fe_o.flush = be2fe_flush_w;
+  assign be2fe_o.redirect_pc = be2fe_redirect_pc_w;
+  assign be2fe_o.bpu_update_valid = be2fe_bpu_update_valid_w;
+  assign be2fe_o.bpu_update_pc = be2fe_bpu_update_pc_w;
+  assign be2fe_o.bpu_update_is_cond = be2fe_bpu_update_is_cond_w;
+  assign be2fe_o.bpu_update_taken = be2fe_bpu_update_taken_w;
+  assign be2fe_o.bpu_update_target = be2fe_bpu_update_target_w;
+  assign be2fe_o.bpu_update_is_call = be2fe_bpu_update_is_call_w;
+  assign be2fe_o.bpu_update_is_ret = be2fe_bpu_update_is_ret_w;
+  assign be2fe_o.bpu_update_is_rvc = be2fe_bpu_update_is_rvc_w;
+  assign be2fe_o.bpu_ras_update_valid = be2fe_bpu_ras_update_valid_w;
+  assign be2fe_o.bpu_ras_update_is_call = be2fe_bpu_ras_update_is_call_w;
+  assign be2fe_o.bpu_ras_update_is_ret = be2fe_bpu_ras_update_is_ret_w;
+  assign be2fe_o.bpu_ras_update_is_rvc = be2fe_bpu_ras_update_is_rvc_w;
+  assign be2fe_o.bpu_ras_update_pc = be2fe_bpu_ras_update_pc_w;
+  assign be2fe_o.mmu_satp = csr_satp_state;
+  assign be2fe_o.mmu_priv = csr_priv_mode;
+  assign be2fe_o.mmu_sum = csr_mstatus_sum;
+  assign be2fe_o.mmu_mxr = csr_mstatus_mxr;
+  assign be2fe_o.mmu_sfence_vma = csr_sfence_vma_flush;
+  assign backend_flush = be2fe_flush_w;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -417,8 +414,6 @@ module backend #(
       rob_sync_exception_tval_q <= '0;
     end
   end
-  assign backend_flush_o = backend_flush;
-
 `ifndef SYNTHESIS
   localparam logic [Cfg.PLEN-1:0] DBG_PC_RET = 32'hc0803d60;
   localparam logic [Cfg.PLEN-1:0] DBG_PC_FAULT0 = 32'hc0803dae;
@@ -1945,11 +1940,6 @@ module backend #(
       .sfence_vma_flush_o(csr_sfence_vma_flush)
   );
 
-  assign mmu_satp_o = csr_satp_state;
-  assign mmu_priv_o = csr_priv_mode;
-  assign mmu_sum_o = csr_mstatus_sum;
-  assign mmu_mxr_o = csr_mstatus_mxr;
-  assign mmu_sfence_vma_o = csr_sfence_vma_flush;
   // Only apply speculative low-address LSU guard when address translation is active.
   assign lsu_spec_low_addr_block_en = csr_satp_state[31] && (csr_priv_mode != 2'b11);
 

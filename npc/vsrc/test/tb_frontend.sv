@@ -1,6 +1,7 @@
 // vsrc/test/tb_frontend.sv
 import config_pkg::*;
 import global_config_pkg::*;
+import core_contract_pkg::*;
 
 module tb_frontend (
     input logic clk_i,
@@ -62,43 +63,49 @@ module tb_frontend (
     output logic dbg_ibuf_meta_uniform_o
 );
 
+  fe_be_bundle_t fe2be;
+  be2fe_ctrl_if_t be2fe;
+
+  assign fe2be.ready = ibuffer_ready_i;
+  assign ibuffer_valid_o = fe2be.valid;
+  assign ibuffer_instrs_o = fe2be.instrs;
+  assign ibuffer_raw_instrs_o = fe2be.raw_instrs;
+  assign ibuffer_pcs_o = fe2be.pcs;
+  assign ibuffer_slot_valid_o = fe2be.slot_valid;
+  assign ibuffer_pred_npc_o = fe2be.pred_npc;
+  assign ibuffer_is_rvc_o = fe2be.is_rvc;
+  assign ibuffer_ftq_id_o = fe2be.ftq_id;
+  assign ibuffer_fetch_epoch_o = fe2be.fetch_epoch;
+
+  assign be2fe.flush = flush_i;
+  assign be2fe.redirect_pc = redirect_pc_i;
+  assign be2fe.bpu_update_valid = bpu_update_valid_i;
+  assign be2fe.bpu_update_pc = bpu_update_pc_i;
+  assign be2fe.bpu_update_is_cond = bpu_update_is_cond_i;
+  assign be2fe.bpu_update_taken = bpu_update_taken_i;
+  assign be2fe.bpu_update_target = bpu_update_target_i;
+  assign be2fe.bpu_update_is_call = bpu_update_is_call_i;
+  assign be2fe.bpu_update_is_ret = bpu_update_is_ret_i;
+  assign be2fe.bpu_update_is_rvc = bpu_update_is_rvc_i;
+  assign be2fe.bpu_ras_update_valid = bpu_ras_update_valid_i;
+  assign be2fe.bpu_ras_update_is_call = bpu_ras_update_is_call_i;
+  assign be2fe.bpu_ras_update_is_ret = bpu_ras_update_is_ret_i;
+  assign be2fe.bpu_ras_update_is_rvc = bpu_ras_update_is_rvc_i;
+  assign be2fe.bpu_ras_update_pc = bpu_ras_update_pc_i;
+  assign be2fe.mmu_satp = '0;
+  assign be2fe.mmu_priv = 2'b11;
+  assign be2fe.mmu_sum = 1'b0;
+  assign be2fe.mmu_mxr = 1'b0;
+  assign be2fe.mmu_sfence_vma = 1'b0;
+
   frontend #(
       .Cfg(Cfg)
   ) DUT (
       .clk_i (clk_i),
       .rst_ni(rst_ni),
 
-      .ibuffer_valid_o(ibuffer_valid_o),
-      .ibuffer_ready_i(ibuffer_ready_i),
-      .ibuffer_instrs_o(ibuffer_instrs_o),
-      .ibuffer_raw_instrs_o(ibuffer_raw_instrs_o),
-      .ibuffer_pcs_o(ibuffer_pcs_o),
-      .ibuffer_slot_valid_o(ibuffer_slot_valid_o),
-      .ibuffer_pred_npc_o(ibuffer_pred_npc_o),
-      .ibuffer_is_rvc_o(ibuffer_is_rvc_o),
-      .ibuffer_ftq_id_o(ibuffer_ftq_id_o),
-      .ibuffer_fetch_epoch_o(ibuffer_fetch_epoch_o),
-
-      .flush_i      (flush_i),
-      .redirect_pc_i(redirect_pc_i),
-      .bpu_update_valid_i(bpu_update_valid_i),
-      .bpu_update_pc_i(bpu_update_pc_i),
-      .bpu_update_is_cond_i(bpu_update_is_cond_i),
-      .bpu_update_taken_i(bpu_update_taken_i),
-      .bpu_update_target_i(bpu_update_target_i),
-      .bpu_update_is_call_i(bpu_update_is_call_i),
-      .bpu_update_is_ret_i(bpu_update_is_ret_i),
-      .bpu_update_is_rvc_i(bpu_update_is_rvc_i),
-      .bpu_ras_update_valid_i(bpu_ras_update_valid_i),
-      .bpu_ras_update_is_call_i(bpu_ras_update_is_call_i),
-      .bpu_ras_update_is_ret_i(bpu_ras_update_is_ret_i),
-      .bpu_ras_update_is_rvc_i(bpu_ras_update_is_rvc_i),
-      .bpu_ras_update_pc_i(bpu_ras_update_pc_i),
-      .mmu_satp_i('0),
-      .mmu_priv_i(2'b11),
-      .mmu_sum_i(1'b0),
-      .mmu_mxr_i(1'b0),
-      .mmu_sfence_vma_i(1'b0),
+      .fe2be_o(fe2be),
+      .be2fe_i(be2fe),
       .ifetch_fault_valid_o(),
       .ifetch_fault_ready_i(1'b1),
       .ifetch_fault_pc_o(),
@@ -133,19 +140,19 @@ module tb_frontend (
   assign dbg_ifu_req_addr_o = DUT.ifu2icache_req_addr;
   assign dbg_ifu_rsp_valid_o = DUT.icache2ifu_rsp_handshake.valid;
   assign dbg_ifu_rsp_capture_o = DUT.i_ifu.rsp_capture_w;
-  assign dbg_ifu_ibuf_valid_o = DUT.ibuffer_valid_o;
+  assign dbg_ifu_ibuf_valid_o = DUT.fe2be_o.valid;
   assign dbg_ifu_outstanding_o = 4'(DUT.i_ifu.req_outstanding_w);
   assign dbg_ifu_pending_o = 4'(DUT.i_ifu.req_count_q);
   assign dbg_ifu_inflight_o = 4'(DUT.i_ifu.inf_count_q);
   assign dbg_ifu_drop_stale_rsp_o = DUT.i_ifu.drop_stale_rsp_w;
-  assign dbg_ibuf_ftq_id_slot0_o = DUT.ibuffer_ftq_id_o[0];
-  assign dbg_ibuf_fetch_epoch_slot0_o = DUT.ibuffer_fetch_epoch_o[0];
+  assign dbg_ibuf_ftq_id_slot0_o = DUT.fe2be_o.ftq_id[0];
+  assign dbg_ibuf_fetch_epoch_slot0_o = DUT.fe2be_o.fetch_epoch[0];
   always_comb begin
     dbg_ibuf_meta_uniform_o = 1'b1;
     for (int i = 1; i < Cfg.INSTR_PER_FETCH; i++) begin
-      if (DUT.ibuffer_slot_valid_o[i]) begin
-        if ((DUT.ibuffer_ftq_id_o[i] != DUT.ibuffer_ftq_id_o[0]) ||
-            (DUT.ibuffer_fetch_epoch_o[i] != DUT.ibuffer_fetch_epoch_o[0])) begin
+      if (DUT.fe2be_o.slot_valid[i]) begin
+        if ((DUT.fe2be_o.ftq_id[i] != DUT.fe2be_o.ftq_id[0]) ||
+            (DUT.fe2be_o.fetch_epoch[i] != DUT.fe2be_o.fetch_epoch[0])) begin
           dbg_ibuf_meta_uniform_o = 1'b0;
         end
       end

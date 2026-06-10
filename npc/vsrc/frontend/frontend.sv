@@ -11,40 +11,8 @@ module frontend #(
     // ============================================
     // 1. 后端接口 (ibuffer 出队口 = decode-ready 束)
     // ============================================
-    output logic                                         ibuffer_valid_o,
-    input  logic                                         ibuffer_ready_i,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ibuffer_instrs_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ibuffer_raw_instrs_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ibuffer_pcs_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0]               ibuffer_slot_valid_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ibuffer_pred_npc_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0]               ibuffer_is_rvc_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] ibuffer_ftq_id_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ibuffer_fetch_epoch_o,
-
-    // 冲刷与重定向 (Input from Backend)
-    input logic                flush_i,
-    input logic [Cfg.PLEN-1:0] redirect_pc_i,
-    input logic                bpu_update_valid_i,
-    input logic [Cfg.PLEN-1:0] bpu_update_pc_i,
-    input logic                bpu_update_is_cond_i,
-    input logic                bpu_update_taken_i,
-    input logic [Cfg.PLEN-1:0] bpu_update_target_i,
-    input logic                bpu_update_is_call_i,
-    input logic                bpu_update_is_ret_i,
-    input logic                bpu_update_is_rvc_i,
-    input logic [Cfg.NRET-1:0] bpu_ras_update_valid_i,
-    input logic [Cfg.NRET-1:0] bpu_ras_update_is_call_i,
-    input logic [Cfg.NRET-1:0] bpu_ras_update_is_ret_i,
-    input logic [Cfg.NRET-1:0] bpu_ras_update_is_rvc_i,
-    input logic [Cfg.NRET-1:0][Cfg.PLEN-1:0] bpu_ras_update_pc_i,
-
-    // MMU control from backend CSR
-    input logic [31:0] mmu_satp_i,
-    input logic [1:0]  mmu_priv_i,
-    input logic        mmu_sum_i,
-    input logic        mmu_mxr_i,
-    input logic        mmu_sfence_vma_i,
+    output fe_be_bundle_t fe2be_o,
+    input  be2fe_ctrl_if_t be2fe_i,
 
     // IFetch fault sideband to backend
     output logic       ifetch_fault_valid_o,
@@ -102,7 +70,7 @@ module frontend #(
   logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] icache2ifu_rsp_data;
   logic flush_icache;
 
-  // --- IFU -> aligner -> ibuffer 内部链路 ---
+  // --- IFU -> aligner -> ibuffer 内部链路（扁平）---
   logic ifu_ibuf_valid;
   logic ifu_ibuf_ready;
   logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ifu_ibuf_data;
@@ -116,24 +84,34 @@ module frontend #(
   ibuf_entry_t [FE_EXPAND_MAX-1:0] aln_entries;
   logic ibuf_aln_ready;
 
-  fe_be_bundle_t fe_be_view;
-
   assign ifu_to_bpu_struct.pc = ifu2bpu_pc;
   assign bpu2ifu_predicted_pc = bpu_to_ifu_struct.npc;
   assign bpu2ifu_pred_slot_valid = bpu_to_ifu_struct.pred_slot_valid;
   assign bpu2ifu_pred_slot_idx = bpu_to_ifu_struct.pred_slot_idx;
   assign bpu2ifu_pred_target = bpu_to_ifu_struct.pred_slot_target;
 
-  assign fe_be_view.valid = ibuffer_valid_o;
-  assign fe_be_view.ready = ibuffer_ready_i;
-  assign fe_be_view.instrs = ibuffer_instrs_o;
-  assign fe_be_view.raw_instrs = ibuffer_raw_instrs_o;
-  assign fe_be_view.pcs = ibuffer_pcs_o;
-  assign fe_be_view.slot_valid = ibuffer_slot_valid_o;
-  assign fe_be_view.pred_npc = ibuffer_pred_npc_o;
-  assign fe_be_view.is_rvc = ibuffer_is_rvc_o;
-  assign fe_be_view.ftq_id = ibuffer_ftq_id_o;
-  assign fe_be_view.fetch_epoch = ibuffer_fetch_epoch_o;
+  assign fe2be_o.valid = ibuffer_valid_w;
+  assign fe2be_o.instrs = ibuffer_instrs_w;
+  assign fe2be_o.raw_instrs = ibuffer_raw_instrs_w;
+  assign fe2be_o.pcs = ibuffer_pcs_w;
+  assign fe2be_o.slot_valid = ibuffer_slot_valid_w;
+  assign fe2be_o.pred_npc = ibuffer_pred_npc_w;
+  assign fe2be_o.is_rvc = ibuffer_is_rvc_w;
+  assign fe2be_o.ftq_id = ibuffer_ftq_id_w;
+  assign fe2be_o.fetch_epoch = ibuffer_fetch_epoch_w;
+
+  logic ibuffer_valid_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ibuffer_instrs_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ibuffer_raw_instrs_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ibuffer_pcs_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0] ibuffer_slot_valid_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ibuffer_pred_npc_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0] ibuffer_is_rvc_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] ibuffer_ftq_id_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ibuffer_fetch_epoch_w;
+  logic ibuffer_ready_w;
+
+  assign ibuffer_ready_w = fe2be_o.ready;
 
   ifu #(
       .Cfg(Cfg)
@@ -164,14 +142,14 @@ module frontend #(
       .ifu_ibuffer_rsp_ftq_id_o(ifu_ibuf_ftq_id),
       .ifu_ibuffer_rsp_fetch_epoch_o(ifu_ibuf_fetch_epoch),
 
-      .flush_i      (flush_i),
-      .redirect_pc_i(redirect_pc_i),
+      .flush_i      (be2fe_i.flush),
+      .redirect_pc_i(be2fe_i.redirect_pc),
 
-      .mmu_satp_i(mmu_satp_i),
-      .mmu_priv_i(mmu_priv_i),
-      .mmu_sum_i(mmu_sum_i),
-      .mmu_mxr_i(mmu_mxr_i),
-      .mmu_sfence_vma_i(mmu_sfence_vma_i),
+      .mmu_satp_i(be2fe_i.mmu_satp),
+      .mmu_priv_i(be2fe_i.mmu_priv),
+      .mmu_sum_i(be2fe_i.mmu_sum),
+      .mmu_mxr_i(be2fe_i.mmu_mxr),
+      .mmu_sfence_vma_i(be2fe_i.mmu_sfence_vma),
       .pte_req_valid_o(pte_req_valid_o),
       .pte_req_ready_i(pte_req_ready_i),
       .pte_req_paddr_o(pte_req_paddr_o),
@@ -193,7 +171,7 @@ module frontend #(
   ) i_instr_aligner (
       .clk_i(clk_i),
       .rst_ni(rst_ni),
-      .flush_i(flush_i),
+      .flush_i(be2fe_i.flush),
 
       .fe_valid_i(ifu_ibuf_valid),
       .fe_ready_o(ifu_ibuf_ready),
@@ -222,18 +200,18 @@ module frontend #(
       .aln_entries_i(aln_entries),
       .aln_entry_count_i(aln_entry_count),
 
-      .ibuf_valid_o(ibuffer_valid_o),
-      .ibuf_ready_i(ibuffer_ready_i),
-      .ibuf_instrs_o(ibuffer_instrs_o),
-      .ibuf_raw_instrs_o(ibuffer_raw_instrs_o),
-      .ibuf_pcs_o(ibuffer_pcs_o),
-      .ibuf_slot_valid_o(ibuffer_slot_valid_o),
-      .ibuf_pred_npc_o(ibuffer_pred_npc_o),
-      .ibuf_is_rvc_o(ibuffer_is_rvc_o),
-      .ibuf_ftq_id_o(ibuffer_ftq_id_o),
-      .ibuf_fetch_epoch_o(ibuffer_fetch_epoch_o),
+      .ibuf_valid_o(ibuffer_valid_w),
+      .ibuf_ready_i(ibuffer_ready_w),
+      .ibuf_instrs_o(ibuffer_instrs_w),
+      .ibuf_raw_instrs_o(ibuffer_raw_instrs_w),
+      .ibuf_pcs_o(ibuffer_pcs_w),
+      .ibuf_slot_valid_o(ibuffer_slot_valid_w),
+      .ibuf_pred_npc_o(ibuffer_pred_npc_w),
+      .ibuf_is_rvc_o(ibuffer_is_rvc_w),
+      .ibuf_ftq_id_o(ibuffer_ftq_id_w),
+      .ibuf_fetch_epoch_o(ibuffer_fetch_epoch_w),
 
-      .flush_i(flush_i)
+      .flush_i(be2fe_i.flush)
   );
 
   bpu #(
@@ -275,20 +253,20 @@ module frontend #(
 
       .ifu_to_bpu_i          (ifu_to_bpu_struct),
       .ifu_to_bpu_handshake_i(ifu2bpu_handshake),
-      .update_valid_i        (bpu_update_valid_i),
-      .update_pc_i           (bpu_update_pc_i),
-      .update_is_cond_i      (bpu_update_is_cond_i),
-      .update_taken_i        (bpu_update_taken_i),
-      .update_target_i       (bpu_update_target_i),
-      .update_is_call_i      (bpu_update_is_call_i),
-      .update_is_ret_i       (bpu_update_is_ret_i),
-      .update_is_rvc_i       (bpu_update_is_rvc_i),
-      .ras_update_valid_i    (bpu_ras_update_valid_i),
-      .ras_update_is_call_i  (bpu_ras_update_is_call_i),
-      .ras_update_is_ret_i   (bpu_ras_update_is_ret_i),
-      .ras_update_is_rvc_i   (bpu_ras_update_is_rvc_i),
-      .ras_update_pc_i       (bpu_ras_update_pc_i),
-      .flush_i               (flush_i),
+      .update_valid_i        (be2fe_i.bpu_update_valid),
+      .update_pc_i           (be2fe_i.bpu_update_pc),
+      .update_is_cond_i      (be2fe_i.bpu_update_is_cond),
+      .update_taken_i        (be2fe_i.bpu_update_taken),
+      .update_target_i       (be2fe_i.bpu_update_target),
+      .update_is_call_i      (be2fe_i.bpu_update_is_call),
+      .update_is_ret_i       (be2fe_i.bpu_update_is_ret),
+      .update_is_rvc_i       (be2fe_i.bpu_update_is_rvc),
+      .ras_update_valid_i    (be2fe_i.bpu_ras_update_valid),
+      .ras_update_is_call_i  (be2fe_i.bpu_ras_update_is_call),
+      .ras_update_is_ret_i   (be2fe_i.bpu_ras_update_is_ret),
+      .ras_update_is_rvc_i   (be2fe_i.bpu_ras_update_is_rvc),
+      .ras_update_pc_i       (be2fe_i.bpu_ras_update_pc),
+      .flush_i               (be2fe_i.flush),
       .bpu_to_ifu_handshake_o(bpu2ifu_handshake),
       .bpu_to_ifu_o          (bpu_to_ifu_struct)
   );

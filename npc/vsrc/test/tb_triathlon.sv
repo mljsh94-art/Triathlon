@@ -389,8 +389,8 @@ module tb_triathlon #(
   assign dbg_csr_trap_tval_o = dut.u_backend.u_csr.trap_tval;
   assign dbg_csr_satp_o    = dut.u_backend.u_csr.csr_satp;
   assign dbg_csr_priv_mode_o = dut.u_backend.csr_priv_mode;
-  assign backend_flush_o = dut.u_backend.backend_flush_o;
-  assign backend_redirect_pc_o = dut.u_backend.backend_redirect_pc_o;
+  assign backend_flush_o = dut.be2fe.flush;
+  assign backend_redirect_pc_o = dut.be2fe.redirect_pc;
   assign dbg_retire_redirect_pc_o = dut.u_backend.retire_redirect_pc_dbg;
   assign dbg_rob_flush_o = dut.u_backend.rob_flush;
   assign dbg_rob_flush_cause_o = dut.u_backend.rob_flush_cause;
@@ -401,12 +401,12 @@ module tb_triathlon #(
   assign dbg_rob_flush_src_pc_o = dut.u_backend.rob_flush_src_pc;
 
   // Debug: frontend/backend handshakes
-  assign dbg_fe_valid_o = dut.fe_ibuf_valid;
-  assign dbg_fe_ready_o = dut.fe_ibuf_ready;
-  assign dbg_fe_pc_o    = dut.fe_ibuf_pcs[0];
-  assign dbg_fe_instrs_o = dut.fe_ibuf_instrs;
-  assign dbg_fe_slot_valid_o = dut.fe_ibuf_slot_valid;
-  assign dbg_fe_pred_npc_o = dut.fe_ibuf_pred_npc;
+  assign dbg_fe_valid_o = dut.fe2be.valid;
+  assign dbg_fe_ready_o = dut.fe2be.ready;
+  assign dbg_fe_pc_o    = dut.fe2be.pcs[0];
+  assign dbg_fe_instrs_o = dut.fe2be.instrs;
+  assign dbg_fe_slot_valid_o = dut.fe2be.slot_valid;
+  assign dbg_fe_pred_npc_o = dut.fe2be.pred_npc;
   assign dbg_ifu_req_valid_o = dut.u_frontend.i_ifu.req_issue_valid_w;
   assign dbg_ifu_req_ready_o = dut.u_frontend.icache2ifu_rsp_handshake.ready;
   assign dbg_ifu_req_fire_o = dut.u_frontend.i_ifu.req_issue_fire_w;
@@ -445,8 +445,8 @@ module tb_triathlon #(
   assign dbg_ifetch_fault_ready_o = dut.ifetch_fault_ready;
   assign dbg_csr_en_o = dut.u_backend.csr_en;
   assign dbg_csr_ifetch_fault_inject_o = dut.u_backend.csr_ifetch_fault_inject;
-  assign dbg_dec_valid_o = dut.fe_ibuf_valid;
-  assign dbg_dec_ready_o = dut.fe_ibuf_ready;
+  assign dbg_dec_valid_o = dut.fe2be.valid;
+  assign dbg_dec_ready_o = dut.fe2be.ready;
   assign dbg_rob_ready_o = dut.u_backend.rob_ready;
   pipe_dbg_t pipe_bus;
   mem_dbg_t mem_bus;

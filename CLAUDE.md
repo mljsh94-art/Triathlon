@@ -254,16 +254,13 @@ struct packed {
 
 ### Frontend-Backend Interface
 
-```
-Frontend -> Backend:
-  fe_ibuf_valid/ready     (handshake)
-  fe_ibuf_instrs [4][32]  (instruction bundle)
-  fe_ibuf_pc [32]         (fetch group PC)
+`core_contract_pkg.sv` 定义模块边界契约：
 
-Backend -> Frontend:
-  backend_flush           (ROB flush signal)
-  backend_redirect_pc [32] (redirect target PC)
-```
+- **`fe_be_bundle_t`（FE→BE 数据面）**：ibuffer 出队口 decode-ready 束（`valid`/`ready` + 每 slot 的 `instrs`/`raw_instrs`/`pcs`/`slot_valid`/`pred_npc`/`is_rvc`/`ftq_id`/`fetch_epoch`）。`frontend` 输出 `fe2be_o`，`backend` 输入 `fe2be_i`；`ready` 由 backend `fe2be_ready_o` 驱动。
+- **`be2fe_ctrl_if_t`（BE→FE 控制面）**：`flush`/`redirect_pc`、BPU 训练（`bpu_update_*`/`bpu_ras_update_*`）、MMU 状态（`mmu_satp`/`mmu_priv`/`mmu_sum`/`mmu_mxr`/`mmu_sfence_vma`）。`backend` 输出 `be2fe_o`，`frontend` 输入 `be2fe_i`。
+- **独立侧带**：`ifetch_fault_*`（FE→BE 取指页错）、`pte_*`（IFU 页表遍历经 backend DCache mux）仍在 `frontend`/`backend` 端口单独列出。
+
+`triathlon.sv` 以 `fe2be`/`be2fe` 两条 bundle 连线；`frontend` 内部 IFU→aligner→ibuffer 链路保持扁平信号。
 
 ## Build, Test & Toolchain (编译工具链说明)
 

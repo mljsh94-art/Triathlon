@@ -2,6 +2,7 @@
 import config_pkg::*;
 import decode_pkg::*;
 import global_config_pkg::*;
+import core_contract_pkg::*;
 
 module tb_backend (
     input logic clk_i,
@@ -88,8 +89,36 @@ module tb_backend (
     output logic [2:0]                         dbg_cond_branch_issue_count_o
 );
 
-  logic backend_flush_unused;
-  logic [Cfg.PLEN-1:0] backend_redirect_pc_unused;
+  fe_be_bundle_t fe2be;
+  be2fe_ctrl_if_t be2fe;
+  logic fe2be_ready;
+
+  assign fe2be.valid = frontend_ibuf_valid;
+  assign fe2be.instrs = frontend_ibuf_instrs;
+  assign fe2be.raw_instrs = frontend_ibuf_raw_instrs;
+  assign fe2be.pcs = frontend_ibuf_pcs;
+  assign fe2be.slot_valid = frontend_ibuf_slot_valid;
+  assign fe2be.pred_npc = frontend_ibuf_pred_npc;
+  assign fe2be.is_rvc = frontend_ibuf_is_rvc;
+  assign fe2be.ftq_id = frontend_ibuf_ftq_id;
+  assign fe2be.fetch_epoch = frontend_ibuf_fetch_epoch;
+  assign fe2be.ready = fe2be_ready;
+  assign frontend_ibuf_ready = fe2be_ready;
+
+  assign bpu_update_valid_o = be2fe.bpu_update_valid;
+  assign bpu_update_pc_o = be2fe.bpu_update_pc;
+  assign bpu_update_is_cond_o = be2fe.bpu_update_is_cond;
+  assign bpu_update_taken_o = be2fe.bpu_update_taken;
+  assign bpu_update_target_o = be2fe.bpu_update_target;
+  assign bpu_update_is_call_o = be2fe.bpu_update_is_call;
+  assign bpu_update_is_ret_o = be2fe.bpu_update_is_ret;
+  assign bpu_update_is_rvc_o = be2fe.bpu_update_is_rvc;
+  assign bpu_ras_update_valid_o = be2fe.bpu_ras_update_valid;
+  assign bpu_ras_update_is_call_o = be2fe.bpu_ras_update_is_call;
+  assign bpu_ras_update_is_ret_o = be2fe.bpu_ras_update_is_ret;
+  assign bpu_ras_update_is_rvc_o = be2fe.bpu_ras_update_is_rvc;
+  assign bpu_ras_update_pc_o = be2fe.bpu_ras_update_pc;
+
   backend #(
       .Cfg(global_config_pkg::Cfg)
   ) dut (
@@ -98,36 +127,9 @@ module tb_backend (
       .timer_irq_i(timer_irq_i),
       .ext_irq_i(ext_irq_i),
       .flush_from_backend,
-      .frontend_ibuf_valid,
-      .frontend_ibuf_ready,
-      .frontend_ibuf_instrs,
-      .frontend_ibuf_raw_instrs,
-      .frontend_ibuf_pcs,
-      .frontend_ibuf_slot_valid,
-      .frontend_ibuf_pred_npc,
-      .frontend_ibuf_is_rvc,
-      .frontend_ibuf_ftq_id(frontend_ibuf_ftq_id),
-      .frontend_ibuf_fetch_epoch(frontend_ibuf_fetch_epoch),
-      .backend_flush_o(backend_flush_unused),
-      .backend_redirect_pc_o(backend_redirect_pc_unused),
-      .bpu_update_valid_o(bpu_update_valid_o),
-      .bpu_update_pc_o(bpu_update_pc_o),
-      .bpu_update_is_cond_o(bpu_update_is_cond_o),
-      .bpu_update_taken_o(bpu_update_taken_o),
-      .bpu_update_target_o(bpu_update_target_o),
-      .bpu_update_is_call_o(bpu_update_is_call_o),
-      .bpu_update_is_ret_o(bpu_update_is_ret_o),
-      .bpu_update_is_rvc_o(bpu_update_is_rvc_o),
-      .bpu_ras_update_valid_o(bpu_ras_update_valid_o),
-      .bpu_ras_update_is_call_o(bpu_ras_update_is_call_o),
-      .bpu_ras_update_is_ret_o(bpu_ras_update_is_ret_o),
-      .bpu_ras_update_is_rvc_o(bpu_ras_update_is_rvc_o),
-      .bpu_ras_update_pc_o(bpu_ras_update_pc_o),
-      .mmu_satp_o(),
-      .mmu_priv_o(),
-      .mmu_sum_o(),
-      .mmu_mxr_o(),
-      .mmu_sfence_vma_o(),
+      .fe2be_i(fe2be),
+      .fe2be_ready_o(fe2be_ready),
+      .be2fe_o(be2fe),
       .ifu_pte_ld_req_valid_i(1'b0),
       .ifu_pte_ld_req_ready_o(),
       .ifu_pte_ld_req_paddr_i('0),
