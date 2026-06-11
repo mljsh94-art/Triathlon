@@ -22,6 +22,41 @@ uint32_t probe_cfg_width(uint32_t value, uint32_t fallback) {
   return value;
 }
 
+uint32_t commit_next_pc(const npc::CommitSlot &slot, uint32_t actual_npc) {
+  if (actual_npc != 0u) {
+    return actual_npc;
+  }
+  return slot.pc + (slot.is_rvc ? 2u : 4u);
+}
+
+npc::DUTCoreState collect_dut_arch_state(Vtb_triathlon *top,
+                                         const std::array<uint32_t, 32> &rf,
+                                         uint32_t pc_after) {
+  npc::DUTCoreState state = {};
+  for (size_t i = 0; i < rf.size(); i++) {
+    state.gpr[i] = rf[i];
+  }
+  state.gpr[0] = 0;
+  state.pc = pc_after;
+  state.priv = top->dbg_csr_priv_mode_o;
+  state.mstatus = top->dbg_csr_mstatus_o;
+  state.sstatus = top->dbg_csr_sstatus_o;
+  state.mepc = top->dbg_csr_mepc_o;
+  state.sepc = top->dbg_csr_sepc_o;
+  state.mcause = top->dbg_csr_mcause_o;
+  state.scause = top->dbg_csr_scause_o;
+  state.mtval = top->dbg_csr_mtval_o;
+  state.stval = top->dbg_csr_stval_o;
+  state.mtvec = top->dbg_csr_mtvec_o;
+  state.stvec = top->dbg_csr_stvec_o;
+  state.mie = top->dbg_csr_mie_o;
+  state.mip = top->dbg_csr_mip_o;
+  state.medeleg = top->dbg_csr_medeleg_o;
+  state.mideleg = top->dbg_csr_mideleg_o;
+  state.satp = top->dbg_csr_satp_o;
+  return state;
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -80,6 +115,14 @@ int main(int argc, char **argv) {
   mem.dcache.mem = &mem.mem;
   mem.mmio.mem = &mem.mem;
 
+  npc::Difftest difftest;
+  if (!args.difftest_so.empty()) {
+    if (!difftest.init(args.difftest_so, mem.mem.pmem_words, entry_pc)) {
+      return 1;
+    }
+  }
+  mem.mem.uart_stdout_enabled = !difftest.enabled();
+
   auto *top = new Vtb_triathlon;
   VerilatedVcdC *tfp = nullptr;
   vluint64_t sim_time = 0;
@@ -96,18 +139,6 @@ int main(int argc, char **argv) {
     std::cerr << "[warn] this binary is built without --trace support, ignore --trace\n";
   }
 #endif
-
-  npc::Difftest difftest;
-  if (!args.difftest_so.empty()) {
-    if (!difftest.init(args.difftest_so, mem.mem.pmem_words, entry_pc)) {
-      if (tfp) {
-        tfp->close();
-      }
-      delete top;
-      return 1;
-    }
-  }
-  mem.mem.uart_stdout_enabled = !difftest.enabled();
 
   npc::reset(top, mem, tfp, sim_time);
 
@@ -162,11 +193,15 @@ int main(int argc, char **argv) {
       slot.inst = top->commit_inst_o[i];
       slot.decoded_inst = top->commit_decoded_inst_o[i];
       slot.is_rvc = ((top->commit_is_rvc_o >> i) & 0x1) != 0;
+      slot.actual_npc = top->commit_actual_npc_o[i];
 
       observer.on_commit_slot(cycles, top, mem, rf, slot);
       profile.record_commit(slot.pc, slot.inst, slot.decoded_inst, slot.is_rvc);
 
-      if (!difftest.step_and_check(cycles, slot.pc, slot.decoded_inst, slot.rf_before, rf)) {
+      npc::DUTCoreState dut_after =
+          collect_dut_arch_state(top, rf, commit_next_pc(slot, slot.actual_npc));
+      if (!difftest.step_and_check(cycles, slot.pc, slot.decoded_inst, dut_after,
+                                   slot.rf_before, rf)) {
         std::cerr << "[difftest] stop on first mismatch\n";
         profile.emit_all_summaries(cycles, top);
         if (tfp) {
@@ -188,22 +223,6 @@ int main(int argc, char **argv) {
     profile.record_commit_width(commit_this_cycle);
     if (commit_this_cycle != 0) {
       profile.on_commit_cycle(cycles);
-      if (difftest.enabled()) {
-        npc::DUTCSRState dut_csr = {};
-        dut_csr.mtvec = top->dbg_csr_mtvec_o;
-        dut_csr.mepc = top->dbg_csr_mepc_o;
-        dut_csr.mstatus = top->dbg_csr_mstatus_o;
-        dut_csr.mcause = top->dbg_csr_mcause_o;
-        if (!difftest.check_arch_state(cycles, rf, dut_csr)) {
-          std::cerr << "[difftest] stop on arch-state mismatch\n";
-          profile.emit_all_summaries(cycles, top);
-          if (tfp) {
-            tfp->close();
-          }
-          delete top;
-          return 1;
-        }
-      }
       no_commit_cycles = 0;
     } else {
       no_commit_cycles++;

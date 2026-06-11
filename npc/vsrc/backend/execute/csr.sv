@@ -115,6 +115,15 @@ module execute_csr #(
   localparam int unsigned MIP_MEIP_BIT = 11;
   localparam int unsigned MIP_MTIP_BIT = 7;
   localparam logic [XLEN-1:0] CSR_MISA_VALUE = XLEN'(32'h40141105);
+  localparam logic [XLEN-1:0] MSTATUS_SUPPORTED_MASK =
+      (XLEN'(1) << MSTATUS_SIE_BIT) |
+      (XLEN'(1) << MSTATUS_MIE_BIT) |
+      (XLEN'(1) << MSTATUS_SPIE_BIT) |
+      (XLEN'(1) << MSTATUS_MPIE_BIT) |
+      (XLEN'(1) << MSTATUS_SPP_BIT) |
+      (XLEN'(3) << MSTATUS_MPP_LSB) |
+      (XLEN'(1) << MSTATUS_SUM_BIT) |
+      (XLEN'(1) << MSTATUS_MXR_BIT);
   localparam logic [XLEN-1:0] SATP_MODE_MASK = XLEN'(32'h8000_0000);
   localparam logic [XLEN-1:0] SATP_PPN_MASK = XLEN'(32'h003f_ffff);
   localparam logic [XLEN-1:0] SATP_SUPPORTED_MASK = SATP_MODE_MASK | SATP_PPN_MASK;
@@ -212,6 +221,12 @@ module execute_csr #(
     begin
       // Current SV32 MMU/TLB does not tag entries by ASID, so expose ASIDLEN=0.
       sanitize_satp = value & SATP_SUPPORTED_MASK;
+    end
+  endfunction
+
+  function automatic logic [XLEN-1:0] sanitize_mstatus(input logic [XLEN-1:0] value);
+    begin
+      sanitize_mstatus = value & MSTATUS_SUPPORTED_MASK;
     end
   endfunction
 
@@ -523,12 +538,13 @@ module execute_csr #(
 
       if (csr_valid_i && uop_i.is_csr && csr_write_en) begin
         unique case (uop_i.csr_addr)
-          CSR_SSTATUS: csr_mstatus <= (csr_mstatus & ~csr_sstatus_mask) | (csr_write_val & csr_sstatus_mask);
+          CSR_SSTATUS: csr_mstatus <= sanitize_mstatus((csr_mstatus & ~csr_sstatus_mask) |
+                                                       (csr_write_val & csr_sstatus_mask));
           CSR_SCOUNTEREN: csr_scounteren <= csr_write_val;
           CSR_SIE: csr_sie <= csr_write_val;
           CSR_STVEC: csr_stvec <= csr_write_val;
           CSR_SSCRATCH: csr_sscratch <= csr_write_val;
-          CSR_MSTATUS: csr_mstatus <= csr_write_val;
+          CSR_MSTATUS: csr_mstatus <= sanitize_mstatus(csr_write_val);
           CSR_MSTATUSH: csr_mstatush <= csr_write_val;
           CSR_MEDELEG: csr_medeleg <= csr_write_val;
           CSR_MIDELEG: csr_mideleg <= csr_write_val;
@@ -555,20 +571,20 @@ module execute_csr #(
           csr_sepc <= XLEN'(trap_pc);
           csr_scause <= trap_scause;
           csr_stval <= XLEN'(trap_tval);
-          csr_mstatus <= mstatus_s_trap_next;
+          csr_mstatus <= sanitize_mstatus(mstatus_s_trap_next);
           current_priv <= PRIV_LVL_S;
         end else begin
           csr_mepc <= XLEN'(trap_pc);
           csr_mcause <= trap_mcause;
           csr_mtval <= XLEN'(trap_tval);
-          csr_mstatus <= mstatus_trap_next;
+          csr_mstatus <= sanitize_mstatus(mstatus_trap_next);
           current_priv <= PRIV_LVL_M;
         end
       end else if (csr_valid_i && sys_op_valid && uop_i.is_mret && !sys_exception) begin
-        csr_mstatus <= mstatus_mret_next;
+        csr_mstatus <= sanitize_mstatus(mstatus_mret_next);
         current_priv <= mret_target_priv;
       end else if (csr_valid_i && sys_op_valid && uop_i.is_sret && !sys_exception) begin
-        csr_mstatus <= mstatus_sret_next;
+        csr_mstatus <= sanitize_mstatus(mstatus_sret_next);
         current_priv <= sret_target_priv;
       end
     end

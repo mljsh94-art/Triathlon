@@ -71,8 +71,9 @@ CSRCS = $(SIM_MAIN) $(SIM_SRCS) $(SRC_AUTO_BIND)
 
 # # rules for NVBoard
 # include $(NVBOARD_HOME)/scripts/nvboard.mk
-DIFFTEST_SO ?= $(NPC_HOME)/ref/riscv32-nemu-interpreter-so
+DIFFTEST_SO ?= $(NPC_HOME)/ref/riscv32-spike-difftest.so
 DIFFTEST ?= $(if $(wildcard $(DIFFTEST_SO)),-d $(DIFFTEST_SO),)
+SPIKE_REF_LD_PATH := $(NPC_HOME)/ref:$(NPC_HOME)/ref/src/repo/riscv-isa-sim/build
 
 # rules for verilator
 IMG ?=
@@ -116,7 +117,7 @@ all: default
 sim: $(BIN)
 	$(call git_commit, "sim RTL") # DO NOT REMOVE THIS LINE!!!
 	@echo $(INCFLAGS)
-	@$^ $(NPC_EXE)
+	@LD_LIBRARY_PATH="$(SPIKE_REF_LD_PATH):$$LD_LIBRARY_PATH" $^ $(NPC_EXE)
 
 gdb: $(BIN)
 	$(call git_commit, "debug RTL") # DO NOT REMOVE THIS LINE!!!
@@ -175,3 +176,9 @@ bench: $(BIN)
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+spike-ref:
+	$(MAKE) -C ref all
+
+spike-ref-check:
+	$(MAKE) -C ref check

@@ -1,3 +1,13 @@
+---
+description:
+alwaysApply: true
+---
+
+---
+description:
+alwaysApply: false
+---
+
 # Triathlon - Out-of-Order RISC-V CPU
 
 > **IMPORTANT DOCUMENTATION RULES:** 
@@ -77,9 +87,15 @@ Triathlon/
 │       └── priority_encoder.sv      # Priority encoder
 ├── npc/csrc/                        # Verilator 仿真 C++ 宿主
 │   ├── npc_main.cpp                 # 仿真主循环骨架（tick/commit/difftest）
-│   ├── include/                     # args、memory_models、sim_observer 等
+│   ├── include/                     # args、memory_models、sim_observer、difftest_arch.h 等
 │   └── lib/                         # args_parser、difftest、profile_collector_*、sim_observer、sim_trap_exit
 ├── npc/csrc/test/                   # C++ unit drivers for targeted Verilator testbenches
+├── npc/ref/                         # Spike DiffTest 参考库（`make -C npc/ref` → `riscv32-spike-difftest.so`）
+│   ├── spike-diff/difftest.cc       # Spike rv32imac MSU Sv32 封装（difftest_* API）
+│   ├── Makefile / build_spike_diff.sh
+│   ├── test_spike_ref.cpp           # 独立 smoke test（dlopen + 单步 addi）
+│   ├── repo/riscv-isa-sim/          # Spike 源码树
+│   └── riscv32-spike-difftest.so    # 构建产物
 ├── npc/tools/profiler/              # 性能采集与看板（run_profile.sh、merge/build_*.py）
 ├── am-kernels/                      # Test programs and benchmarks
 ├── nemu/                            # Reference simulator
@@ -229,39 +245,6 @@ Frontend→Backend 交界 = **ibuffer 出队口**（`fe_be_bundle_t`）：每拍
   - **PLIC** (`plic.sv`): Platform-Level Interrupt Controller.
   - **VirtIO Block** (`virtio_blk.sv`): For block device / disk simulation.
 
-### Key Data Structures
-
-#### uop_t (decode_pkg.sv)
-
-```systemverilog
-struct packed {
-  logic valid, illegal;
-  logic [31:0] inst, raw_inst;       // Decoded 32-bit instruction and raw retired encoding
-  fu_e fu;           // FU_ALU, FU_BRANCH, FU_LSU, FU_MUL, FU_DIV, FU_CSR
-  alu_op_e alu_op;
-  branch_op_e br_op;
-  lsu_op_e lsu_op;
-  amo_op_e amo_op;
-  logic [4:0] rs1, rs2, rd;    // Logical register numbers
-  logic has_rs1, has_rs2, has_rd;
-  logic [XLEN-1:0] imm;
-  logic [PLEN-1:0] pc;
-  // Flags: is_load, is_store, is_branch, is_jump, is_csr, is_fence, is_ecall, is_ebreak, is_mret
-  logic [11:0] csr_addr;
-  csr_op_e csr_op;
-}
-```
-
-### Frontend-Backend Interface
-
-`core_contract_pkg.sv` 定义模块边界契约：
-
-- **`fe_be_bundle_t`（FE→BE 数据面）**：ibuffer 出队口 decode-ready 束（`valid`/`ready` + 每 slot 的 `instrs`/`raw_instrs`/`pcs`/`slot_valid`/`pred_npc`/`is_rvc`/`ftq_id`/`fetch_epoch`）。`frontend` 输出 `fe2be_o`，`backend` 输入 `fe2be_i`；`ready` 由 backend `fe2be_ready_o` 驱动。
-- **`be2fe_ctrl_if_t`（BE→FE 控制面）**：`flush`/`redirect_pc`、BPU 训练（`bpu_update_*`/`bpu_ras_update_*`）、MMU 状态（`mmu_satp`/`mmu_priv`/`mmu_sum`/`mmu_mxr`/`mmu_sfence_vma`）。`backend` 输出 `be2fe_o`，`frontend` 输入 `be2fe_i`。
-- **独立侧带**：`ifetch_fault_*`（FE→BE 取指页错）、`pte_*`（IFU 页表遍历经 backend DCache mux）仍在 `frontend`/`backend` 端口单独列出。
-
-`triathlon.sv` 以 `fe2be`/`be2fe` 两条 bundle 连线；`frontend` 内部 IFU→aligner→ibuffer 链路保持扁平信号。
-
 ## Build, Test & Toolchain (编译工具链说明)
 
 编译与测试流程基于 `npc/Makefile` 运行。通过 Verilator 编译 SystemVerilog 设计和 C++ 仿真程序。
@@ -280,7 +263,7 @@ struct packed {
 | `profile-index`     | `make profile-index`       | 扫描 `npc/build/profile/*/summary.json` 生成 `index.json`。                                               |
 | `profile-dashboard` | `make profile-dashboard`   | 生成看板 `dashboard/index.html`，并为每个 run 生成可读的 `summary.html`。                                           |
 | `profile-clean`     | `make profile-clean`       | 删除 `npc/build/profile/`（历次 run、`index.json`、看板 HTML 一并清除）。                                           |
-| `linux-smoke`       | `make linux-smoke`         | 运行 Linux 冒烟测试脚本 `run_linux_smoke.sh`。                                                                |
+|                     |                            |                                                                                                      |
 | `bench`             | `make bench BENCH_IMG=...` | 使用当前仿真器执行固定镜像并打印墙钟耗时，便于对比仿真速度。                                                                       |
 | `clean`             | `make clean`               | 清理编译生成目录，删除整个 `build` 文件夹。                                                                           |
 
@@ -295,7 +278,7 @@ struct packed {
 | `TOPNAME`              | `tb_triathlon`                                | 指定仿真的顶层模块名（对应 `vsrc/` 目录下的 `.sv` 文件）。                                                    |
 | `IMG`                  | *(空)*                                         | 待运行的程序镜像路径（例如编译好的 RISC-V 测试 bin/elf 文件）。                                                 |
 | `ARGS`                 | *(空)*                                         | 传给仿真器的扩展参数，详见 **§4**。                                                                    |
-| `DIFFTEST_SO`          | `$(NPC_HOME)/ref/riscv32-nemu-interpreter-so` | DiffTest 动态链接库的路径，用于与 NEMU 进行协同仿真比对。                                                     |
+| `DIFFTEST_SO`          | `$(NPC_HOME)/ref/riscv32-spike-difftest.so` | DiffTest 动态链接库（Spike rv32imac Sv32 参考模型）；`DIFFTEST=` 或库不存在时禁用。构建：`make -C npc/ref`；`make sim` 会自动加入 Spike 运行时库路径。 |
 | `VL_THREADS`           | `2`                                           | Verilator 多线程仿真线程数；当前设计在 Verilator 5.008 下 4 线程会出现 `UNOPTTHREADS`，需要时可手动调整。              |
 | `VL_JOBS`              | `$(nproc)`                                    | Verilator/host C++ 并行编译任务数。                                                              |
 | `VL_OPTFLAGS`          | `-O3 -march=native -fno-plt`                  | 传给 Verilator generated make 的 `OPT_FAST` / `OPT_SLOW` / `OPT_GLOBAL` 与 host C++ 的默认优化参数。 |
@@ -419,6 +402,8 @@ make -C npc sim DIFFTEST= IMG=/path/to/fw_combined.bin ARGS='--linux-early-debug
 
 Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件存在且未设 `DIFFTEST=`）→ `IMG`（ positional，镜像路径）。Positional 参数 `<IMG>` 为**必需**。
 
+Spike DiffTest 在裸机路径按 ROB 退休点 lockstep：每条提交前检查 Spike PC 与 DUT 退休 PC，一步执行后比对 `DUTCoreState`（`gpr[32]`、执行后 PC、`priv`、`mstatus/sstatus`、`mepc/sepc`、`mcause/scause`、`mtval/stval`、`mtvec/stvec`、`mie/mip`、`medeleg/mideleg`、`satp`）。成功路径无 per-commit 日志；失败时打印 `[difftest] mismatch cycle=... pc=... inst=... field=...`，并输出完整 DUT/REF 架构状态对比（不一致字段以 `*` 标记）。
+
 #### 参数一览
 
 周期级 trace（`--commit-trace`、`--bru-trace` 等）与仿真结束 profile 汇总（`--profile`）**相互独立**，可任意组合。
@@ -428,7 +413,7 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件
 | ----------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `<IMG>`                                         | —                               | 待加载二进制镜像路径（positional，必需）                                                                                   |
 | `--max-cycles N` / `--max-cycles=N`             | `600000000`                     | 最大仿真周期；超出后打印 `TIMEOUT after N cycles` 并以退出码 1 结束                                                            |
-| `-d REF_SO` / `--difftest=REF_SO`               | Makefile 自动注入                   | NEMU DiffTest 共享库；`DIFFTEST_SO=` 或 `DIFFTEST=` 可禁用                                                          |
+| `-d REF_SO` / `--difftest=REF_SO`               | Makefile 自动注入                   | Spike DiffTest 共享库（`npc/ref/riscv32-spike-difftest.so`）；`DIFFTEST_SO=` 或 `DIFFTEST=` 可禁用；`make sim` 自动设置 `npc/ref` 与 Spike build 目录到 `LD_LIBRARY_PATH` |
 | `--progress [N]` / `--progress=N`               | 禁用；仅 `--progress` 时 `N=1000000` | 每 `N` 周期打印轻量 `[progress]` 心跳（cycles、commits、IPC、last_pc 等）                                                  |
 | `--progress-verbose`                            | 禁用                              | 将 `[progress]` 扩展为详细快照（ROB、Store Buffer、LSU、DCache MSHR 等）；`--linux-early-debug` 也会启用详细进度输出。                |
 | `--trace [path]` / `--trace=path`               | 默认 `npc.vcd`                    | 生成 VCD 波形；需编译时定义 `VM_TRACE`，否则忽略并打印 `[warn]`                                                                |
@@ -810,7 +795,7 @@ make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
   - 输出 `fw_combined.bin`（布局见上表）
 4. **启动 Verilator 仿真 (`make -C npc sim ...`)**
   - `**IMG=...`**: 加载 `fw_combined.bin` 到 `0x80000000`
-  - `**DIFFTEST_SO=**`: 置空以禁用 DiffTest（OpenSBI/Linux 涉及 SV32 MMU、特权级 CSR 与外设，bare-metal NEMU 无法对齐）
+  - `**DIFFTEST_SO=`**: 置空以禁用 DiffTest（Linux 全系统路径默认仍建议禁用直至 Phase 3 验收完成）
   - 仿真扩展参数见 **§4 仿真器命令行扩展参数**（常用：`--max-cycles`、`--progress`、`--linux-early-debug`、`--commit-trace` 等）
 
 #### echo_payload（可选，独立测试）

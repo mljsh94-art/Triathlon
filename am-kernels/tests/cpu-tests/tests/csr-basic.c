@@ -73,35 +73,35 @@ int main() {
 
   uintptr_t old = csrrw_mstatus(0x5);
   check(old == orig_mstatus);
-  check(csrr_mstatus() == 0x5);
+  check(csrr_mstatus() == 0x0);
 
   old = csrrs_mstatus(0x10);
-  check(old == 0x5);
-  check(csrr_mstatus() == 0x15);
+  check(old == 0x0);
+  check(csrr_mstatus() == 0x0);
 
   old = csrrc_mstatus(0x1);
-  check(old == 0x15);
-  check(csrr_mstatus() == 0x14);
+  check(old == 0x0);
+  check(csrr_mstatus() == 0x0);
 
   old = csrrsi_mstatus_3();
-  check(old == 0x14);
-  check(csrr_mstatus() == 0x17);
+  check(old == 0x0);
+  check(csrr_mstatus() == 0x2);
 
   old = csrrci_mstatus_1();
-  check(old == 0x17);
-  check(csrr_mstatus() == 0x16);
+  check(old == 0x2);
+  check(csrr_mstatus() == 0x2);
 
   old = csrrsi_mstatus_0();
-  check(old == 0x16);
-  check(csrr_mstatus() == 0x16);
+  check(old == 0x2);
+  check(csrr_mstatus() == 0x2);
 
   old = csrrci_mstatus_0();
-  check(old == 0x16);
-  check(csrr_mstatus() == 0x16);
+  check(old == 0x2);
+  check(csrr_mstatus() == 0x2);
 
   old = csrrwi_mstatus_1f();
-  check(old == 0x16);
-  check(csrr_mstatus() == 0x1f);
+  check(old == 0x2);
+  check(csrr_mstatus() == 0xa);
 
   old = csrrw_mepc(0x1234);
   check(old == orig_mepc);

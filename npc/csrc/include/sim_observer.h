@@ -18,6 +18,7 @@ struct CommitSlot {
   uint32_t rd = 0;
   uint32_t data = 0;
   uint32_t pc = 0;
+  uint32_t actual_npc = 0;
   uint32_t inst = 0;
   uint32_t decoded_inst = 0;
   bool is_rvc = false;

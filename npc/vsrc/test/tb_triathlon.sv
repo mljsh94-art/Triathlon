@@ -62,6 +62,7 @@ module tb_triathlon #(
     output logic [Cfg.NRET-1:0][4:0]           commit_areg_o,
     output logic [Cfg.NRET-1:0][Cfg.XLEN-1:0]  commit_wdata_o,
     output logic [Cfg.NRET-1:0][Cfg.PLEN-1:0]  commit_pc_o,
+    output logic [Cfg.NRET-1:0][Cfg.PLEN-1:0]  commit_actual_npc_o,
     output logic [Cfg.NRET-1:0][Cfg.ILEN-1:0]  commit_inst_o,
     output logic [Cfg.NRET-1:0][Cfg.ILEN-1:0]  commit_decoded_inst_o,
     output logic [Cfg.NRET-1:0]                commit_is_rvc_o,
@@ -69,6 +70,7 @@ module tb_triathlon #(
     output logic [Cfg.XLEN-1:0]                dbg_csr_mepc_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_mstatus_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_mcause_o,
+    output logic [Cfg.XLEN-1:0]                dbg_csr_mtval_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_sstatus_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_stvec_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_sepc_o,
@@ -76,6 +78,10 @@ module tb_triathlon #(
     output logic [Cfg.XLEN-1:0]                dbg_csr_stval_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_trap_tval_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_satp_o,
+    output logic [Cfg.XLEN-1:0]                dbg_csr_mie_o,
+    output logic [Cfg.XLEN-1:0]                dbg_csr_mip_o,
+    output logic [Cfg.XLEN-1:0]                dbg_csr_medeleg_o,
+    output logic [Cfg.XLEN-1:0]                dbg_csr_mideleg_o,
     output logic [1:0]                         dbg_csr_priv_mode_o,
     output logic                               backend_flush_o,
     output logic [Cfg.PLEN-1:0]                backend_redirect_pc_o,
@@ -374,6 +380,7 @@ module tb_triathlon #(
   assign commit_areg_o  = dut.u_backend.commit_areg;
   assign commit_wdata_o = dut.u_backend.commit_wdata;
   assign commit_pc_o    = dut.u_backend.commit_pc;
+  assign commit_actual_npc_o = dut.u_backend.commit_actual_npc;
   assign commit_inst_o  = dut.u_backend.commit_inst;
   assign commit_decoded_inst_o = dut.u_backend.commit_decoded_inst;
   assign commit_is_rvc_o = dut.u_backend.commit_is_rvc;
@@ -381,6 +388,7 @@ module tb_triathlon #(
   assign dbg_csr_mepc_o    = dut.u_backend.u_csr.csr_mepc;
   assign dbg_csr_mstatus_o = dut.u_backend.u_csr.csr_mstatus;
   assign dbg_csr_mcause_o  = dut.u_backend.u_csr.csr_mcause;
+  assign dbg_csr_mtval_o   = dut.u_backend.u_csr.csr_mtval;
   assign dbg_csr_sstatus_o = dut.u_backend.u_csr.csr_sstatus_view;
   assign dbg_csr_stvec_o   = dut.u_backend.u_csr.csr_stvec;
   assign dbg_csr_sepc_o    = dut.u_backend.u_csr.csr_sepc;
@@ -388,6 +396,10 @@ module tb_triathlon #(
   assign dbg_csr_stval_o   = dut.u_backend.u_csr.csr_stval;
   assign dbg_csr_trap_tval_o = dut.u_backend.u_csr.trap_tval;
   assign dbg_csr_satp_o    = dut.u_backend.u_csr.csr_satp;
+  assign dbg_csr_mie_o     = dut.u_backend.u_csr.csr_mie;
+  assign dbg_csr_mip_o     = dut.u_backend.u_csr.csr_mip;
+  assign dbg_csr_medeleg_o = dut.u_backend.u_csr.csr_medeleg;
+  assign dbg_csr_mideleg_o = dut.u_backend.u_csr.csr_mideleg;
   assign dbg_csr_priv_mode_o = dut.u_backend.csr_priv_mode;
   assign backend_flush_o = dut.be2fe.flush;
   assign backend_redirect_pc_o = dut.be2fe.redirect_pc;

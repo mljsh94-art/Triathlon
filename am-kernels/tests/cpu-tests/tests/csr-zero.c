@@ -39,25 +39,27 @@ static inline uintptr_t csrrci_mstatus_0(void) {
 
 int main() {
   uintptr_t orig = csrr_mstatus();
+  /* mstatus WARL: bit0 is WPRI; write 0x123 -> readback 0x122 */
+  const uintptr_t warl_mstatus = 0x122;
 
   csrrw_mstatus(0x123);
-  check(csrr_mstatus() == 0x123);
+  check(csrr_mstatus() == warl_mstatus);
 
   uintptr_t old = csrrs_mstatus_x0();
-  check(old == 0x123);
-  check(csrr_mstatus() == 0x123);
+  check(old == warl_mstatus);
+  check(csrr_mstatus() == warl_mstatus);
 
   old = csrrc_mstatus_x0();
-  check(old == 0x123);
-  check(csrr_mstatus() == 0x123);
+  check(old == warl_mstatus);
+  check(csrr_mstatus() == warl_mstatus);
 
   old = csrrsi_mstatus_0();
-  check(old == 0x123);
-  check(csrr_mstatus() == 0x123);
+  check(old == warl_mstatus);
+  check(csrr_mstatus() == warl_mstatus);
 
   old = csrrci_mstatus_0();
-  check(old == 0x123);
-  check(csrr_mstatus() == 0x123);
+  check(old == warl_mstatus);
+  check(csrr_mstatus() == warl_mstatus);
 
   csrrw_mstatus(orig);
   return 0;
