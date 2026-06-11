@@ -10,6 +10,13 @@
 
 namespace npc {
 
+struct DifftestStoreCommit {
+  bool valid = false;
+  uint32_t addr = 0;
+  uint32_t data = 0;
+  uint32_t op = 0;
+};
+
 class Difftest {
  public:
   bool init(const std::string &so_path,
@@ -21,7 +28,9 @@ class Difftest {
   bool step_and_check(uint64_t cycle, uint32_t pc, uint32_t inst,
                       const DUTCoreState &dut_after,
                       const std::array<uint32_t, 32> &rf_before,
-                      const std::array<uint32_t, 32> &rf_after);
+                      const std::array<uint32_t, 32> &rf_after,
+                      const DifftestStoreCommit &store_commit,
+                      bool trap_sync, bool retire_fetch_override);
 
   ~Difftest();
 
@@ -36,7 +45,18 @@ class Difftest {
   static bool is_mmio_addr(uint32_t addr);
   static bool decode_mmio_load_rd(uint32_t inst,
                                   const std::array<uint32_t, 32> &rf_before,
-                                  uint32_t &rd_out);
+                                  uint32_t &rd_out,
+                                  uint32_t &addr_out);
+  static bool decode_store_addr(uint32_t inst,
+                                const std::array<uint32_t, 32> &rf_before,
+                                uint32_t &addr_out);
+  static bool is_dut_override_csr_inst(uint32_t inst);
+  static bool is_atomic_mem_inst(uint32_t inst);
+  static size_t lsu_store_size(uint32_t op);
+  static uint32_t store_payload(uint32_t data, uint32_t op, uint32_t addr);
+  void sync_store_commit_to_ref(const DifftestStoreCommit &store_commit);
+  void sync_platform_mip_to_ref(DUTCoreState &ref_after,
+                                const DUTCoreState &dut_after);
   bool check_arch_state(uint64_t cycle, uint32_t pc, uint32_t inst,
                         const DUTCoreState &dut_after,
                         const DUTCoreState &ref_after,

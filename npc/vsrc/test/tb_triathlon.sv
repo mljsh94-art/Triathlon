@@ -66,6 +66,12 @@ module tb_triathlon #(
     output logic [Cfg.NRET-1:0][Cfg.ILEN-1:0]  commit_inst_o,
     output logic [Cfg.NRET-1:0][Cfg.ILEN-1:0]  commit_decoded_inst_o,
     output logic [Cfg.NRET-1:0]                commit_is_rvc_o,
+    output logic [Cfg.NRET-1:0]                commit_is_store_o,
+    output logic [Cfg.NRET-1:0][SB_IDX_W-1:0]  commit_sb_id_o,
+    output logic [Cfg.NRET-1:0]                commit_store_valid_o,
+    output logic [Cfg.NRET-1:0][Cfg.PLEN-1:0]  commit_store_addr_o,
+    output logic [Cfg.NRET-1:0][Cfg.XLEN-1:0]  commit_store_data_o,
+    output logic [Cfg.NRET-1:0][$bits(decode_pkg::lsu_op_e)-1:0] commit_store_op_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_mtvec_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_mepc_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_mstatus_o,
@@ -83,6 +89,8 @@ module tb_triathlon #(
     output logic [Cfg.XLEN-1:0]                dbg_csr_medeleg_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_mideleg_o,
     output logic [1:0]                         dbg_csr_priv_mode_o,
+    output logic                               dbg_csr_irq_trap_o,
+    output logic [Cfg.PLEN-1:0]                dbg_csr_irq_redirect_pc_o,
     output logic                               backend_flush_o,
     output logic [Cfg.PLEN-1:0]                backend_redirect_pc_o,
     output logic [Cfg.PLEN-1:0]                dbg_retire_redirect_pc_o,
@@ -384,6 +392,8 @@ module tb_triathlon #(
   assign commit_inst_o  = dut.u_backend.commit_inst;
   assign commit_decoded_inst_o = dut.u_backend.commit_decoded_inst;
   assign commit_is_rvc_o = dut.u_backend.commit_is_rvc;
+  assign commit_is_store_o = dut.u_backend.commit_is_store;
+  assign commit_sb_id_o = dut.u_backend.commit_sb_id;
   assign dbg_csr_mtvec_o   = dut.u_backend.u_csr.csr_mtvec;
   assign dbg_csr_mepc_o    = dut.u_backend.u_csr.csr_mepc;
   assign dbg_csr_mstatus_o = dut.u_backend.u_csr.csr_mstatus;
@@ -401,6 +411,8 @@ module tb_triathlon #(
   assign dbg_csr_medeleg_o = dut.u_backend.u_csr.csr_medeleg;
   assign dbg_csr_mideleg_o = dut.u_backend.u_csr.csr_mideleg;
   assign dbg_csr_priv_mode_o = dut.u_backend.csr_priv_mode;
+  assign dbg_csr_irq_trap_o = dut.u_backend.csr_irq_trap;
+  assign dbg_csr_irq_redirect_pc_o = dut.u_backend.csr_irq_trap_redirect_pc;
   assign backend_flush_o = dut.be2fe.flush;
   assign backend_redirect_pc_o = dut.be2fe.redirect_pc;
   assign dbg_retire_redirect_pc_o = dut.u_backend.retire_redirect_pc_dbg;
@@ -650,6 +662,22 @@ module tb_triathlon #(
   assign dbg_sb_dcache_req_addr_o  = dut.u_backend.sb_dcache_req_addr;
   assign dbg_sb_dcache_req_data_o  = dut.u_backend.sb_dcache_req_data;
   assign dbg_sb_dcache_req_op_o    = dut.u_backend.sb_dcache_req_op;
+  always_comb begin
+    commit_store_valid_o = '0;
+    commit_store_addr_o  = '0;
+    commit_store_data_o  = '0;
+    commit_store_op_o    = '0;
+    for (int i = 0; i < Cfg.NRET; i++) begin
+      if (dut.u_backend.commit_valid[i] && dut.u_backend.commit_is_store[i]) begin
+        commit_store_valid_o[i] =
+            dut.u_backend.u_sb.mem[dut.u_backend.commit_sb_id[i]].addr_valid &&
+            dut.u_backend.u_sb.mem[dut.u_backend.commit_sb_id[i]].data_valid;
+        commit_store_addr_o[i] = dut.u_backend.u_sb.mem[dut.u_backend.commit_sb_id[i]].addr;
+        commit_store_data_o[i] = dut.u_backend.u_sb.mem[dut.u_backend.commit_sb_id[i]].data;
+        commit_store_op_o[i]   = dut.u_backend.u_sb.mem[dut.u_backend.commit_sb_id[i]].op;
+      end
+    end
+  end
   assign dbg_dc_mshr_count_o = {4'b0, dut.u_backend.u_dcache.mshr_count};
   assign dbg_dc_mshr_full_o = dut.u_backend.u_dcache.mshr_full;
   assign dbg_dc_mshr_empty_o = dut.u_backend.u_dcache.mshr_empty;

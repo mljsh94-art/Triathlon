@@ -124,11 +124,15 @@ module execute_csr #(
       (XLEN'(3) << MSTATUS_MPP_LSB) |
       (XLEN'(1) << MSTATUS_SUM_BIT) |
       (XLEN'(1) << MSTATUS_MXR_BIT);
+  localparam logic [XLEN-1:0] MEDELEG_SUPPORTED_MASK = XLEN'(32'h0000_B109);
+  localparam logic [XLEN-1:0] MIDELEG_SUPPORTED_MASK =
+      (XLEN'(1) << 1) |   // SSIP
+      (XLEN'(1) << 5) |   // STIP
+      (XLEN'(1) << MIP_SEIP_BIT);
   localparam logic [XLEN-1:0] SATP_MODE_MASK = XLEN'(32'h8000_0000);
   localparam logic [XLEN-1:0] SATP_PPN_MASK = XLEN'(32'h003f_ffff);
   localparam logic [XLEN-1:0] SATP_SUPPORTED_MASK = SATP_MODE_MASK | SATP_PPN_MASK;
 
-  logic [XLEN-1:0] csr_sie;
   logic [XLEN-1:0] csr_scounteren;
   logic [XLEN-1:0] csr_stvec;
   logic [XLEN-1:0] csr_sscratch;
@@ -154,6 +158,7 @@ module execute_csr #(
   logic [1:0] current_priv;
 
   logic [XLEN-1:0] csr_mip;
+  logic [XLEN-1:0] csr_sie_view;
   logic [XLEN-1:0] csr_sip_view;
   logic [XLEN-1:0] csr_sstatus_view;
   logic [XLEN-1:0] csr_sstatus_mask;
@@ -230,6 +235,18 @@ module execute_csr #(
     end
   endfunction
 
+  function automatic logic [XLEN-1:0] sanitize_medeleg(input logic [XLEN-1:0] value);
+    begin
+      sanitize_medeleg = value & MEDELEG_SUPPORTED_MASK;
+    end
+  endfunction
+
+  function automatic logic [XLEN-1:0] sanitize_mideleg(input logic [XLEN-1:0] value);
+    begin
+      sanitize_mideleg = value & MIDELEG_SUPPORTED_MASK;
+    end
+  endfunction
+
   always_comb begin
     csr_mip = '0;
     csr_mip[MIP_SEIP_BIT] = external_irq_i;
@@ -252,6 +269,7 @@ module execute_csr #(
   end
 
   assign csr_sstatus_view = csr_mstatus & csr_sstatus_mask;
+  assign csr_sie_view = csr_mie & csr_mideleg;
   assign csr_priv_valid = (current_priv >= uop_i.csr_addr[9:8]);
 
   // CSR read mux
@@ -260,7 +278,7 @@ module execute_csr #(
     unique case (uop_i.csr_addr)
       CSR_SSTATUS: csr_read_val = csr_sstatus_view;
       CSR_SCOUNTEREN: csr_read_val = csr_scounteren;
-      CSR_SIE: csr_read_val = csr_sie;
+      CSR_SIE: csr_read_val = csr_sie_view;
       CSR_STVEC: csr_read_val = csr_stvec;
       CSR_SSCRATCH: csr_read_val = csr_sscratch;
       CSR_MSTATUS: csr_read_val = csr_mstatus;
@@ -405,7 +423,7 @@ module execute_csr #(
   end
 
   assign interrupt_s_ext_pending = external_irq_i && csr_mideleg[MIP_SEIP_BIT] &&
-                                   csr_sie[MIE_SEIE_BIT] &&
+                                   csr_mie[MIE_SEIE_BIT] &&
                                    ((current_priv == PRIV_LVL_U) ||
                                     (current_priv == PRIV_LVL_S && csr_mstatus[MSTATUS_SIE_BIT]));
   assign interrupt_m_ext_pending = external_irq_i && !csr_mideleg[MIP_SEIP_BIT] &&
@@ -506,7 +524,6 @@ module execute_csr #(
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      csr_sie <= '0;
       csr_scounteren <= '0;
       csr_stvec <= '0;
       csr_sscratch <= '0;
@@ -541,13 +558,13 @@ module execute_csr #(
           CSR_SSTATUS: csr_mstatus <= sanitize_mstatus((csr_mstatus & ~csr_sstatus_mask) |
                                                        (csr_write_val & csr_sstatus_mask));
           CSR_SCOUNTEREN: csr_scounteren <= csr_write_val;
-          CSR_SIE: csr_sie <= csr_write_val;
+          CSR_SIE: csr_mie <= (csr_mie & ~csr_mideleg) | (csr_write_val & csr_mideleg);
           CSR_STVEC: csr_stvec <= csr_write_val;
           CSR_SSCRATCH: csr_sscratch <= csr_write_val;
           CSR_MSTATUS: csr_mstatus <= sanitize_mstatus(csr_write_val);
           CSR_MSTATUSH: csr_mstatush <= csr_write_val;
-          CSR_MEDELEG: csr_medeleg <= csr_write_val;
-          CSR_MIDELEG: csr_mideleg <= csr_write_val;
+          CSR_MEDELEG: csr_medeleg <= sanitize_medeleg(csr_write_val);
+          CSR_MIDELEG: csr_mideleg <= sanitize_mideleg(csr_write_val);
           CSR_MCOUNTEREN: csr_mcounteren <= csr_write_val;
           CSR_MIE: csr_mie <= csr_write_val;
           CSR_MTVEC: csr_mtvec <= csr_write_val;

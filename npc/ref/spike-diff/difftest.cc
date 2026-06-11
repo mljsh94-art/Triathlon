@@ -8,6 +8,7 @@
 #include "trap.h"
 
 #include <cassert>
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -42,6 +43,7 @@ static debug_module_config_t difftest_dm_config = {
 static sim_t *s = nullptr;
 static processor_t *p = nullptr;
 static state_t *state = nullptr;
+static mem_t *pmem = nullptr;
 
 static void diff_get_regs(void *buf) {
   auto *ctx = static_cast<npc::DUTCoreState *>(buf);
@@ -70,7 +72,7 @@ static void diff_get_regs(void *buf) {
 static void diff_set_regs(void *buf) {
   auto *ctx = static_cast<npc::DUTCoreState *>(buf);
   for (int i = 0; i < 32; i++) {
-    state->XPR.write(i, static_cast<reg_t>(ctx->gpr[i]));
+    state->XPR.write(i, static_cast<reg_t>(static_cast<int32_t>(ctx->gpr[i])));
   }
   state->pc = ctx->pc;
   p->set_privilege(ctx->priv);
@@ -92,11 +94,18 @@ static void diff_set_regs(void *buf) {
 }
 
 static void diff_memcpy(reg_t dest, void *src, size_t n) {
-  mmu_t *mmu = p->get_mmu();
   auto *bytes = static_cast<uint8_t *>(src);
-  for (size_t i = 0; i < n; i++) {
-    mmu->store_uint8(dest + i, bytes[i]);
+  if (dest < kPmemBase || dest >= (kPmemBase + kPmemSize)) {
+    return;
   }
+
+  size_t max_n = static_cast<size_t>((kPmemBase + kPmemSize) - dest);
+  size_t copy_n = std::min(n, max_n);
+  if (copy_n == 0) {
+    return;
+  }
+
+  pmem->store(dest - kPmemBase, copy_n, bytes);
 }
 
 }  // namespace
@@ -107,7 +116,8 @@ __EXPORT void difftest_init(int /*port*/) {
   }
 
   difftest_htif_args.push_back("");
-  difftest_mem.emplace_back(kPmemBase, new mem_t(kPmemSize));
+  pmem = new mem_t(kPmemSize);
+  difftest_mem.emplace_back(kPmemBase, pmem);
 
   s = new sim_t("RV32IMAC", "MSU", DEFAULT_VARCH, 1, false, false, 0, 0, nullptr,
                 reg_t(-1), difftest_mem, difftest_plugin_devices, difftest_htif_args,

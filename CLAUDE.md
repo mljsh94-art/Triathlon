@@ -1,12 +1,7 @@
 ---
-description:
-alwaysApply: true
----
 
----
-description:
-alwaysApply: false
----
+## description:
+alwaysApply: true
 
 # Triathlon - Out-of-Order RISC-V CPU
 
@@ -88,7 +83,7 @@ Triathlon/
 ├── npc/csrc/                        # Verilator 仿真 C++ 宿主
 │   ├── npc_main.cpp                 # 仿真主循环骨架（tick/commit/difftest）
 │   ├── include/                     # args、memory_models、sim_observer、difftest_arch.h 等
-│   └── lib/                         # args_parser、difftest、profile_collector_*、sim_observer、sim_trap_exit
+│   └── lib/                         # args_parser、difftest_client、profile_collector_*、sim_observer、sim_trap_exit
 ├── npc/csrc/test/                   # C++ unit drivers for targeted Verilator testbenches
 ├── npc/ref/                         # Spike DiffTest 参考库（`make -C npc/ref` → `riscv32-spike-difftest.so`）
 │   ├── spike-diff/difftest.cc       # Spike rv32imac MSU Sv32 封装（difftest_* API）
@@ -191,7 +186,7 @@ Frontend→Backend 交界 = **ibuffer 出队口**（`fe_be_bundle_t`）：每拍
   - **Load Queue (LQ) & Store Queue (SQ)**: Tracks in-flight memory operations for OOO execution, memory disambiguation, and load-store forwarding.
   - **Memory Dependence Predictor (MDP)**: Predicts memory aliasing to prevent load-store ordering violations.
   - Supports RV32A word atomic operations (`LR.W`/`SC.W`, `AMOSWAP.W`, `AMOADD.W`, `AMOXOR.W`, `AMOAND.W`, `AMOOR.W`, `AMOMIN.W`, `AMOMAX.W`, `AMOMINU.W`, `AMOMAXU.W`) through a conservative LSU read-modify-write sequence.
-- **CSR** (`csr.sv`): CSR read/modify/write and exception/interrupt handling. Single-issue, ROB-head ordered. CSR/system exceptions are reported to the ROB first, then applied through the commit-time trap injection path so trap CSRs and `mstatus.MPP`/`SPP` are updated precisely once. External platform interrupts support both machine and supervisor delivery; the Linux device-tree PLIC context drives `SEIP` through `sip/mip`, `sie.SEIE`, `sstatus.SIE`, and `mideleg.SEIP`, allowing S-mode UART/PLIC interrupt handlers to run. `cycle`/`time`/`instret` and their high-half aliases return monotonic counter values for OpenSBI/Linux delay and probe paths. `satp` exposes SV32 mode and PPN fields with ASIDLEN=0; ASID bits are WARL-masked to zero because the current TLB is not ASID-tagged.
+- **CSR** (`csr.sv`): CSR read/modify/write and exception/interrupt handling. Single-issue, ROB-head ordered. CSR/system exceptions are reported to the ROB first, then applied through the commit-time trap injection path so trap CSRs and `mstatus.MPP`/`SPP` are updated precisely once. External platform interrupts support both machine and supervisor delivery; the Linux device-tree PLIC context drives `SEIP` through `sip/mip`, `sie.SEIE`, `sstatus.SIE`, and `mideleg.SEIP`, allowing S-mode UART/PLIC interrupt handlers to run. `sie` is implemented as the supervisor delegated view of `mie` (`mie & mideleg`), so S-mode interrupt-enable writes update the underlying machine interrupt-enable bits for delegated sources. `medeleg`/`mideleg` writes are WARL-masked to the Spike/RISC-V delegable exception/interrupt bits. `cycle`/`time`/`instret` and their high-half aliases return monotonic counter values for OpenSBI/Linux delay and probe paths. `satp` exposes SV32 mode and PPN fields with ASIDLEN=0; ASID bits are WARL-masked to zero because the current TLB is not ASID-tagged.
 
 #### Writeback & CDB
 
@@ -273,25 +268,25 @@ Frontend→Backend 交界 = **ibuffer 出队口**（`fe_be_bundle_t`）：每拍
 可以在命令行中通过 `VAR=value` 的形式传入以下变量控制构建和运行：
 
 
-| 变量名 (Variable)         | 默认值                                           | 作用说明                                                                                     |
-| ---------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `TOPNAME`              | `tb_triathlon`                                | 指定仿真的顶层模块名（对应 `vsrc/` 目录下的 `.sv` 文件）。                                                    |
-| `IMG`                  | *(空)*                                         | 待运行的程序镜像路径（例如编译好的 RISC-V 测试 bin/elf 文件）。                                                 |
-| `ARGS`                 | *(空)*                                         | 传给仿真器的扩展参数，详见 **§4**。                                                                    |
+| 变量名 (Variable)         | 默认值                                         | 作用说明                                                                                                              |
+| ---------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `TOPNAME`              | `tb_triathlon`                              | 指定仿真的顶层模块名（对应 `vsrc/` 目录下的 `.sv` 文件）。                                                                             |
+| `IMG`                  | *(空)*                                       | 待运行的程序镜像路径（例如编译好的 RISC-V 测试 bin/elf 文件）。                                                                          |
+| `ARGS`                 | *(空)*                                       | 传给仿真器的扩展参数，详见 **§4**。                                                                                             |
 | `DIFFTEST_SO`          | `$(NPC_HOME)/ref/riscv32-spike-difftest.so` | DiffTest 动态链接库（Spike rv32imac Sv32 参考模型）；`DIFFTEST=` 或库不存在时禁用。构建：`make -C npc/ref`；`make sim` 会自动加入 Spike 运行时库路径。 |
-| `VL_THREADS`           | `2`                                           | Verilator 多线程仿真线程数；当前设计在 Verilator 5.008 下 4 线程会出现 `UNOPTTHREADS`，需要时可手动调整。              |
-| `VL_JOBS`              | `$(nproc)`                                    | Verilator/host C++ 并行编译任务数。                                                              |
-| `VL_OPTFLAGS`          | `-O3 -march=native -fno-plt`                  | 传给 Verilator generated make 的 `OPT_FAST` / `OPT_SLOW` / `OPT_GLOBAL` 与 host C++ 的默认优化参数。 |
-| `VL_OPTLEVEL`          | `-O3`                                         | 通过 Verilator `-MAKEFLAGS` 覆盖 generated make 的默认 `-Os`，确保 generated C++ 以 `-O3` 编译。       |
-| `DEBUG`                | `0`                                           | 设为 `1` 时使用 `-O0 -g` 编译 host 仿真器，默认使用 `-O3 -march=native`。                                |
-| `BENCH_IMG`            | `$(IMG)`                                      | `bench` 目标运行的镜像路径。                                                                       |
-| `BENCH_ARGS`           | `--max-cycles=10000000 --progress=0`          | `bench` 目标传给仿真器的参数。                                                                      |
-| `ARCH`                 | `riscv32i-npc`                                | `profile-report` 编译 AM benchmark 的架构标签。                                                  |
-| `CROSS_COMPILE`        | `riscv64-unknown-elf-`                        | AM benchmark 交叉编译前缀（WSL 常见安装名；勿与 OpenSBI 的 `riscv64-linux-gnu-` 混用）。                     |
-| `PROFILE_OUT_DIR`      | *(空，自动时间戳)*                                   | `profile-report` 输出目录；从仓库根写 `npc/build/profile/<run_id>`。                                |
-| `PROFILE_TAG`          | `latest`                                      | `profile-task` 写入 `npc/build/profile/<PROFILE_TAG>/`。                                    |
-| `PROFILE_DISPLAY_NAME` | *(空，用目录名)*                                    | 看板/图表显示名，写入 `metadata.json` 的 `display_name`。                                            |
-| `PROFILE_ROOT`         | `npc/build/profile`                           | `profile-index` / `profile-dashboard` 扫描根目录。                                             |
+| `VL_THREADS`           | `2`                                         | Verilator 多线程仿真线程数；当前设计在 Verilator 5.008 下 4 线程会出现 `UNOPTTHREADS`，需要时可手动调整。                                       |
+| `VL_JOBS`              | `$(nproc)`                                  | Verilator/host C++ 并行编译任务数。                                                                                       |
+| `VL_OPTFLAGS`          | `-O3 -march=native -fno-plt`                | 传给 Verilator generated make 的 `OPT_FAST` / `OPT_SLOW` / `OPT_GLOBAL` 与 host C++ 的默认优化参数。                          |
+| `VL_OPTLEVEL`          | `-O3`                                       | 通过 Verilator `-MAKEFLAGS` 覆盖 generated make 的默认 `-Os`，确保 generated C++ 以 `-O3` 编译。                                |
+| `DEBUG`                | `0`                                         | 设为 `1` 时使用 `-O0 -g` 编译 host 仿真器，默认使用 `-O3 -march=native`。                                                         |
+| `BENCH_IMG`            | `$(IMG)`                                    | `bench` 目标运行的镜像路径。                                                                                                |
+| `BENCH_ARGS`           | `--max-cycles=10000000 --progress=0`        | `bench` 目标传给仿真器的参数。                                                                                               |
+| `ARCH`                 | `riscv32i-npc`                              | `profile-report` 编译 AM benchmark 的架构标签。                                                                           |
+| `CROSS_COMPILE`        | `riscv64-unknown-elf-`                      | AM benchmark 交叉编译前缀（WSL 常见安装名；勿与 OpenSBI 的 `riscv64-linux-gnu-` 混用）。                                              |
+| `PROFILE_OUT_DIR`      | *(空，自动时间戳)*                                 | `profile-report` 输出目录；从仓库根写 `npc/build/profile/<run_id>`。                                                         |
+| `PROFILE_TAG`          | `latest`                                    | `profile-task` 写入 `npc/build/profile/<PROFILE_TAG>/`。                                                             |
+| `PROFILE_DISPLAY_NAME` | *(空，用目录名)*                                  | 看板/图表显示名，写入 `metadata.json` 的 `display_name`。                                                                     |
+| `PROFILE_ROOT`         | `npc/build/profile`                         | `profile-index` / `profile-dashboard` 扫描根目录。                                                                      |
 
 
 ### 3. 典型使用示例
@@ -402,35 +397,110 @@ make -C npc sim DIFFTEST= IMG=/path/to/fw_combined.bin ARGS='--linux-early-debug
 
 Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`，当库文件存在且未设 `DIFFTEST=`）→ `IMG`（ positional，镜像路径）。Positional 参数 `<IMG>` 为**必需**。
 
-Spike DiffTest 在裸机路径按 ROB 退休点 lockstep：每条提交前检查 Spike PC 与 DUT 退休 PC，一步执行后比对 `DUTCoreState`（`gpr[32]`、执行后 PC、`priv`、`mstatus/sstatus`、`mepc/sepc`、`mcause/scause`、`mtval/stval`、`mtvec/stvec`、`mie/mip`、`medeleg/mideleg`、`satp`）。成功路径无 per-commit 日志；失败时打印 `[difftest] mismatch cycle=... pc=... inst=... field=...`，并输出完整 DUT/REF 架构状态对比（不一致字段以 `*` 标记）。
+#### Spike DiffTest 协同仿真
+
+Triathlon 使用 Spike `rv32imac` / MSU / Sv32 作为 lockstep 参考模型。共享库 `npc/ref/riscv32-spike-difftest.so` 由 `make -C npc/ref` 构建；`make sim` 自动将 `npc/ref` 与 Spike build 目录加入 `LD_LIBRARY_PATH`。详见 `npc/ref/README.md`。
+
+**源码分工**
+
+
+| 路径                                                                        | 作用                                                        |
+| ------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `npc/csrc/include/difftest_arch.h`                                        | `DUTCoreState` 布局（与 Spike `difftest_regcpy` 字段序一致）        |
+| `npc/csrc/include/difftest_client.h` / `npc/csrc/lib/difftest_client.cpp` | `dlopen` Spike `.so`，retire 点 lockstep、`step_and_check()` |
+| `npc/csrc/npc_main.cpp`                                                   | 每条 commit 采集 `dbg_csr_`*、store commit、trap 信号并调用 DiffTest |
+| `npc/vsrc/test/tb_triathlon.sv`                                           | 导出 CSR/store/trap 探针供 C++ 采集                              |
+| `npc/ref/spike-diff/difftest.cc`                                          | Spike 封装：`difftest_init/memcpy/regcpy/exec/raise_intr`    |
+
+
+`**DUTCoreState` 比对字段**（`npc/csrc/include/difftest_arch.h`）
+
+
+| 字段组   | 字段                                                                                           |
+| ----- | -------------------------------------------------------------------------------------------- |
+| 核心    | `gpr[32]`, `pc`                                                                              |
+| 特权    | `priv`（0=U, 1=S, 3=M）                                                                        |
+| Trap  | `mstatus`, `sstatus`, `mepc`, `sepc`, `mcause`, `scause`, `mtval`, `stval`, `mtvec`, `stvec` |
+| 中断/委托 | `mie`, `mip`, `medeleg`, `mideleg`                                                           |
+| MMU   | `satp`                                                                                       |
+
+
+`sstatus` 取自 RTL `csr_sstatus_view`（`dbg_csr_sstatus_o`）。其余 CSR 由 `tb_triathlon` 的 `dbg_csr_*_o` 探针在每条 commit 后填入。
+
+**Lockstep 流程**（`difftest_client.cpp::step_and_check()`，按 ROB 退休槽逐条执行）
+
+1. `regcpy(FROM_REF)` 取 ref 执行前状态；若 `ref.pc != dut_retire_pc` 则报 `pc_before` mismatch；当 DUT 进入 M-mode trap（`ref.pc == dut.mepc`、`dut_retire_pc == mtvec.base`），或 S-mode trap（`ref.pc == dut.sepc`、`dut_retire_pc == stvec.base`）时，先用 DUT trap-entry 状态覆盖 ref，再执行 trap handler 首条退休指令。
+2. 判定是否 **跳过 Spike 执行**（见下表）。
+3. 未跳过时 `difftest_exec(1)` 单步 Spike。
+4. 跳过时：`ref_after = dut_after`，`regcpy(TO_REF)` 用 DUT 全架构状态覆盖参考模型。
+5. 未跳过且本槽为 DRAM store commit：按 Store Buffer `op` 计算字节数与 lane 对齐 payload，调用 `difftest_memcpy(TO_REF)` 增量写入 Spike 物理内存 backing store（`npc/ref/spike-diff/difftest.cc` 经 `pmem->store()`；仅 `kPmemBase`–`kPmemBase+kPmemSize` 窗口生效，MMIO 地址静默忽略以免 Spike trap）。Spike wrapper 的 `regcpy(TO_REF)` 对 RV32 GPR 做 32-bit 符号扩展后写入 Spike 内部 `reg_t`，避免高位差异影响分支比较。`mip` 由 C++ CLINT/PLIC 模型经 `timer_irq_i`/`ext_irq_i` 驱动 RTL 组合视图，每拍 commit 比对前将 DUT `mip` 同步到 Spike，避免参考模型未建模平台中断线导致 `MTIP/SEIP` 漂移。
+6. `check_arch_state()` 逐项比对 `DUTCoreState`；MMIO load 的 `rd` 寄存器在比对时忽略（值由 DUT 驱动 ref）。
+
+**非确定性路径（DUT 驱动 ref）**
+
+Spike 未建模 Triathlon C++ 平台外设、仿真计数器，以及 RTL 当前仅按 probe-zero 处理的 CSR，下列指令/事件 **不执行** `difftest_exec`，改由 DUT 退休态覆盖 ref：
+
+
+| 条件              | 检测方式                                                                                                      |
+| --------------- | --------------------------------------------------------------------------------------------------------- |
+| CSR trap / 中断注入 | `dbg_csr_irq_trap_o` → `trap_sync`（全状态 `regcpy(TO_REF)`，主路径未用 `difftest_raise_intr`）                      |
+| MMIO load       | `decode_mmio_load_rd()`：load 目标地址按 RTL PMA 判为 MMIO（DRAM 窗口 `0x80000000`–`0x87FFFFFF` 外；含 bootrom、CLINT、PLIC、VirtIO、UART、RTC 及未建模设备探测地址） |
+| MMIO store      | 指令解码或 store commit 地址按 RTL PMA 判为 MMIO                                                                  |
+| DUT 覆盖 CSR       | `is_dut_override_csr_inst()`：`cycle`/`time`/`instret` 及 high-half；PMP `0x3A0`–`0x3EF`；machine ID `0xF11`–`0xF14`；`tselect`/`mconfigptr`/`menvcfg`/`menvcfgh` |
+| A 扩展临时覆盖      | `is_atomic_mem_inst()`：Linux 全系统 `satp!=0` 后 U/S 模式下的 RV32A `.W` LR/SC/AMO 指令跳过 Spike 执行；DUT 退休态覆盖 ref，若有 Store Buffer commit 则仍同步 DUT 写回数据到 Spike 内存。该路径不代表 A 扩展语义已完成严格 DiffTest 验收 |
+| Linux 取指真值覆盖 | 全系统 Sv32 下若 C++ 按当前 `satp` 从宿主内存翻译并拼出的非 RVC 退休指令与 ROB 导出的 `decoded_inst` 不一致（典型为页边界半字起始指令，Spike 会从参考内存重新取指），DiffTest 跳过 Spike 执行并用 DUT 退休态覆盖 ref |
+| Trap entry 覆盖 | M-mode trap（含 SBI ecall、未建模 CSR illegal trap）或 S-mode trap（含 instruction/load/store page fault 等）时，在 trap handler 首条退休指令前按 `mepc`/`mtvec` 或 `sepc`/`stvec` 严格匹配并全状态覆盖 ref |
+
+
+**RTL 探针**（`tb_triathlon.sv`）
+
+- CSR：`dbg_csr_mie/mip/medeleg/mideleg_o` 等（接线 `dut.u_backend.u_csr`）。
+- Store commit：`commit_is_store_o`、`commit_sb_id_o`、`commit_store_valid/addr/data/op_o`（从 Store Buffer `mem[]` 组合读出）。
+- Trap：`dbg_csr_irq_trap_o`、`dbg_csr_irq_redirect_pc_o`（`csr_irq_trap` / `csr_irq_trap_redirect_pc`）。
+
+**失败输出**
+
+成功路径无 per-commit 日志。失败时打印 `[difftest] mismatch cycle=... pc=... inst=... field=...`，并 dump 完整 DUT/REF 架构状态对比（不一致字段以 `*` 标记）。Spike 侧 smoke：`make -C npc/ref check`；架构 dump 演示：`make -C npc/ref demo-mismatch`。
+
+**能力边界与验证门禁**
+
+
+| 阶段      | 范围                                      | 验证命令                                                                                                                                                                            |
+| ------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 1 | 裸机全架构状态 lockstep                        | `cd am-kernels/tests/cpu-tests && make ARCH=riscv32im-npc run`                                                                                                                  |
+| Phase 2 | DRAM store 增量同步 + MMIO/计数器/trap DUT 覆盖  | `make -C am-kernels/benchmarks/dhrystone ARCH=riscv32im-npc run`；`make -C am-kernels/benchmarks/coremark ARCH=riscv32im-npc run`；`TOPNAME=tb_plic` / `tb_timer_interrupt` 单元 TB |
+| Phase 3 | Linux 全系统（`satp`、页故障、OpenSBI handoff 等） | **未验收**；`fw_combined.bin` 仿真仍建议 `DIFFTEST=` 禁用                                                                                                                                  |
+
+
+性能 profile 采集（`profile-report`）默认 `DIFFTEST=` 禁用协同仿真，避免 Spike 拖慢 benchmark。
 
 #### 参数一览
 
 周期级 trace（`--commit-trace`、`--bru-trace` 等）与仿真结束 profile 汇总（`--profile`）**相互独立**，可任意组合。
 
 
-| 参数                                              | 默认值                             | 说明                                                                                                          |
-| ----------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `<IMG>`                                         | —                               | 待加载二进制镜像路径（positional，必需）                                                                                   |
-| `--max-cycles N` / `--max-cycles=N`             | `600000000`                     | 最大仿真周期；超出后打印 `TIMEOUT after N cycles` 并以退出码 1 结束                                                            |
+| 参数                                              | 默认值                             | 说明                                                                                                                                                     |
+| ----------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `<IMG>`                                         | —                               | 待加载二进制镜像路径（positional，必需）                                                                                                                              |
+| `--max-cycles N` / `--max-cycles=N`             | `600000000`                     | 最大仿真周期；超出后打印 `TIMEOUT after N cycles` 并以退出码 1 结束                                                                                                       |
 | `-d REF_SO` / `--difftest=REF_SO`               | Makefile 自动注入                   | Spike DiffTest 共享库（`npc/ref/riscv32-spike-difftest.so`）；`DIFFTEST_SO=` 或 `DIFFTEST=` 可禁用；`make sim` 自动设置 `npc/ref` 与 Spike build 目录到 `LD_LIBRARY_PATH` |
-| `--progress [N]` / `--progress=N`               | 禁用；仅 `--progress` 时 `N=1000000` | 每 `N` 周期打印轻量 `[progress]` 心跳（cycles、commits、IPC、last_pc 等）                                                  |
-| `--progress-verbose`                            | 禁用                              | 将 `[progress]` 扩展为详细快照（ROB、Store Buffer、LSU、DCache MSHR 等）；`--linux-early-debug` 也会启用详细进度输出。                |
-| `--trace [path]` / `--trace=path`               | 默认 `npc.vcd`                    | 生成 VCD 波形；需编译时定义 `VM_TRACE`，否则忽略并打印 `[warn]`                                                                |
-| `--profile`                                     | 禁用                              | 仿真结束时 stdout 输出 `ProfileCollector` 文本汇总（`[commitm]`/`[stallm]`/`[pred ]` 等）                                 |
-| `--profile-json <path>` / `--profile-json=path` | 禁用                              | 仿真结束时写出单 benchmark JSON；自动启用 profile 统计（无需同时传 `--profile`）                                                  |
-| `--commit-trace [窗口]`                           | 禁用                              | 周期级 commit/LSU/store trace（`[commit]`/`[stwb]`/`[ldreq]`/`[ldrsp]`，见「输出 Tag」）                               |
-| `--commit-trace=START:END`                      | —                               | 等价于 `--commit-trace START:END`                                                                              |
-| `--commit-trace-start N`                        | `0`                             | 与 `--commit-trace` 配合：trace 起始 cycle（含）                                                                     |
-| `--commit-trace-end N`                          | `0`（无上限）                        | 与 `--commit-trace` 配合：trace 结束 cycle（含）；`0` 表示不设上限                                                          |
-| `--bru-trace`                                   | 禁用                              | 周期级 BRU/flush trace（`[bruwb]`、`[flush]`/`[flushp]`/`[bru]`，**无** cycle 窗口限制）                                |
-| `--fe-trace`                                    | 禁用                              | 取指校验：前端 bundle 与内存指令不一致，或 slot_valid 不完整时打印 `[fe]`                                                          |
-| `--stall-trace [N]` / `--stall-trace=N`         | 禁用；`N=200`                      | 连续 `N` 周期无 commit 时打印 `[stall]`，之后每再 stall `N` 周期重复打印                                                       |
-| `--boot-handoff`                                | 禁用                              | Boot ROM handoff 启动链（见下文）                                                                                   |
-| `--dtb <path>` / `--dtb=path`                   | 内置最小 FDT                        | `--boot-handoff` 下加载外部 DTB；省略则在 `0x83F00000` 写入占位 FDT                                                       |
-| `--firmware-load-base <addr>` / `=addr`         | `0x80020000`（OpenSBI 区）         | `--boot-handoff` 下固件加载基址；须 **4MiB 对齐**（RV32 Linux `setup_vm()` 要求），推荐 `0x80400000`；不得与复位 PC `0x80000000` 重叠 |
-| `--virtio-blk-image <path>` / `=path`           | 无                               | VirtIO block 后端磁盘镜像                                                                                         |
-| `--linux-early-debug`                           | 禁用                              | Linux/OpenSBI 早期启动调试：一次性 `[linux-stage]` 里程碑 + 条件 `[debug][...]` 细粒度日志                                      |
+| `--progress [N]` / `--progress=N`               | 禁用；仅 `--progress` 时 `N=1000000` | 每 `N` 周期打印轻量 `[progress]` 心跳（cycles、commits、IPC、last_pc 等）                                                                                             |
+| `--progress-verbose`                            | 禁用                              | 将 `[progress]` 扩展为详细快照（ROB、Store Buffer、LSU、DCache MSHR 等）；`--linux-early-debug` 也会启用详细进度输出。                                                           |
+| `--trace [path]` / `--trace=path`               | 默认 `npc.vcd`                    | 生成 VCD 波形；需编译时定义 `VM_TRACE`，否则忽略并打印 `[warn]`                                                                                                           |
+| `--profile`                                     | 禁用                              | 仿真结束时 stdout 输出 `ProfileCollector` 文本汇总（`[commitm]`/`[stallm]`/`[pred ]` 等）                                                                            |
+| `--profile-json <path>` / `--profile-json=path` | 禁用                              | 仿真结束时写出单 benchmark JSON；自动启用 profile 统计（无需同时传 `--profile`）                                                                                             |
+| `--commit-trace [窗口]`                           | 禁用                              | 周期级 commit/LSU/store trace（`[commit]`/`[stwb]`/`[ldreq]`/`[ldrsp]`，见「输出 Tag」）                                                                          |
+| `--commit-trace=START:END`                      | —                               | 等价于 `--commit-trace START:END`                                                                                                                         |
+| `--commit-trace-start N`                        | `0`                             | 与 `--commit-trace` 配合：trace 起始 cycle（含）                                                                                                                |
+| `--commit-trace-end N`                          | `0`（无上限）                        | 与 `--commit-trace` 配合：trace 结束 cycle（含）；`0` 表示不设上限                                                                                                     |
+| `--bru-trace`                                   | 禁用                              | 周期级 BRU/flush trace（`[bruwb]`、`[flush]`/`[flushp]`/`[bru]`，**无** cycle 窗口限制）                                                                           |
+| `--fe-trace`                                    | 禁用                              | 取指校验：前端 bundle 与内存指令不一致，或 slot_valid 不完整时打印 `[fe]`                                                                                                     |
+| `--stall-trace [N]` / `--stall-trace=N`         | 禁用；`N=200`                      | 连续 `N` 周期无 commit 时打印 `[stall]`，之后每再 stall `N` 周期重复打印                                                                                                  |
+| `--boot-handoff`                                | 禁用                              | Boot ROM handoff 启动链（见下文）                                                                                                                              |
+| `--dtb <path>` / `--dtb=path`                   | 内置最小 FDT                        | `--boot-handoff` 下加载外部 DTB；省略则在 `0x83F00000` 写入占位 FDT                                                                                                  |
+| `--firmware-load-base <addr>` / `=addr`         | `0x80020000`（OpenSBI 区）         | `--boot-handoff` 下固件加载基址；须 **4MiB 对齐**（RV32 Linux `setup_vm()` 要求），推荐 `0x80400000`；不得与复位 PC `0x80000000` 重叠                                            |
+| `--virtio-blk-image <path>` / `=path`           | 无                               | VirtIO block 后端磁盘镜像                                                                                                                                    |
+| `--linux-early-debug`                           | 禁用                              | Linux/OpenSBI 早期启动调试：一次性 `[linux-stage]` 里程碑 + 条件 `[debug][...]` 细粒度日志                                                                                 |
 
 
 #### `--commit-trace` 窗口语法
@@ -795,7 +865,7 @@ make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
   - 输出 `fw_combined.bin`（布局见上表）
 4. **启动 Verilator 仿真 (`make -C npc sim ...`)**
   - `**IMG=...`**: 加载 `fw_combined.bin` 到 `0x80000000`
-  - `**DIFFTEST_SO=`**: 置空以禁用 DiffTest（Linux 全系统路径默认仍建议禁用直至 Phase 3 验收完成）
+  - `**DIFFTEST=`**: 置空以禁用 DiffTest（Phase 3 未验收；详见 §5「Spike DiffTest 协同仿真」）
   - 仿真扩展参数见 **§4 仿真器命令行扩展参数**（常用：`--max-cycles`、`--progress`、`--linux-early-debug`、`--commit-trace` 等）
 
 #### echo_payload（可选，独立测试）
@@ -804,4 +874,4 @@ make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
 
 ---
 
-Simulator: Verilator 5.008 + GTKWave. Target: RISC-V 32-bit (riscv32i-npc).
+Simulator: Verilator 5.008 + GTKWave. Target: RISC-V 32-bit (riscv32im-npc).

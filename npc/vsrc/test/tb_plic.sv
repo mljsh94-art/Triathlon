@@ -1,4 +1,5 @@
 import config_pkg::*;
+import decode_pkg::*;
 import global_config_pkg::*;
 
 module tb_plic #(
@@ -38,6 +39,13 @@ module tb_plic #(
     output logic [             Cfg.PLEN-1:0] dcache_wb_req_paddr_o,
     output logic [Cfg.DCACHE_LINE_WIDTH-1:0] dcache_wb_req_data_o,
 
+    output logic                               mmio_req_valid_o,
+    input  logic                               mmio_req_ready_i,
+    output logic [             Cfg.PLEN-1:0]   mmio_req_addr_o,
+    output logic [$bits(decode_pkg::lsu_op_e)-1:0] mmio_req_op_o,
+    input  logic                               mmio_rsp_valid_i,
+    input  logic [           Cfg.XLEN-1:0]     mmio_rsp_data_i,
+
     output logic [Cfg.XLEN-1:0] dbg_csr_mtvec_o,
     output logic [Cfg.XLEN-1:0] dbg_csr_mepc_o,
     output logic [Cfg.XLEN-1:0] dbg_csr_mstatus_o,
@@ -61,7 +69,12 @@ module tb_plic #(
     output logic [Cfg.PLEN-1:0] dbg_rob_flush_pc_o,
     output logic [4:0]          dbg_rob_flush_cause_o,
     output logic                dbg_rob_flush_is_exception_o,
-    output logic [Cfg.PLEN-1:0] dbg_rob_flush_src_pc_o
+    output logic [Cfg.PLEN-1:0] dbg_rob_flush_src_pc_o,
+    output logic                dbg_sb_dcache_req_valid_o,
+    output logic                dbg_sb_dcache_req_ready_o,
+    output logic [Cfg.PLEN-1:0] dbg_sb_dcache_req_addr_o,
+    output logic [Cfg.XLEN-1:0] dbg_sb_dcache_req_data_o,
+    output logic [$bits(decode_pkg::lsu_op_e)-1:0] dbg_sb_dcache_req_op_o
 );
 
   triathlon #(
@@ -99,7 +112,14 @@ module tb_plic #(
       .dcache_wb_req_valid_o,
       .dcache_wb_req_ready_i,
       .dcache_wb_req_paddr_o,
-      .dcache_wb_req_data_o
+      .dcache_wb_req_data_o,
+
+      .mmio_req_valid_o,
+      .mmio_req_ready_i,
+      .mmio_req_addr_o,
+      .mmio_req_op_o,
+      .mmio_rsp_valid_i,
+      .mmio_rsp_data_i
   );
 
   assign dbg_csr_mtvec_o = dut.u_backend.u_csr.csr_mtvec;
@@ -127,5 +147,10 @@ module tb_plic #(
   assign dbg_rob_flush_cause_o = dut.u_backend.rob_flush_cause;
   assign dbg_rob_flush_is_exception_o = dut.u_backend.rob_flush_is_exception;
   assign dbg_rob_flush_src_pc_o = dut.u_backend.rob_flush_src_pc;
+  assign dbg_sb_dcache_req_valid_o = dut.u_backend.sb_dcache_req_valid;
+  assign dbg_sb_dcache_req_ready_o = dut.u_backend.sb_dcache_req_ready;
+  assign dbg_sb_dcache_req_addr_o  = dut.u_backend.sb_dcache_req_addr;
+  assign dbg_sb_dcache_req_data_o  = dut.u_backend.sb_dcache_req_data;
+  assign dbg_sb_dcache_req_op_o    = dut.u_backend.sb_dcache_req_op;
 
 endmodule
