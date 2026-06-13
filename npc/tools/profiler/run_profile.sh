@@ -5,7 +5,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 NPC_HOME=$(cd "${SCRIPT_DIR}/../.." && pwd)
 TRIATHLON_HOME=$(cd "${NPC_HOME}/.." && pwd)
 
-: "${ARCH:=riscv32i-npc}"
+ARCH=riscv32im-npc
 : "${CROSS_COMPILE:=riscv64-unknown-elf-}"
 
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)

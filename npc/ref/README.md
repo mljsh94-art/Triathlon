@@ -7,7 +7,6 @@ Spike `rv32imac` / MSU / Sv32 lockstep reference for Triathlon DiffTest.
 ```bash
 make -C npc/ref              # or: ./build_spike_diff.sh
 make -C npc/ref check        # smoke test
-make -C npc spike-ref        # same from npc/
 ```
 
 **Output:** `npc/ref/riscv32-spike-difftest.so`（strip 后约 **4–5 MiB**；未 strip 时因 Spike 静态库携带 debug info 可达 ~100 MiB，属正常现象）

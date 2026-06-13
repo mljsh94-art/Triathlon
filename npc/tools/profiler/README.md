@@ -4,7 +4,7 @@
 
 ```bash
 make -C npc profile-report
-# 默认 ARCH=riscv32i-npc、CROSS_COMPILE=riscv64-unknown-elf-
+# 默认 CROSS_COMPILE=riscv64-unknown-elf-；AM 架构固定 riscv32im-npc
 ```
 
 Default output directory:
@@ -77,13 +77,7 @@ Thresholds:
 - key stall share rise (`frontend_empty`, `lsu_req_blocked`, `rob_backpressure`):
   `>5pp` warn, `>8pp` fail
 
-Convenience gate script:
-
-```bash
-npc/scripts/check_perf_regression.sh \
-  npc/profile/baseline \
-  npc/profile/latest
-```
+Regression compare: diff `summary.json` between baseline and latest run dirs, or use `make -C npc profile-dashboard`.
 
 ## Single benchmark JSON (manual)
 

@@ -65,12 +65,12 @@ if ! grep -q 'finalize_run.py' "${PY_LOG}"; then
   exit 1
 fi
 
-if ! grep -q 'benchmarks/dhrystone.*ARCH=riscv32i-npc.*CROSS_COMPILE=riscv64-unknown-elf-.* image' "${MAKE_LOG}"; then
+if ! grep -q 'benchmarks/dhrystone.*ARCH=riscv32im-npc.*CROSS_COMPILE=riscv64-unknown-elf-.* image' "${MAKE_LOG}"; then
   echo "missing default riscv32i arch for dhrystone image" >&2
   exit 1
 fi
 
-if ! grep -q 'benchmarks/coremark.*ARCH=riscv32i-npc.*CROSS_COMPILE=riscv64-unknown-elf-.* image' "${MAKE_LOG}"; then
+if ! grep -q 'benchmarks/coremark.*ARCH=riscv32im-npc.*CROSS_COMPILE=riscv64-unknown-elf-.* image' "${MAKE_LOG}"; then
   echo "missing default riscv32i arch for coremark image" >&2
   exit 1
 fi

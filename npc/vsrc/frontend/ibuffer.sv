@@ -155,4 +155,24 @@ module ibuffer #(
     end
   end
 
+  // =========================================================
+  // Phase 4 assertions (simulation only, ASSERT=1)
+  // =========================================================
+`ifndef SYNTHESIS
+  always_comb begin
+    if (!flush_i) begin
+      `NPC_ASSERT(count_q <= IB_DEPTH, "ibuffer/count_overflow")
+      `NPC_ASSERT(count_d <= IB_DEPTH, "ibuffer/count_next_overflow")
+
+      if (ibuf_valid_o) begin
+        for (int i = 1; i < DECODE_WIDTH; i++) begin
+          if ((CNT_W'(i) < out_count_w) && ibuf_slot_valid_o[i]) begin
+            `NPC_ASSERT(ibuf_slot_valid_o[i-1], "ibuffer/slot_valid_not_prefix")
+          end
+        end
+      end
+    end
+  end
+`endif
+
 endmodule

@@ -327,4 +327,64 @@ module store_buffer #(
 
   end
 
+  // =======================================================
+  // Phase 3 assertions (simulation only, ASSERT=1)
+  // =======================================================
+`ifndef SYNTHESIS
+  logic sb_flush_prev_q;
+
+  always_comb begin
+    if (!flush_i) begin
+      for (int c = 0; c < COMMIT_WIDTH; c++) begin
+        if (commit_valid_i[c]) begin
+          `NPC_ASSERT(mem[commit_sb_id_i[c]].valid && !mem[commit_sb_id_i[c]].committed,
+                     "sb/commit_invalid_entry")
+        end
+      end
+
+      if (ex_valid_i) begin
+        `NPC_ASSERT(mem[ex_sb_id_i].valid, "sb/ex_to_invalid")
+      end
+
+      if (alloc_fire_i && alloc_ready_o) begin
+        for (int i0 = 0; i0 < DISPATCH_WIDTH; i0++) begin
+          for (int i1 = i0 + 1; i1 < DISPATCH_WIDTH; i1++) begin
+            if (alloc_req_i[i0] && alloc_req_i[i1] && (alloc_id_o[i0] == alloc_id_o[i1])) begin
+              $warning("[sb] duplicate alloc id %0d in same cycle", alloc_id_o[i0]);
+            end
+          end
+        end
+      end
+    end
+  end
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      sb_flush_prev_q <= 1'b0;
+    end else begin
+      if (alloc_fire_i && alloc_ready_o && (alloc_count != 0) && !flush_i) begin
+        automatic int off = 0;
+        for (int i = 0; i < DISPATCH_WIDTH; i++) begin
+          if (alloc_req_i[i]) begin
+            logic [$clog2(SB_DEPTH)-1:0] idx;
+            idx = tail_ptr + $clog2(SB_DEPTH)'(off);
+            `NPC_ASSERT(!mem[idx].valid, "sb/alloc_over_valid")
+            off++;
+          end
+        end
+      end
+
+      if (sb_flush_prev_q) begin
+        for (int i = 0; i < SB_DEPTH; i++) begin
+          if (mem[i].valid) begin
+            `NPC_ASSERT(mem[i].committed, "sb/uncommitted_valid_after_flush")
+          end
+        end
+      end
+
+      sb_flush_prev_q <= flush_i;
+    end
+  end
+`endif
+
 endmodule

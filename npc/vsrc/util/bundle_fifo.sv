@@ -110,4 +110,12 @@ module bundle_fifo #(
     else $fatal(1, "bundle_fifo DEPTH must be > 0");
   end
 
+`ifndef SYNTHESIS
+  always_comb begin
+    if (!flush_i) begin
+      `NPC_ASSERT(count_q <= DEPTH, "bundle_fifo/count_overflow")
+    end
+  end
+`endif
+
 endmodule

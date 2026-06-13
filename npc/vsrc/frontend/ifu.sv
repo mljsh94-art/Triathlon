@@ -502,7 +502,7 @@ module ifu #(
 
     end else begin
       if (rsp_capture_w && !fq_enq_ready_w) begin
-        $fatal(1, "[ifu] rsp captured while fetch queue not ready (response drop hazard)");
+        `NPC_ASSERT(fq_enq_ready_w, "ifu/fq_backpressure")
       end
       if (flush_i) begin
         fetch_epoch_q <= flush_next_epoch_w;
@@ -714,5 +714,20 @@ module ifu #(
     end
 `endif
   end
+
+  // =========================================================
+  // Phase 4 assertions (simulation only, ASSERT=1)
+  // =========================================================
+`ifndef SYNTHESIS
+  always_comb begin
+    `NPC_ASSERT(req_count_q <= REQ_DEPTH, "ifu/req_count_overflow")
+    `NPC_ASSERT(inf_count_q <= INF_DEPTH, "ifu/inf_count_overflow")
+
+    if (fault_wait_flush_q) begin
+      `NPC_ASSERT(!req_enq_fire_w, "ifu/enq_during_fault_wait")
+      `NPC_ASSERT(!req_issue_fire_w, "ifu/issue_during_fault_wait")
+    end
+  end
+`endif
 
 endmodule : ifu

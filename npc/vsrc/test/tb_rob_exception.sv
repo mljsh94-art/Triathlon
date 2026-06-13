@@ -11,6 +11,7 @@ module tb_rob_exception (
     input logic [$bits(decode_pkg::fu_e)-1:0] dispatch_fu_type_i,
     input logic [4:0] dispatch_areg_i,
     input logic dispatch_has_rd_i,
+    input logic dispatch_is_branch_i,
     input logic dispatch_is_store_i,
     input logic [1:0] dispatch_sb_id_i,
 
@@ -21,6 +22,9 @@ module tb_rob_exception (
     input logic [4:0] wb_ecause_i,
     input logic wb_is_mispred_i,
     input logic [Cfg.PLEN-1:0] wb_redirect_pc_i,
+    input logic wb_valid2_i,
+    input logic [2:0] wb_rob_index2_i,
+    input logic [Cfg.XLEN-1:0] wb_data2_i,
 
     input logic async_exception_valid_i,
     input logic [4:0] async_exception_cause_i,
@@ -30,6 +34,15 @@ module tb_rob_exception (
     input logic [(QUERY_WIDTH*$clog2(ROB_DEPTH))-1:0] query_rob_idx_i,
 
     output logic rob_ready_o,
+    output logic rob_full_o,
+    output logic commit_valid_o,
+    output logic commit_we_o,
+    output logic [4:0] commit_areg_o,
+    output logic [Cfg.XLEN-1:0] commit_wdata_o,
+    output logic [2:0] commit_rob_index_o,
+    output logic commit_is_store_o,
+    output logic [1:0] commit_sb_id_o,
+    output logic flush_is_mispred_o,
     output logic [QUERY_WIDTH-1:0] query_ready_o,
     output logic [(QUERY_WIDTH*Cfg.XLEN)-1:0] query_data_o,
     output logic sync_exception_valid_o,
@@ -45,7 +58,7 @@ module tb_rob_exception (
   localparam int unsigned ROB_DEPTH = 8;
   localparam int unsigned DISPATCH_WIDTH = 1;
   localparam int unsigned COMMIT_WIDTH = 1;
-  localparam int unsigned WB_WIDTH = 1;
+  localparam int unsigned WB_WIDTH = 2;
   localparam int unsigned QUERY_WIDTH = 2;
   localparam int unsigned SB_DEPTH = 4;
   localparam int unsigned SB_IDX_WIDTH = 2;
@@ -136,7 +149,7 @@ module tb_rob_exception (
   assign dispatch_fu_type_bus[0] = decode_pkg::fu_e'(dispatch_fu_type_i);
   assign dispatch_areg_bus[0] = dispatch_areg_i;
   assign dispatch_has_rd_bus[0] = dispatch_has_rd_i;
-  assign dispatch_is_branch_bus[0] = 1'b0;
+  assign dispatch_is_branch_bus[0] = dispatch_is_branch_i;
   assign dispatch_is_jump_bus[0] = 1'b0;
   assign dispatch_is_call_bus[0] = 1'b0;
   assign dispatch_is_ret_bus[0] = 1'b0;
@@ -153,6 +166,13 @@ module tb_rob_exception (
   assign wb_ecause_bus[0] = wb_ecause_i;
   assign wb_is_mispred_bus[0] = wb_is_mispred_i;
   assign wb_redirect_pc_bus[0] = wb_redirect_pc_i;
+  assign wb_valid_bus[1] = wb_valid2_i;
+  assign wb_rob_index_bus[1] = wb_rob_index2_i;
+  assign wb_data_bus[1] = wb_data2_i;
+  assign wb_exception_bus[1] = 1'b0;
+  assign wb_ecause_bus[1] = '0;
+  assign wb_is_mispred_bus[1] = 1'b0;
+  assign wb_redirect_pc_bus[1] = '0;
 
   assign fast_alu_valid_bus = '0;
   assign fast_alu_rob_idx_bus = '0;
@@ -167,6 +187,15 @@ module tb_rob_exception (
   assign query_rob_idx_bus = query_rob_idx_i;
 
   assign rob_ready_o = rob_ready_bus;
+  assign rob_full_o = rob_full_bus;
+  assign commit_valid_o = commit_valid_bus[0];
+  assign commit_we_o = commit_we_bus[0];
+  assign commit_areg_o = commit_areg_bus[0];
+  assign commit_wdata_o = commit_wdata_bus[0];
+  assign commit_rob_index_o = commit_rob_index_bus[0];
+  assign commit_is_store_o = commit_is_store_bus[0];
+  assign commit_sb_id_o = commit_sb_id_bus[0];
+  assign flush_is_mispred_o = flush_is_mispred_bus;
   assign query_ready_o = query_ready_bus;
   assign query_data_o = query_data_bus;
   assign sync_exception_valid_o = sync_exception_valid_bus;

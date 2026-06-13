@@ -28,10 +28,12 @@ image: image-dep
 	@echo + OBJCOPY "->" $(IMAGE_REL).bin
 	@$(OBJCOPY) -S --set-section-flags .bss=alloc,contents -O binary $(IMAGE).elf $(IMAGE).bin
 
+NPC_EXTRA ?=
+
 run: insert-arg
 	@echo "[npc.mk] AM_HOME=$(AM_HOME) NPC_HOME=$(NPC_HOME)"
-	$(MAKE) -C $(NPC_HOME) sim IMG=$(IMAGE).bin $(if $(filter undefined,$(origin NPC_DIFFTEST)),,DIFFTEST="$(NPC_DIFFTEST)")
+	$(MAKE) -C $(NPC_HOME) sim IMG=$(IMAGE).bin $(NPC_EXTRA) $(if $(filter undefined,$(origin NPC_DIFFTEST)),,DIFFTEST="$(NPC_DIFFTEST)")
 gdb: insert-arg
 	@echo "[npc.mk] AM_HOME=$(AM_HOME) NPC_HOME=$(NPC_HOME)"
-	$(MAKE) -C $(NPC_HOME) gdb IMG=$(IMAGE).bin $(if $(filter undefined,$(origin NPC_DIFFTEST)),,DIFFTEST="$(NPC_DIFFTEST)")
+	$(MAKE) -C $(NPC_HOME) gdb IMG=$(IMAGE).bin $(NPC_EXTRA) $(if $(filter undefined,$(origin NPC_DIFFTEST)),,DIFFTEST="$(NPC_DIFFTEST)")
 .PHONY: insert-arg

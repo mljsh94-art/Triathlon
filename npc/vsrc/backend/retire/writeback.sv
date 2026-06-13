@@ -98,4 +98,32 @@ module writeback #(
     end
   end
 
+  // =========================================================
+  // Phase 3 assertions (simulation only, ASSERT=1)
+  // =========================================================
+`ifndef SYNTHESIS
+  always_comb begin
+    for (int k0 = 0; k0 < WB_WIDTH; k0++) begin
+      for (int k1 = k0 + 1; k1 < WB_WIDTH; k1++) begin
+        if (wb_valid_o[k0] && wb_valid_o[k1]) begin
+          `NPC_ASSERT(wb_rob_idx_o[k0] != wb_rob_idx_o[k1], "wb/duplicate_tag")
+        end
+      end
+    end
+
+    for (int k = 0; k < WB_WIDTH; k++) begin
+      if (wb_valid_o[k]) begin
+        logic fu_match;
+        fu_match = 1'b0;
+        for (int i = 0; i < NUM_FUS; i++) begin
+          if (fu_valid_i[i] && fu_ready_o[i] && (fu_rob_idx_i[i] == wb_rob_idx_o[k])) begin
+            fu_match = 1'b1;
+          end
+        end
+        `NPC_ASSERT(fu_match, "wb/orphan_valid")
+      end
+    end
+  end
+`endif
+
 endmodule

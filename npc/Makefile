@@ -4,23 +4,27 @@ INC_PATH ?= vsrc vsrc/include
 NPC_HOME ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 TRIATHLON_HOME ?= $(abspath $(NPC_HOME)/..)
 
-VERILATOR = verilator
-VL_JOBS ?= $(shell nproc)
-VL_THREADS ?= 2
-VL_OPTFLAGS ?= -O3 -march=native -fno-plt
-VL_OPTLEVEL ?= -O3
-VERILATOR_CFLAGS += -MMD --build -cc \
-				-O3 -j $(VL_JOBS) --threads $(VL_THREADS) \
-				--x-assign fast --x-initial fast --noassert -sv \
-				--output-split 30000 --output-split-cfuncs 30000 \
-				-MAKEFLAGS OPT_FAST=$(VL_OPTLEVEL) \
-				-MAKEFLAGS OPT_SLOW=$(VL_OPTLEVEL) \
-				-MAKEFLAGS OPT_GLOBAL=$(VL_OPTLEVEL)
-VERILATOR_CFLAGS += --Wno-fatal --Wno-WIDTH
-
 BUILD_DIR = ./build
 OBJ_DIR = $(BUILD_DIR)/obj_dir
 BIN = $(BUILD_DIR)/$(TOPNAME)
+
+ifeq ($(ASSERT),1)
+  VL_ASSERT_FLAG := --assert
+  ASSERT_CFG := $(OBJ_DIR)/.assert_mode_1
+else
+  VL_ASSERT_FLAG := --noassert
+  ASSERT_CFG := $(OBJ_DIR)/.assert_mode_0
+endif
+
+VERILATOR = verilator
+VERILATOR_CFLAGS += -MMD --build -cc \
+				-O3 -j $(shell nproc) --threads 2 \
+				--x-assign fast --x-initial fast $(VL_ASSERT_FLAG) -sv \
+				--output-split 30000 --output-split-cfuncs 30000 \
+				-MAKEFLAGS OPT_FAST=-O3 \
+				-MAKEFLAGS OPT_SLOW=-O3 \
+				-MAKEFLAGS OPT_GLOBAL=-O3
+VERILATOR_CFLAGS += --Wno-fatal --Wno-WIDTH
 
 default: $(BIN)
 
@@ -36,6 +40,7 @@ $(shell mkdir -p $(BUILD_DIR))
 # project source
 
 PKG_VSRCS = \
+	$(abspath ./vsrc/include/sim_assert.sv) \
 	$(abspath ./vsrc/include/config_pkg.sv) \
 	$(abspath ./vsrc/include/test_config_pkg.sv) \
 	$(abspath ./vsrc/include/build_config_pkg.sv) \
@@ -80,11 +85,7 @@ IMG ?=
 ARGS ?=
 NPC_EXE := $(strip $(ARGS) $(DIFFTEST) $(IMG))
 INCFLAGS = $(addprefix -I, $(INC_PATH))
-CXX_OPTFLAGS ?= $(VL_OPTFLAGS)
-ifeq ($(DEBUG),1)
-CXX_OPTFLAGS := -O0 -g
-endif
-CXXFLAGS += $(INCFLAGS) -I$(abspath ./include) -I$(abspath ./csrc/include) -DTOP_NAME="\"V$(TOPNAME)\"" -std=c++17 $(CXX_OPTFLAGS)
+CXXFLAGS += $(INCFLAGS) -I$(abspath ./include) -I$(abspath ./csrc/include) -DTOP_NAME="\"V$(TOPNAME)\"" -std=c++17 -O3 -march=native -fno-plt
 LDFLAGS += -lreadline -ldl -pie $(LLVM_LIBS)
 
 NEED_CHECKS := $(filter-out clean clean-all help,$(MAKECMDGOALS))
@@ -104,7 +105,12 @@ else ifeq ($(MAKECMDGOALS),)
   endif
 endif
 
-$(BIN): $(VSRCS) $(CSRCS) $(NVBOARD_ARCHIVE)
+$(ASSERT_CFG):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.assert_mode_0 $(OBJ_DIR)/.assert_mode_1
+	@touch $@
+
+$(BIN): $(VSRCS) $(CSRCS) $(NVBOARD_ARCHIVE) $(ASSERT_CFG)
 # 	@rm -rf $(OBJ_DIR)
 	$(VERILATOR) $(VERILATOR_CFLAGS) \
 		--top-module $(TOPNAME) $^ \
@@ -119,14 +125,15 @@ sim: $(BIN)
 	@echo $(INCFLAGS)
 	@LD_LIBRARY_PATH="$(SPIKE_REF_LD_PATH):$$LD_LIBRARY_PATH" $^ $(NPC_EXE)
 
-gdb: $(BIN)
-	$(call git_commit, "debug RTL") # DO NOT REMOVE THIS LINE!!!
-	gdb -s $(BIN) --args $(BIN) $(NPC_EXE)
+.PHONY: profile-report profile-task profile-baseline profile-index profile-dashboard profile-clean assert-check assert-check-neg
 
-.PHONY: profile-report profile-task profile-baseline profile-index profile-dashboard profile-clean linux-smoke bench
+assert-check:
+	bash $(abspath ./scripts/test/run_assert_check.sh)
+
+assert-check-neg:
+	bash $(abspath ./scripts/test/run_assert_neg.sh)
 
 PROFILE_TOOL_DIR := $(abspath ./tools/profiler)
-ARCH ?= riscv32im-npc
 CROSS_COMPILE ?= riscv64-unknown-elf-
 PROFILE_OUT_DIR ?=
 PROFILE_ROOT ?= $(abspath ./profile)
@@ -136,21 +143,21 @@ PROFILE_TAG_DIR ?= $(abspath ./profile/$(PROFILE_TAG))
 
 profile-report:
 	@if [ -n "$(PROFILE_OUT_DIR)" ]; then \
-		OUT_DIR=$(PROFILE_OUT_DIR) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) \
+		OUT_DIR=$(PROFILE_OUT_DIR) CROSS_COMPILE=$(CROSS_COMPILE) \
 			PROFILE_DISPLAY_NAME=$(PROFILE_DISPLAY_NAME) \
 			$(PROFILE_TOOL_DIR)/run_profile.sh; \
 	else \
-		ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) \
+		CROSS_COMPILE=$(CROSS_COMPILE) \
 			PROFILE_DISPLAY_NAME=$(PROFILE_DISPLAY_NAME) \
 			$(PROFILE_TOOL_DIR)/run_profile.sh; \
 	fi
 
 profile-task:
-	$(MAKE) profile-report ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) \
+	$(MAKE) profile-report CROSS_COMPILE=$(CROSS_COMPILE) \
 		PROFILE_OUT_DIR=$(PROFILE_TAG_DIR) PROFILE_DISPLAY_NAME=$(PROFILE_DISPLAY_NAME)
 
 profile-baseline:
-	$(MAKE) profile-task ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) PROFILE_TAG=baseline
+	$(MAKE) profile-task CROSS_COMPILE=$(CROSS_COMPILE) PROFILE_TAG=baseline
 
 profile-index:
 	python3 $(PROFILE_TOOL_DIR)/build_index.py --profile-root $(PROFILE_ROOT)
@@ -161,24 +168,5 @@ profile-dashboard: profile-index
 profile-clean:
 	rm -rf $(PROFILE_ROOT)
 
-linux-smoke:
-	$(abspath ./scripts/run_linux_smoke.sh)
-
-BENCH_IMG ?= $(IMG)
-BENCH_ARGS ?= --max-cycles=10000000 --progress=0
-bench: $(BIN)
-	@if [ -z "$(BENCH_IMG)" ]; then echo "[bench] BENCH_IMG or IMG is required"; exit 1; fi
-	@echo "[bench] start"; \
-	start=$$(date +%s); \
-	$(BIN) $(BENCH_ARGS) $(DIFFTEST) $(BENCH_IMG); \
-	end=$$(date +%s); \
-	echo "[bench] elapsed=$$((end - start))s"
-
 clean:
 	rm -rf $(BUILD_DIR)
-
-spike-ref:
-	$(MAKE) -C ref all
-
-spike-ref-check:
-	$(MAKE) -C ref check

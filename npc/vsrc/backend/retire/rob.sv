@@ -658,4 +658,155 @@ module rob #(
     end
   end
 
+  // =========================================================
+  // Phase 1 P0 assertions (simulation only, ASSERT=1)
+  // =========================================================
+`ifndef SYNTHESIS
+  logic flush_prev_q;
+  logic [COMMIT_WIDTH-1:0] commit_valid_prev_q;
+  logic [COMMIT_WIDTH-1:0][PTR_WIDTH-1:0] commit_tag_prev_q;
+  logic commit_cycle_flush_prev_q;
+
+  // Combinational invariants (skip reset cycle)
+  always_comb begin
+    if (rst_ni) begin
+      if (flush_i) begin
+        `NPC_ASSERT(!( |commit_valid_o), "rob/commit_during_flush_i")
+      end else if (async_exception_valid_i) begin
+        `NPC_ASSERT(!( |commit_valid_o), "rob/commit_during_async_exc")
+      end else if (sync_exception_valid_o) begin
+        `NPC_ASSERT(!flush_o, "rob/sync_exc_with_flush_o")
+      end else begin
+        `NPC_ASSERT(count_q <= ROB_DEPTH, "rob/count_overflow")
+
+        for (int i = 0; i < DISPATCH_WIDTH; i++) begin
+          if (dispatch_valid_i[i] && rob_ready_o) begin
+            `NPC_ASSERT(!rob_ram[tail_ptr_q + PTR_WIDTH'(i)].valid,
+                       "rob/dispatch_over_valid")
+          end
+        end
+
+        for (int i = 1; i < COMMIT_WIDTH; i++) begin
+          if (commit_valid_o[i]) begin
+            `NPC_ASSERT(commit_valid_o[i-1], "rob/commit_not_prefix")
+          end
+        end
+
+        for (int i = 0; i < COMMIT_WIDTH; i++) begin
+          if (commit_valid_o[i]) begin
+            `NPC_ASSERT(commit_rob_index_o[i] == (head_ptr_q + i[PTR_WIDTH-1:0]),
+                       "rob/commit_index_mismatch")
+          end
+        end
+
+        if (flush_o && flush_is_mispred_o) begin
+          logic [COMMIT_WIDTH-1:0] mispred_commit_mask;
+          mispred_commit_mask = '0;
+          for (int i = 0; i < COMMIT_WIDTH; i++) begin
+            if (commit_valid_o[i] && rob_ram[commit_rob_index_o[i]].is_mispred) begin
+              mispred_commit_mask[i] = 1'b1;
+            end
+          end
+          `NPC_ASSERT(|commit_valid_o, "rob/mispred_without_commit")
+          `NPC_ASSERT($countones(mispred_commit_mask) == 1, "rob/mispred_commit_count")
+        end
+
+        for (int k = 0; k < WB_WIDTH; k++) begin
+          if (wb_valid_i[k]) begin
+            `NPC_ASSERT(rob_ram[wb_rob_index_i[k]].valid, "rob/wb_to_invalid")
+          end
+        end
+
+        for (int k0 = 0; k0 < WB_WIDTH; k0++) begin
+          for (int k1 = k0 + 1; k1 < WB_WIDTH; k1++) begin
+            if (wb_valid_i[k0] && wb_valid_i[k1]) begin
+              `NPC_ASSERT(wb_rob_index_i[k0] != wb_rob_index_i[k1], "rob/wb_duplicate_tag")
+            end
+          end
+        end
+
+        for (int i = 0; i < COMMIT_WIDTH; i++) begin
+          if (commit_valid_o[i]) begin
+            `NPC_ASSERT(head_fast_complete[i], "rob/commit_without_complete")
+            `NPC_ASSERT(rob_ram[commit_rob_index_o[i]].valid, "rob/commit_invalid_entry")
+          end
+          if (commit_we_o[i]) begin
+            `NPC_ASSERT(commit_valid_o[i] &&
+                       (rob_ram[commit_rob_index_o[i]].areg != 5'd0) &&
+                       rob_ram[commit_rob_index_o[i]].has_rd,
+                       "rob/commit_we_invalid")
+          end
+          if (commit_valid_o[i] && commit_is_store_o[i]) begin
+            `NPC_ASSERT(commit_sb_id_o[i] == rob_ram[commit_rob_index_o[i]].sb_id,
+                       "rob/commit_sb_id_mismatch")
+          end
+        end
+
+        for (int a = 0; a < DISPATCH_WIDTH; a++) begin
+          if (fast_alu_valid_i[a]) begin
+            `NPC_ASSERT(rob_ram[fast_alu_rob_idx_i[a]].valid, "rob/fast_alu_invalid_entry")
+          end
+        end
+        if (fast_bru_valid_i) begin
+          `NPC_ASSERT(rob_ram[fast_bru_rob_idx_i].valid, "rob/fast_bru_invalid_entry")
+        end
+
+        for (int q = 0; q < QUERY_WIDTH; q++) begin
+          logic query_fast_hit;
+          query_fast_hit = 1'b0;
+          for (int a = 0; a < DISPATCH_WIDTH; a++) begin
+            if (fast_alu_valid_i[a] && (fast_alu_rob_idx_i[a] == query_rob_idx_i[q])) begin
+              query_fast_hit = 1'b1;
+            end
+          end
+          if (fast_bru_valid_i && fast_bru_can_commit_i &&
+              (fast_bru_rob_idx_i == query_rob_idx_i[q])) begin
+            query_fast_hit = 1'b1;
+          end
+          if (query_ready_o[q] && !query_fast_hit) begin
+            `NPC_ASSERT(rob_ram[query_rob_idx_i[q]].valid &&
+                        rob_ram[query_rob_idx_i[q]].complete,
+                        "rob/query_ready_without_complete")
+          end
+        end
+      end
+    end
+  end
+
+  // R10-R11: sequential invariants
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      flush_prev_q             <= 1'b0;
+      commit_valid_prev_q      <= '0;
+      commit_tag_prev_q        <= '0;
+      commit_cycle_flush_prev_q <= 1'b0;
+    end else begin
+      if (!flush_i && (|dispatch_valid_i)) begin
+        `NPC_ASSERT(rob_ready_o, "rob/dispatch_while_full")
+      end
+
+      if (flush_prev_q) begin
+        `NPC_ASSERT(count_q == 0, "rob/count_after_flush")
+        for (int i = 0; i < ROB_DEPTH; i++) begin
+          `NPC_ASSERT(!rob_ram[i].valid, "rob/valid_after_flush")
+        end
+      end
+
+      if (!commit_cycle_flush_prev_q) begin
+        for (int i = 0; i < COMMIT_WIDTH; i++) begin
+          if (commit_valid_prev_q[i]) begin
+            `NPC_ASSERT(!rob_ram[commit_tag_prev_q[i]].valid,
+                       "rob/entry_invalid_after_commit")
+          end
+        end
+      end
+
+      flush_prev_q              <= flush_i || flush_o;
+      commit_valid_prev_q       <= commit_valid_o;
+      commit_tag_prev_q         <= commit_rob_index_o;
+      commit_cycle_flush_prev_q <= flush_i || flush_o;
+    end
+  end
+`endif
+
 endmodule

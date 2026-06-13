@@ -1,8 +1,3 @@
----
-
-## description:
-alwaysApply: true
-
 # Triathlon - Out-of-Order RISC-V CPU
 
 > **IMPORTANT DOCUMENTATION RULES:** 
@@ -64,6 +59,7 @@ Triathlon/
 │   │   ├── sram.sv                  # Generic SRAM primitive
 │   │   └── lfsr.sv                  # LFSR (for cache replacement)
 │   ├── include/                     # Packages and configs
+│   │   ├── sim_assert.sv            # 仿真断言/cover 宏（`NPC_ASSERT` / `NPC_COVER`）
 │   │   ├── config_pkg.sv            # Configuration struct definitions
 │   │   ├── global_config_pkg.sv     # Global config instantiation
 │   │   ├── test_config_pkg.sv       # Test configuration parameters
@@ -244,23 +240,24 @@ Frontend→Backend 交界 = **ibuffer 出队口**（`fe_be_bundle_t`）：每拍
 
 编译与测试流程基于 `npc/Makefile` 运行。通过 Verilator 编译 SystemVerilog 设计和 C++ 仿真程序。
 
+`npc/Makefile` 内置 Verilator/host 编译选项（不可通过 Make 变量覆盖）：host C++ `-O3 -march=native -fno-plt`；Verilator 生成代码 `OPT_FAST/SLOW/GLOBAL=-O3`；仿真 `--threads 2`；并行编译 `-j $(nproc)`。Profile 采集固定使用 AM 架构 `**riscv32im-npc`**（`tools/profiler/run_profile.sh`）。
+
 ### 1. 编译与执行目标 (Makefile Targets)
 
 
-| 目标 (Target)         | 常用指令                       | 功能描述                                                                                                 |
-| ------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `default` / `all`   | `make` 或 `make all`        | 默认目标。编译 SystemVerilog 设计和 C++ 仿真源文件，生成二进制仿真程序 `build/tb_triathlon`                                   |
-| `sim`               | `make sim`                 | 编译并直接运行仿真。支持加载二进制镜像并传入仿真参数。                                                                          |
-| `gdb`               | `make gdb`                 | 编译并在 GDB 调试器中运行仿真可执行文件，方便 C++ 侧的调试。                                                                  |
-| `profile-report`    | `make profile-report`      | 运行 `run_profile.sh`：dhrystone/coremark 仿真 `--profile-json`，merge 为 `summary.json`，写 `metadata.json`。 |
-| `profile-task`      | `make profile-task`        | 一键 profile 采集到 `npc/build/profile/<PROFILE_TAG>/`。                                                   |
-| `profile-baseline`  | `make profile-baseline`    | 以 `baseline` 为 tag 运行 profile 采集，作为回归基线。                                                             |
-| `profile-index`     | `make profile-index`       | 扫描 `npc/build/profile/*/summary.json` 生成 `index.json`。                                               |
-| `profile-dashboard` | `make profile-dashboard`   | 生成看板 `dashboard/index.html`，并为每个 run 生成可读的 `summary.html`。                                           |
-| `profile-clean`     | `make profile-clean`       | 删除 `npc/build/profile/`（历次 run、`index.json`、看板 HTML 一并清除）。                                           |
-|                     |                            |                                                                                                      |
-| `bench`             | `make bench BENCH_IMG=...` | 使用当前仿真器执行固定镜像并打印墙钟耗时，便于对比仿真速度。                                                                       |
-| `clean`             | `make clean`               | 清理编译生成目录，删除整个 `build` 文件夹。                                                                           |
+| 目标 (Target)         | 常用指令                     | 功能描述                                                                                                 |
+| ------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `default` / `all`   | `make` 或 `make all`      | 默认目标。编译 SystemVerilog 设计和 C++ 仿真源文件，生成二进制仿真程序 `build/tb_triathlon`                                   |
+| `sim`               | `make sim`               | 编译并直接运行仿真。支持加载二进制镜像并传入仿真参数。                                                                          |
+| `profile-report`    | `make profile-report`    | 运行 `run_profile.sh`：dhrystone/coremark 仿真 `--profile-json`，merge 为 `summary.json`，写 `metadata.json`。 |
+| `profile-task`      | `make profile-task`      | 一键 profile 采集到 `npc/build/profile/<PROFILE_TAG>/`。                                                   |
+| `profile-baseline`  | `make profile-baseline`  | 以 `baseline` 为 tag 运行 profile 采集，作为回归基线。                                                             |
+| `profile-index`     | `make profile-index`     | 扫描 `npc/build/profile/*/summary.json` 生成 `index.json`。                                               |
+| `profile-dashboard` | `make profile-dashboard` | 生成看板 `dashboard/index.html`，并为每个 run 生成可读的 `summary.html`。                                           |
+| `profile-clean`     | `make profile-clean`     | 删除 `npc/build/profile/`（历次 run、`index.json`、看板 HTML 一并清除）。                                           |
+| `clean`             | `make clean`             | 清理编译生成目录，删除整个 `build` 文件夹。                                                                           |
+| `assert-check`        | `make assert-check`        | Phase 6 正向门禁 `scripts/test/run_assert_check.sh`：ASSERT=1 单元 TB + 全量 cpu-tests。                          |
+| `assert-check-neg`    | `make assert-check-neg`    | Phase 5 负向自检 `scripts/test/run_assert_neg.sh`：ROB 违规用例须触发 `[assert]` fatal。                            |
 
 
 ### 2. 常用控制参数/变量 (Configuration Variables)
@@ -268,25 +265,19 @@ Frontend→Backend 交界 = **ibuffer 出队口**（`fe_be_bundle_t`）：每拍
 可以在命令行中通过 `VAR=value` 的形式传入以下变量控制构建和运行：
 
 
-| 变量名 (Variable)         | 默认值                                         | 作用说明                                                                                                              |
-| ---------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `TOPNAME`              | `tb_triathlon`                              | 指定仿真的顶层模块名（对应 `vsrc/` 目录下的 `.sv` 文件）。                                                                             |
-| `IMG`                  | *(空)*                                       | 待运行的程序镜像路径（例如编译好的 RISC-V 测试 bin/elf 文件）。                                                                          |
-| `ARGS`                 | *(空)*                                       | 传给仿真器的扩展参数，详见 **§4**。                                                                                             |
-| `DIFFTEST_SO`          | `$(NPC_HOME)/ref/riscv32-spike-difftest.so` | DiffTest 动态链接库（Spike rv32imac Sv32 参考模型）；`DIFFTEST=` 或库不存在时禁用。构建：`make -C npc/ref`；`make sim` 会自动加入 Spike 运行时库路径。 |
-| `VL_THREADS`           | `2`                                         | Verilator 多线程仿真线程数；当前设计在 Verilator 5.008 下 4 线程会出现 `UNOPTTHREADS`，需要时可手动调整。                                       |
-| `VL_JOBS`              | `$(nproc)`                                  | Verilator/host C++ 并行编译任务数。                                                                                       |
-| `VL_OPTFLAGS`          | `-O3 -march=native -fno-plt`                | 传给 Verilator generated make 的 `OPT_FAST` / `OPT_SLOW` / `OPT_GLOBAL` 与 host C++ 的默认优化参数。                          |
-| `VL_OPTLEVEL`          | `-O3`                                       | 通过 Verilator `-MAKEFLAGS` 覆盖 generated make 的默认 `-Os`，确保 generated C++ 以 `-O3` 编译。                                |
-| `DEBUG`                | `0`                                         | 设为 `1` 时使用 `-O0 -g` 编译 host 仿真器，默认使用 `-O3 -march=native`。                                                         |
-| `BENCH_IMG`            | `$(IMG)`                                    | `bench` 目标运行的镜像路径。                                                                                                |
-| `BENCH_ARGS`           | `--max-cycles=10000000 --progress=0`        | `bench` 目标传给仿真器的参数。                                                                                               |
-| `ARCH`                 | `riscv32i-npc`                              | `profile-report` 编译 AM benchmark 的架构标签。                                                                           |
-| `CROSS_COMPILE`        | `riscv64-unknown-elf-`                      | AM benchmark 交叉编译前缀（WSL 常见安装名；勿与 OpenSBI 的 `riscv64-linux-gnu-` 混用）。                                              |
-| `PROFILE_OUT_DIR`      | *(空，自动时间戳)*                                 | `profile-report` 输出目录；从仓库根写 `npc/build/profile/<run_id>`。                                                         |
-| `PROFILE_TAG`          | `latest`                                    | `profile-task` 写入 `npc/build/profile/<PROFILE_TAG>/`。                                                             |
-| `PROFILE_DISPLAY_NAME` | *(空，用目录名)*                                  | 看板/图表显示名，写入 `metadata.json` 的 `display_name`。                                                                     |
-| `PROFILE_ROOT`         | `npc/build/profile`                         | `profile-index` / `profile-dashboard` 扫描根目录。                                                                      |
+| 变量名 (Variable)         | 默认值                                         | 作用说明                                                                                                                              |
+| ---------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `TOPNAME`              | `tb_triathlon`                              | 指定仿真的顶层模块名（对应 `vsrc/` 目录下的 `.sv` 文件）。                                                                                             |
+| `IMG`                  | *(空)*                                       | 待运行的程序镜像路径（例如编译好的 RISC-V 测试 bin/elf 文件）。                                                                                          |
+| `ARGS`                 | *(空)*                                       | 传给仿真器的扩展参数，详见 **§4**。                                                                                                             |
+| `DIFFTEST_SO`          | `$(NPC_HOME)/ref/riscv32-spike-difftest.so` | DiffTest 动态链接库（Spike rv32imac Sv32 参考模型）；`DIFFTEST=` 或库不存在时禁用。构建：`make -C npc/ref`；`make sim` 会自动加入 Spike 运行时库路径。                 |
+| `ASSERT`               | *(空，关)*                                     | `ASSERT=1` 开 Verilator `--assert`；默认/`ASSERT=` 为 `--noassert`。与 DiffTest 共用 `build/$(TOPNAME)`，切换须重编。详见 **§5「Verilator RTL 断言」**。 |
+| `NPC_EXTRA`            | *(空)*                                        | AM `npc.mk` 透传至 `make -C npc sim`（例：`NPC_EXTRA='ASSERT=1'`）；cpu-tests 断言回归：`make ARCH=riscv32im-npc NPC_EXTRA='ASSERT=1' run`。 |
+| `CROSS_COMPILE`        | `riscv64-unknown-elf-`                      | `profile-report` 编译 AM benchmark 的交叉编译前缀。                                                                                         |
+| `PROFILE_OUT_DIR`      | *(空，自动时间戳)*                                 | `profile-report` 输出目录；从仓库根写 `npc/build/profile/<run_id>`。                                                                         |
+| `PROFILE_TAG`          | `latest`                                    | `profile-task` 写入 `npc/build/profile/<PROFILE_TAG>/`。                                                                             |
+| `PROFILE_DISPLAY_NAME` | *(空，用目录名)*                                  | 看板/图表显示名，写入 `metadata.json` 的 `display_name`。                                                                                     |
+| `PROFILE_ROOT`         | `npc/build/profile`                         | `profile-index` / `profile-dashboard` 扫描根目录。                                                                                      |
 
 
 ### 3. 典型使用示例
@@ -296,6 +287,19 @@ Frontend→Backend 交界 = **ibuffer 出队口**（`fe_be_bundle_t`）：每拍
   cd npc
   make sim IMG=/path/to/image.bin
   ```
+- **禁用 DiffTest：**
+  ```bash
+  make -C npc sim DIFFTEST= IMG=/path/to/image.bin
+  ```
+- **启用 Verilator 断言（编译期 `--assert`）：**
+  ```bash
+  make -C npc sim ASSERT=1 IMG=/path/to/image.bin
+  ```
+- **断言 + DiffTest 组合（断言需重编；DiffTest 仍运行时注入）：**
+  ```bash
+  make -C npc sim ASSERT=1 DIFFTEST= IMG=/path/to/image.bin   # 仅断言
+  make -C npc sim ASSERT=1 IMG=/path/to/image.bin           # 断言 + DiffTest
+  ```
 - **使用特定顶层模块（如 test_top）：**
   ```bash
   cd npc
@@ -304,7 +308,7 @@ Frontend→Backend 交界 = **ibuffer 出队口**（`fe_be_bundle_t`）：每拍
 - **运行 CPU Tests 测试套件下的特定测试（如 dummy）：**
   ```bash
   cd am-kernels/tests/cpu-tests
-  make ARCH=riscv32i-npc ALL=dummy run
+  make ARCH=riscv32im-npc ALL=dummy run
   ```
 
 ### 4. Profile 性能采集与看板
@@ -343,7 +347,7 @@ run_profile.sh → make sim --profile-json → <run_id>/dhrystone.json、coremar
 在**仓库根目录**、**WSL/Linux bash** 下执行（`$(date ...)` 勿在 PowerShell 中直接展开）：
 
 ```bash
-# 采集（默认 ARCH=riscv32i-npc、CROSS_COMPILE=riscv64-unknown-elf-）
+# 采集（默认 CROSS_COMPILE=riscv64-unknown-elf-；AM 架构固定 riscv32im-npc）
 make -C npc profile-report
 make -C npc profile-report PROFILE_OUT_DIR=npc/build/profile/$(date +%Y%m%d-%H%M%S)
 
@@ -360,10 +364,9 @@ make -C npc profile-baseline
 make -C npc profile-report PROFILE_OUT_DIR=npc/build/profile/$(date +%Y%m%d-%H%M%S)
 make -C npc profile-dashboard
 
-# 两次 summary 回归门禁
-npc/scripts/check_perf_regression.sh \
-  npc/build/profile/baseline \
-  npc/build/profile/<run_id>
+# 两次 summary 回归对比（看板或手动 diff summary.json）
+make -C npc profile-dashboard
+# 对比 npc/build/profile/baseline/summary.json 与 <run_id>/summary.json
 
 # 单 benchmark 手动 JSON
 make -C npc sim DIFFTEST= IMG=.../dhrystone-riscv32i-npc.bin \
@@ -441,15 +444,15 @@ Triathlon 使用 Spike `rv32imac` / MSU / Sv32 作为 lockstep 参考模型。�
 Spike 未建模 Triathlon C++ 平台外设、仿真计数器，以及 RTL 当前仅按 probe-zero 处理的 CSR，下列指令/事件 **不执行** `difftest_exec`，改由 DUT 退休态覆盖 ref：
 
 
-| 条件              | 检测方式                                                                                                      |
-| --------------- | --------------------------------------------------------------------------------------------------------- |
-| CSR trap / 中断注入 | `dbg_csr_irq_trap_o` → `trap_sync`（全状态 `regcpy(TO_REF)`，主路径未用 `difftest_raise_intr`）                      |
-| MMIO load       | `decode_mmio_load_rd()`：load 目标地址按 RTL PMA 判为 MMIO（DRAM 窗口 `0x80000000`–`0x87FFFFFF` 外；含 bootrom、CLINT、PLIC、VirtIO、UART、RTC 及未建模设备探测地址） |
-| MMIO store      | 指令解码或 store commit 地址按 RTL PMA 判为 MMIO                                                                  |
-| DUT 覆盖 CSR       | `is_dut_override_csr_inst()`：`cycle`/`time`/`instret` 及 high-half；PMP `0x3A0`–`0x3EF`；machine ID `0xF11`–`0xF14`；`tselect`/`mconfigptr`/`menvcfg`/`menvcfgh` |
-| A 扩展临时覆盖      | `is_atomic_mem_inst()`：Linux 全系统 `satp!=0` 后 U/S 模式下的 RV32A `.W` LR/SC/AMO 指令跳过 Spike 执行；DUT 退休态覆盖 ref，若有 Store Buffer commit 则仍同步 DUT 写回数据到 Spike 内存。该路径不代表 A 扩展语义已完成严格 DiffTest 验收 |
-| Linux 取指真值覆盖 | 全系统 Sv32 下若 C++ 按当前 `satp` 从宿主内存翻译并拼出的非 RVC 退休指令与 ROB 导出的 `decoded_inst` 不一致（典型为页边界半字起始指令，Spike 会从参考内存重新取指），DiffTest 跳过 Spike 执行并用 DUT 退休态覆盖 ref |
-| Trap entry 覆盖 | M-mode trap（含 SBI ecall、未建模 CSR illegal trap）或 S-mode trap（含 instruction/load/store page fault 等）时，在 trap handler 首条退休指令前按 `mepc`/`mtvec` 或 `sepc`/`stvec` 严格匹配并全状态覆盖 ref |
+| 条件              | 检测方式                                                                                                                                                                                 |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| CSR trap / 中断注入 | `dbg_csr_irq_trap_o` → `trap_sync`（全状态 `regcpy(TO_REF)`，主路径未用 `difftest_raise_intr`）                                                                                                 |
+| MMIO load       | `decode_mmio_load_rd()`：load 目标地址按 RTL PMA 判为 MMIO（DRAM 窗口 `0x80000000`–`0x87FFFFFF` 外；含 bootrom、CLINT、PLIC、VirtIO、UART、RTC 及未建模设备探测地址）                                              |
+| MMIO store      | 指令解码或 store commit 地址按 RTL PMA 判为 MMIO                                                                                                                                               |
+| DUT 覆盖 CSR      | `is_dut_override_csr_inst()`：`cycle`/`time`/`instret` 及 high-half；PMP `0x3A0`–`0x3EF`；machine ID `0xF11`–`0xF14`；`tselect`/`mconfigptr`/`menvcfg`/`menvcfgh`                         |
+| A 扩展临时覆盖        | `is_atomic_mem_inst()`：Linux 全系统 `satp!=0` 后 U/S 模式下的 RV32A `.W` LR/SC/AMO 指令跳过 Spike 执行；DUT 退休态覆盖 ref，若有 Store Buffer commit 则仍同步 DUT 写回数据到 Spike 内存。该路径不代表 A 扩展语义已完成严格 DiffTest 验收 |
+| Linux 取指真值覆盖    | 全系统 Sv32 下若 C++ 按当前 `satp` 从宿主内存翻译并拼出的非 RVC 退休指令与 ROB 导出的 `decoded_inst` 不一致（典型为页边界半字起始指令，Spike 会从参考内存重新取指），DiffTest 跳过 Spike 执行并用 DUT 退休态覆盖 ref                                     |
+| Trap entry 覆盖   | M-mode trap（含 SBI ecall、未建模 CSR illegal trap）或 S-mode trap（含 instruction/load/store page fault 等）时，在 trap handler 首条退休指令前按 `mepc`/`mtvec` 或 `sepc`/`stvec` 严格匹配并全状态覆盖 ref            |
 
 
 **RTL 探针**（`tb_triathlon.sv`）
@@ -473,6 +476,63 @@ Spike 未建模 Triathlon C++ 平台外设、仿真计数器，以及 RTL 当前
 
 
 性能 profile 采集（`profile-report`）默认 `DIFFTEST=` 禁用协同仿真，避免 Spike 拖慢 benchmark。
+
+#### Verilator RTL 断言（`ASSERT`）
+
+RTL 断言/cover 的 Make 变量约定与 **DiffTest 对齐**：同一 `build/$(TOPNAME)` 产物，无 `_assert` 后缀或独立 assert 二进制；通过 `ASSERT=1` 开启、`ASSERT=` 或默认关闭。
+
+**与 DiffTest 对照**
+
+
+|         | **DiffTest**                              | **ASSERT**                                                 |
+| ------- | ----------------------------------------- | ---------------------------------------------------------- |
+| Make 变量 | `DIFFTEST=` 关；默认在 `.so` 存在时自动 `-d`        | `ASSERT=1` 开；默认/`ASSERT=` 关                                |
+| 产物路径    | `build/$(TOPNAME)`                        | `build/$(TOPNAME)`（同一二进制）                                  |
+| 生效时机    | **运行时**（`-d $(DIFFTEST_SO)` 拼入 `NPC_EXE`） | **编译期**（Verilator `--assert` / `--noassert`）               |
+| 切换是否重编  | 否                                         | 是（`build/obj_dir/.assert_mode_0` / `.assert_mode_1` 戳变化触发） |
+
+
+**Makefile 机制**（`npc/Makefile`）
+
+- `ASSERT=1` → `VL_ASSERT_FLAG=--assert`，`ASSERT_CFG=obj_dir/.assert_mode_1`
+- 默认/`ASSERT=` → `VL_ASSERT_FLAG=--noassert`，`ASSERT_CFG=obj_dir/.assert_mode_0`
+- `$(BIN)` 依赖 `$(ASSERT_CFG)`（普通依赖，戳更新触发 Verilator 重编）
+- `sim_assert.sv` 列入 `PKG_VSRCS`，全设计可见
+
+**源码分工**
+
+
+| 路径                               | 作用                                                                                                                          |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `npc/vsrc/include/sim_assert.sv` | ``NPC_ASSERT(cond, msg)` → `assert ... else $fatal`；``NPC_COVER(cover_id, prop)` → `cover property`（包在 ``ifndef SYNTHESIS`） |
+| `npc/Makefile`                   | `ASSERT` 变量 → `VL_ASSERT_FLAG` / `ASSERT_CFG`                                                                               |
+| RTL 模块（如 `rob.sv` 等，分阶段落地）       | 在关键不变量处调用 ``NPC_ASSERT` / ``NPC_COVER`                                                                                      |
+
+
+**用法**
+
+```bash
+# 默认：无断言，DiffTest 自动（.so 存在时）
+make -C npc sim IMG=.../test.bin
+
+# 关 DiffTest
+make -C npc sim DIFFTEST= IMG=.../test.bin
+
+# 开 Verilator 断言（会重编）
+make -C npc sim ASSERT=1 IMG=.../test.bin
+
+# 单元 TB + 断言
+make -C npc ASSERT=1 TOPNAME=tb_rob_exception SIM_MAIN=csrc/test/test_rob_exception.cpp
+./npc/build/tb_rob_exception
+```
+
+**行为说明**
+
+- ``NPC_ASSERT` 与 SVA `assert property` 在 `ASSERT=1`（`--assert`）下由 Verilator 检查；默认 build 为 `--noassert`，这些检查不生效。
+- RTL 中直接的 `assert` / `$fatal`（如 IFU fetch queue 背压）不依赖 `--assert`，任何 build 都会触发。
+- 断言为编译期开关，**不能**像 DiffTest 那样在同一次 build 的运行命令里切换；改 `ASSERT` 后须重编。
+- Profile 与日常回归默认保持 `ASSERT` 关闭以减小编译与仿真开销；定向断言回归使用 `ASSERT=1`。
+- AM/cpu-tests 经 `NPC_EXTRA='ASSERT=1'` 透传至 `make -C npc sim`（见 `abstract-machine/scripts/platform/npc.mk`）；汇总门禁：`make -C npc assert-check`。
 
 #### 参数一览
 
@@ -520,10 +580,10 @@ Spike 未建模 Triathlon C++ 平台外设、仿真计数器，以及 RTL 当前
 #### 镜像加载模式
 
 
-| 模式               | 条件                 | 行为                                                                                                                                                                            |
-| ---------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **整镜像加载**（默认）    | 无 `--boot-handoff` | `<IMG>` 加载到 `0x80000000`（`kPmemBase`）；适用于 `merge.py` 输出的 `fw_combined.bin`                                                                                                    |
-| **Boot handoff** | `--boot-handoff`   | `<IMG>` 加载到 `--firmware-load-base`；在 `0x00001000` 安装 handoff stub（a0/a1/satp → 跳固件），复位 PC `0x80000000` 经 jump stub 进入 boot ROM；适用于 `fw_payload.bin` + 独立 DTB（见 `linux-smoke`） |
+| 模式               | 条件                 | 行为                                                                                                                                                                                               |
+| ---------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **整镜像加载**（默认）    | 无 `--boot-handoff` | `<IMG>` 加载到 `0x80000000`（`kPmemBase`）；适用于 `merge.py` 输出的 `fw_combined.bin`                                                                                                                       |
+| **Boot handoff** | `--boot-handoff`   | `<IMG>` 加载到 `--firmware-load-base`；在 `0x00001000` 安装 handoff stub（a0/a1/satp → 跳固件），复位 PC `0x80000000` 经 jump stub 进入 boot ROM；适用于 `fw_payload.bin` + 独立 DTB（见下方 boot handoff 示例命令） |
 
 
 #### 输出 Tag 速查
@@ -633,7 +693,7 @@ make -C npc sim IMG=.../test.bin ARGS='--commit-trace 100000:150000'
 make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \
   ARGS='--max-cycles=2000000 --progress=500000 --linux-early-debug'
 
-# Boot handoff + VirtIO（linux-smoke 风格）
+# Boot handoff + VirtIO
 make -C npc sim DIFFTEST= IMG=~/rv32-linux/out/fw_payload.bin \
   ARGS='--boot-handoff --dtb ~/rv32-linux/out/npc.dtb \
         --virtio-blk-image ~/rv32-linux/out/rootfs.img \

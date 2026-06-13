@@ -22,7 +22,8 @@
 !tools/profiler/tests/
 !tools/profiler/tests/*.py
 !scripts/
-!scripts/*.sh
+!scripts/test/
+!scripts/test/*.sh
 build/
 build-cmake/
 profile/
