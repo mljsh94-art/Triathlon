@@ -22,9 +22,11 @@
 !tools/profiler/tests/
 !tools/profiler/tests/*.py
 !scripts/
-!scripts/test/
-!scripts/test/*.sh
+!scripts/subshell/
+!scripts/subshell/*.sh
 build/
+!build/cover/
+!build/cover/expected_hits.txt
 build-cmake/
 profile/
 .history/

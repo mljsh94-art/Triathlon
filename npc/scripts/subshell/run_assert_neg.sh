@@ -2,16 +2,19 @@
 # Phase 5 negative self-check: each case must abort with the expected [assert] tag.
 set -u
 
-NPC_HOME="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
+
 NEG_MAIN="$NPC_HOME/csrc/test/test_rob_assert_neg.cpp"
 BIN="$NPC_HOME/build/tb_rob_exception"
 
 cd "$NPC_HOME"
 
-echo "[assert-neg] build tb_rob_exception (ASSERT=1, neg driver)"
-make ASSERT=1 TOPNAME=tb_rob_exception SIM_MAIN="$NEG_MAIN" -j"$(nproc)"
+log_section "build tb_rob_exception (ASSERT=1, neg driver)"
+make ASSERT=1 TOPNAME=tb_rob_exception SIM_MAIN="$NEG_MAIN" -B -j"$(nproc)"
 test -x "$BIN"
+log_section_done "build tb_rob_exception (ASSERT=1, neg driver)"
 
+log_section "negative assert cases"
 cases=(
   "1:rob/dispatch_while_full"
   "2:rob/wb_to_invalid"
@@ -38,6 +41,7 @@ for entry in "${cases[@]}"; do
     fail=$((fail + 1))
   fi
 done
+log_section_done "negative assert cases"
 
 echo "[assert-neg] pass=$pass fail=$fail"
 if [[ $fail -eq 0 ]]; then

@@ -256,8 +256,11 @@ Frontend→Backend 交界 = **ibuffer 出队口**（`fe_be_bundle_t`）：每拍
 | `profile-dashboard` | `make profile-dashboard` | 生成看板 `dashboard/index.html`，并为每个 run 生成可读的 `summary.html`。                                           |
 | `profile-clean`     | `make profile-clean`     | 删除 `npc/build/profile/`（历次 run、`index.json`、看板 HTML 一并清除）。                                           |
 | `clean`             | `make clean`             | 清理编译生成目录，删除整个 `build` 文件夹。                                                                           |
-| `assert-check`        | `make assert-check`        | Phase 6 正向门禁 `scripts/test/run_assert_check.sh`：ASSERT=1 单元 TB + 全量 cpu-tests。                          |
-| `assert-check-neg`    | `make assert-check-neg`    | Phase 5 负向自检 `scripts/test/run_assert_neg.sh`：ROB 违规用例须触发 `[assert]` fatal。                            |
+| `verify-unit`             | `make verify-unit`             | ① 正向单元 ASSERT TB（`scripts/subshell/run_assert_unit.sh`；可选 `MODULE=rob/fe/issue/lsu/all`）。 |
+| `verify-difftest`         | `make verify-difftest`         | ② DiffTest 门禁：Spike smoke + cpu-tests + dhrystone/coremark（`run_difftest_suite.sh`）。           |
+| `verify-assert-programs`  | `make verify-assert-programs`  | ③ 程序 ASSERT 全门禁：neg 负向自检 + tb_triathlon + cpu-tests + benchmark（`run_assert_programs.sh`）。 |
+| `verify-cover`            | `make verify-cover`            | ④ cover 壳子（Phase 7 占位，`run_cover_check.sh`）。                                              |
+| `verify-all`              | `make verify-all`              | ①→②→③→④ 发版全量回归。                                                                              |
 
 
 ### 2. 常用控制参数/变量 (Configuration Variables)
@@ -532,7 +535,7 @@ make -C npc ASSERT=1 TOPNAME=tb_rob_exception SIM_MAIN=csrc/test/test_rob_except
 - RTL 中直接的 `assert` / `$fatal`（如 IFU fetch queue 背压）不依赖 `--assert`，任何 build 都会触发。
 - 断言为编译期开关，**不能**像 DiffTest 那样在同一次 build 的运行命令里切换；改 `ASSERT` 后须重编。
 - Profile 与日常回归默认保持 `ASSERT` 关闭以减小编译与仿真开销；定向断言回归使用 `ASSERT=1`。
-- AM/cpu-tests 经 `NPC_EXTRA='ASSERT=1'` 透传至 `make -C npc sim`（见 `abstract-machine/scripts/platform/npc.mk`）；汇总门禁：`make -C npc assert-check`。
+- AM/cpu-tests 经 `NPC_EXTRA='ASSERT=1'` 透传至 `make -C npc sim`（见 `abstract-machine/scripts/platform/npc.mk`）；单元 ASSERT：`make -C npc verify-unit MODULE=all`；程序 ASSERT（含 neg）：`make -C npc verify-assert-programs`。
 
 #### 参数一览
 

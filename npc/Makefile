@@ -125,13 +125,26 @@ sim: $(BIN)
 	@echo $(INCFLAGS)
 	@LD_LIBRARY_PATH="$(SPIKE_REF_LD_PATH):$$LD_LIBRARY_PATH" $^ $(NPC_EXE)
 
-.PHONY: profile-report profile-task profile-baseline profile-index profile-dashboard profile-clean assert-check assert-check-neg
+.PHONY: profile-report profile-task profile-baseline profile-index profile-dashboard profile-clean \
+	verify-unit verify-difftest verify-assert-programs verify-cover verify-all
 
-assert-check:
-	bash $(abspath ./scripts/test/run_assert_check.sh)
+verify-unit:
+	bash $(abspath ./scripts/subshell/run_assert_unit.sh) $(or $(MODULE),all)
 
-assert-check-neg:
-	bash $(abspath ./scripts/test/run_assert_neg.sh)
+verify-difftest:
+	bash $(abspath ./scripts/subshell/run_difftest_suite.sh)
+
+verify-assert-programs:
+	bash $(abspath ./scripts/subshell/run_assert_programs.sh)
+
+verify-cover:
+	bash $(abspath ./scripts/subshell/run_cover_check.sh)
+
+verify-all:
+	$(MAKE) verify-unit MODULE=all
+	$(MAKE) verify-difftest
+	$(MAKE) verify-assert-programs
+	$(MAKE) verify-cover
 
 PROFILE_TOOL_DIR := $(abspath ./tools/profiler)
 CROSS_COMPILE ?= riscv64-unknown-elf-
