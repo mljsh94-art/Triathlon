@@ -23,7 +23,7 @@ module ibuffer #(
     output logic [DECODE_WIDTH-1:0] ibuf_slot_valid_o,
     output logic [DECODE_WIDTH-1:0][Cfg.PLEN-1:0] ibuf_pred_npc_o,
     output logic [DECODE_WIDTH-1:0] ibuf_is_rvc_o,
-    output logic [DECODE_WIDTH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] ibuf_ftq_id_o,
+    output logic [DECODE_WIDTH-1:0][((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] ibuf_ftq_id_o,
     output logic [DECODE_WIDTH-1:0][2:0] ibuf_fetch_epoch_o,
 
     input logic flush_i

@@ -16,7 +16,7 @@ module tb_frontend (
     output logic [Cfg.INSTR_PER_FETCH-1:0]          ibuffer_slot_valid_o,
     output logic [Cfg.INSTR_PER_FETCH*Cfg.PLEN-1:0] ibuffer_pred_npc_o,
     output logic [Cfg.INSTR_PER_FETCH-1:0]          ibuffer_is_rvc_o,
-    output logic [Cfg.INSTR_PER_FETCH*((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] ibuffer_ftq_id_o,
+    output logic [Cfg.INSTR_PER_FETCH*((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] ibuffer_ftq_id_o,
     output logic [Cfg.INSTR_PER_FETCH*3-1:0] ibuffer_fetch_epoch_o,
 
     input logic                flush_i,
@@ -58,7 +58,7 @@ module tb_frontend (
     output logic [                           3:0] dbg_ifu_pending_o,
     output logic [                           3:0] dbg_ifu_inflight_o,
     output logic                                  dbg_ifu_drop_stale_rsp_o,
-    output logic [((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] dbg_ibuf_ftq_id_slot0_o,
+    output logic [((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] dbg_ibuf_ftq_id_slot0_o,
     output logic [2:0] dbg_ibuf_fetch_epoch_slot0_o,
     output logic dbg_ibuf_meta_uniform_o
 );

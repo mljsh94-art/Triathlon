@@ -37,6 +37,7 @@ void clear_inputs(Vtb_ifu_mmu *top) {
   top->redirect_pc_i = 0;
 
   top->bpu_valid_i = 0;
+  top->bpu_fetch_pc_i = 0;
   top->bpu_predicted_pc_i = 0;
   top->bpu_pred_slot_valid_i = 0;
   top->bpu_pred_slot_idx_i = 0;
@@ -88,7 +89,8 @@ void feed_pte_rsp(Vtb_ifu_mmu *top, uint32_t pte) {
   top->pte_rsp_valid_i = 0;
 }
 
-void issue_fetch_req(Vtb_ifu_mmu *top, uint32_t next_pc) {
+void issue_fetch_req(Vtb_ifu_mmu *top, uint32_t fetch_pc, uint32_t next_pc) {
+  top->bpu_fetch_pc_i = fetch_pc;
   top->bpu_predicted_pc_i = next_pc;
   top->bpu_pred_slot_valid_i = 0;
   top->bpu_pred_slot_idx_i = 0;
@@ -164,7 +166,7 @@ void test_ifetch_translation_and_fault(Vtb_ifu_mmu *top) {
   const uint32_t l0_pte_addr_ok = kL0TablePa + (vpn0_ok * 4u);
 
   redirect_pc(top, va_ok);
-  issue_fetch_req(top, va_ok + 4u);
+  issue_fetch_req(top, va_ok, va_ok + 4u);
   expect(wait_pte_req(top, l1_pte_addr_ok, 40, "l1 walk"),
          "MMU did not issue L1 PTE request");
   feed_pte_rsp(top, make_nonleaf_pte(kL0TablePa));
@@ -182,7 +184,7 @@ void test_ifetch_translation_and_fault(Vtb_ifu_mmu *top) {
   const uint32_t l1_pte_addr_fault = kRootTablePa + (vpn1_fault * 4u);
 
   redirect_pc(top, va_fault);
-  issue_fetch_req(top, va_fault + 4u);
+  issue_fetch_req(top, va_fault, va_fault + 4u);
   expect(wait_pte_req(top, l1_pte_addr_fault, 40, "fault l1 walk"),
          "fault case: MMU did not issue L1 request");
   feed_pte_rsp(top, 0u);  // Invalid PTE

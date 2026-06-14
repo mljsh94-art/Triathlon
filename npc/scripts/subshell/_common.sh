@@ -7,6 +7,7 @@ TRIATHLON_HOME="$(cd "$NPC_HOME/.." && pwd)"
 
 MANDATORY_UNIT_CASES=(
   "tb_rob_exception|${NPC_HOME}/csrc/test/test_rob_exception.cpp"
+  "tb_ftq|${NPC_HOME}/csrc/test/test_ftq.cpp"
   "tb_ibuffer|${NPC_HOME}/csrc/test/test_ibuffer.cpp"
   "tb_frontend|${NPC_HOME}/csrc/test/test_frontend.cpp"
   "tb_ifu_mmu|${NPC_HOME}/csrc/test/test_ifu_mmu.cpp"

@@ -185,6 +185,23 @@ SimArgs parse_args(int argc, char **argv) {
       }
       continue;
     }
+    if (arg == "--commit-ring" && i + 1 < argc) {
+      uint64_t v = 0;
+      if (parse_u64(argv[i + 1], v)) {
+        args.commit_ring_size = v;
+        args.commit_ring_explicit = true;
+        i++;
+      }
+      continue;
+    }
+    if (arg.rfind("--commit-ring=", 0) == 0) {
+      uint64_t v = 0;
+      if (parse_u64(arg.substr(std::string("--commit-ring=").size()), v)) {
+        args.commit_ring_size = v;
+        args.commit_ring_explicit = true;
+      }
+      continue;
+    }
     if (arg == "--profile") {
       args.profile = true;
       continue;

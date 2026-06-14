@@ -43,7 +43,7 @@ case "$MODULE" in
     run_case_list "module=rob" "${MANDATORY_UNIT_CASES[0]}"
     ;;
   fe)
-    run_case_list "module=fe" "${MANDATORY_UNIT_CASES[@]:1:3}"
+    run_case_list "module=fe" "${MANDATORY_UNIT_CASES[@]:1:4}"
     ;;
   issue)
     run_case_list "module=issue" "${MANDATORY_UNIT_CASES[4]}"

@@ -16,7 +16,7 @@ module tb_ibuffer #(
     input  logic [FE_EXPAND_MAX-1:0]                 aln_slot_valid_i,
     input  logic [FE_EXPAND_MAX*Cfg.PLEN-1:0]        aln_pred_npc_i,
     input  logic [FE_EXPAND_MAX-1:0]                 aln_is_rvc_i,
-    input  logic [FE_EXPAND_MAX*((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] aln_ftq_id_i,
+    input  logic [FE_EXPAND_MAX*((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] aln_ftq_id_i,
     input  logic [FE_EXPAND_MAX*3-1:0]               aln_fetch_epoch_i,
     input  logic [$clog2(FE_EXPAND_MAX + 1)-1:0]    aln_entry_count_i,
 
@@ -28,7 +28,7 @@ module tb_ibuffer #(
     output logic [Cfg.INSTR_PER_FETCH-1:0]          ibuf_slot_valid_o,
     output logic [Cfg.INSTR_PER_FETCH*Cfg.PLEN-1:0] ibuf_pred_npc_o,
     output logic [Cfg.INSTR_PER_FETCH-1:0]          ibuf_is_rvc_o,
-    output logic [Cfg.INSTR_PER_FETCH*((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] ibuf_ftq_id_o,
+    output logic [Cfg.INSTR_PER_FETCH*((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] ibuf_ftq_id_o,
     output logic [Cfg.INSTR_PER_FETCH*3-1:0] ibuf_fetch_epoch_o,
 
     input logic flush_i
@@ -44,7 +44,7 @@ module tb_ibuffer #(
       aln_entries[i].slot_valid = aln_slot_valid_i[i];
       aln_entries[i].pred_npc = aln_pred_npc_i[(i+1)*Cfg.PLEN-1 -: Cfg.PLEN];
       aln_entries[i].is_rvc = aln_is_rvc_i[i];
-      aln_entries[i].ftq_id = aln_ftq_id_i[(i+1)*((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1 -: ((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)];
+      aln_entries[i].ftq_id = aln_ftq_id_i[(i+1)*((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1 -: ((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)];
       aln_entries[i].fetch_epoch = aln_fetch_epoch_i[(i+1)*3-1 -: 3];
     end
   end

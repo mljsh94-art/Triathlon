@@ -1,8 +1,8 @@
 // vsrc/frontend/ifu.sv
 /*
   Instruction Fetch Unit (decoupled)
-  1. 与 BPU 握手产生下一拍请求 PC
-  2. 用 request FIFO 将 BPU 预测与 ICache 请求解耦
+  1. 从顶层 FTQ 消费 BPU 预测条目
+  2. 用 request FIFO 将 FTQ 与 ICache 请求解耦
   3. 用 inflight FIFO 跟踪已发射请求 metadata（替换单 inflight）
   4. 用可复用 bundle FIFO 将 ICache 响应与 IBuffer 消费解耦
 */
@@ -13,14 +13,17 @@ module ifu #(
     input logic clk,   // 核心时钟信号
     input logic rst,   // 高电平复位信号 (ifu 内部逻辑使用)
 
-    //--- 1.BPU握手接口 (分支预测交互，申请下一拍取指地址) ---
-    output handshake_t                ifu2bpu_handshake_o,      // IFU 发送给 BPU 的请求有效/就绪握手信号
-    input  handshake_t                bpu2ifu_handshake_i,      // BPU 返回给 IFU 的响应有效/就绪握手信号
-    output logic       [Cfg.PLEN-1:0] ifu2bpu_pc_o,             // IFU 送给 BPU 进行查找和预测的当前 PC
-    input  logic       [Cfg.PLEN-1:0] bpu2ifu_predicted_pc_i,   // BPU 预测的下一条取指包的 PC 目标
-    input  logic                       bpu2ifu_pred_slot_valid_i,// 预测有效标志：表示预测出的跳转在这个取指包内确实存在
-    input  logic [$clog2(Cfg.INSTR_PER_FETCH)-1:0] bpu2ifu_pred_slot_idx_i, // 指明是取指包中第几个槽位触发了跳转
-    input  logic       [Cfg.PLEN-1:0] bpu2ifu_pred_target_i,    // 预测的跳转目标地址
+    //--- 1.FTQ读取接口 (消费 BPU 预测出的取指条目) ---
+    input  logic                       ftq_deq_valid_i,
+    output logic                       ftq_deq_ready_o,
+    input  logic [Cfg.PLEN-1:0]        ftq_deq_pc_i,
+    input  logic                       ftq_deq_pred_slot_valid_i,
+    input  logic [((Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1)-1:0] ftq_deq_pred_slot_idx_i,
+    input  logic [Cfg.PLEN-1:0]        ftq_deq_pred_target_i,
+    input  logic [Cfg.PLEN-1:0]        ftq_deq_pred_npc_i,
+    input  logic [2:0]                 ftq_deq_epoch_i,
+    input  logic [((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] ftq_deq_ftq_id_i,
+    input  logic [Cfg.PLEN-1:0]        ftq_next_pc_i,
 
     //--- 2.ICache请求接口 (缓存提货，获取指令数据) ---
     output handshake_t ifu2icache_req_handshake_o,  // 发送给 ICache 的取指请求握手 (valid/ready)
@@ -36,12 +39,14 @@ module ifu #(
     output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ifu_ibuffer_rsp_data_o, // 发送给后端的指令数据包
     output logic [Cfg.INSTR_PER_FETCH-1:0] ifu_ibuffer_rsp_slot_valid_o, // 包内各指令槽位的有效性
     output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ifu_ibuffer_rsp_pred_npc_o, // 携带的每条指令对应的预测下一拍 PC
-    output logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] ifu_ibuffer_rsp_ftq_id_o, // 指令对应分配的 FTQ ID
+    output logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] ifu_ibuffer_rsp_ftq_id_o, // 指令对应分配的 FTQ ID
     output logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ifu_ibuffer_rsp_fetch_epoch_o, // 当前取指所属的“时空代数” Epoch，用于识别/丢弃错路指令
 
     //--- 4.后端冲刷/重定向接口 (纠错机制) ---
     input logic                flush_i,       // 后端发起的流水线强行冲刷信号 (清除错路指令)
     input logic [Cfg.PLEN-1:0] redirect_pc_i, // 后端命令的重新定向新 PC 地址
+    output logic               local_redirect_valid_o, // IFU 本地翻译上下文变化触发的重放
+    output logic [Cfg.PLEN-1:0] local_redirect_pc_o,
 
     //--- 5.I-side MMU control + page table walker (虚拟地址翻译) ---
     input logic [31:0] mmu_satp_i,       // SATP 寄存器 (控制 MMU 开关及页表根地址)
@@ -73,7 +78,7 @@ module ifu #(
   localparam logic [1:0] PRIV_LVL_M = 2'b11;
   localparam logic [1:0] MMU_ACCESS_INSTR = 2'd0;
   localparam logic [4:0] EXC_INST_PAGE_FAULT = 5'd12;
-  localparam int unsigned FTQ_DEPTH = (Cfg.IFU_INF_DEPTH >= 2) ? Cfg.IFU_INF_DEPTH : 2;
+  localparam int unsigned FTQ_DEPTH = (Cfg.FTQ_DEPTH >= 2) ? Cfg.FTQ_DEPTH : 2;
   localparam int unsigned FTQ_ID_W = (FTQ_DEPTH > 1) ? $clog2(FTQ_DEPTH) : 1;
 
   // Pending request FIFO (BPU generated).
@@ -97,8 +102,6 @@ module ifu #(
                                       (Cfg.INSTR_PER_FETCH * FTQ_ID_W) +
                                       (Cfg.INSTR_PER_FETCH * EPOCH_W);
 
-  logic [Cfg.PLEN-1:0] pc_reg;
-  logic [Cfg.PLEN-1:0] bpu_query_pc_w;
   logic [Cfg.PLEN-1:0] local_mmu_replay_pc_w;
   logic [EPOCH_W-1:0] fetch_epoch_q;
   logic [EPOCH_W-1:0] flush_next_epoch_w;
@@ -160,7 +163,7 @@ module ifu #(
   logic fq_empty_w;
   logic fq_full_w;
 
-  logic can_accept_bpu_w;
+  logic can_accept_ftq_w;
   logic req_enq_fire_w;
   logic req_block_flush_w;
   logic req_block_reqq_empty_w;
@@ -178,8 +181,6 @@ module ifu #(
   logic mmu_req_fire_w;
   logic mmu_resp_fire_w;
   logic fault_consume_w;
-  logic ftq_free_valid_w;
-  logic [FTQ_ID_W-1:0] ftq_free_id_w;
 
   logic rsp_capture_w;
   logic drop_stale_rsp_w;
@@ -189,12 +190,6 @@ module ifu #(
 
   logic [REQ_CNT_W:0] req_outstanding_w;
   logic [FQ_CNT_W:0] storage_budget_w;
-  logic ftq_alloc_ready_w;
-  logic ftq_alloc_fire_w;
-  logic [FTQ_ID_W-1:0] ftq_alloc_id_w;
-  logic [Cfg.PLEN-1:0] ftq_alloc_pc_w;
-  logic [EPOCH_W-1:0] ftq_alloc_epoch_w;
-  logic [((FTQ_DEPTH > 1) ? $clog2(FTQ_DEPTH + 1) : 1)-1:0] ftq_count_w;
 
   typedef enum logic [1:0] {
     MMU_ST_IDLE = 2'd0,
@@ -278,19 +273,16 @@ module ifu #(
   assign ifu_flush_w = flush_i || local_mmu_flush_w;
   assign local_mmu_replay_pc_w =
       !inf_fifo_empty_w ? inf_head_pc_w :
-      (!req_fifo_empty_w ? req_head_pc_w : pc_reg);
+      (!req_fifo_empty_w ? req_head_pc_w :
+       (ftq_deq_valid_i ? ftq_deq_pc_i : ftq_next_pc_i));
+  assign local_redirect_valid_o = local_mmu_flush_w;
+  assign local_redirect_pc_o = local_mmu_replay_pc_w;
 
-  // BPU side: enqueue requests into pending FIFO when space is available.
-  assign bpu_query_pc_w = flush_i ? redirect_pc_i : pc_reg;
-  assign can_accept_bpu_w = !local_mmu_flush_w && !fault_pending_q && !fault_wait_flush_q &&
-                            (flush_i ? 1'b1 : (!req_fifo_full_w || req_pop_w)) &&
-                            ftq_alloc_ready_w;
-  assign ifu2bpu_pc_o = bpu_query_pc_w;
-  assign ifu2bpu_handshake_o.valid = can_accept_bpu_w;
-  assign ifu2bpu_handshake_o.ready = can_accept_bpu_w && bpu2ifu_handshake_i.valid;
-  assign req_enq_fire_w = ifu2bpu_handshake_o.valid && ifu2bpu_handshake_o.ready;
-  assign ftq_alloc_pc_w = bpu_query_pc_w;
-  assign ftq_alloc_epoch_w = flush_i ? flush_next_epoch_w : fetch_epoch_q;
+  // FTQ side: enqueue requests into pending FIFO when space is available.
+  assign can_accept_ftq_w = !local_mmu_flush_w && !fault_pending_q && !fault_wait_flush_q &&
+                            (!req_fifo_full_w || req_pop_w);
+  assign ftq_deq_ready_o = can_accept_ftq_w;
+  assign req_enq_fire_w = ftq_deq_valid_i && ftq_deq_ready_o;
 
   // ICache side: issue oldest pending request.
   assign translation_active_w = mmu_satp_i[31] && (mmu_priv_i != PRIV_LVL_M);
@@ -384,9 +376,6 @@ module ifu #(
           ifu_ibuffer_rsp_fetch_epoch_o} = fq_deq_data_w;
   assign ifu_ibuffer_rsp_valid_o = fq_deq_valid_w;
 
-  assign ftq_free_valid_w = fault_consume_w || rsp_capture_w;
-  assign ftq_free_id_w = fault_consume_w ? req_head_ftq_id_w : inf_head_ftq_id_w;
-
   sv32_mmu #(
       .TLB_ENTRIES(Cfg.ITLB_ENTRIES)
   ) u_ifu_mmu (
@@ -415,36 +404,6 @@ module ifu #(
       .pte_upd_data_o(pte_upd_data_o)
   );
 
-  ftq #(
-      .Cfg(Cfg),
-      .DEPTH(FTQ_DEPTH),
-      .EPOCH_W(EPOCH_W)
-  ) u_ftq (
-      .clk_i(clk),
-      .rst_ni(~rst),
-      .flush_i(ifu_flush_w),
-      .alloc_valid_i(req_enq_fire_w),
-      .alloc_ready_o(ftq_alloc_ready_w),
-      .alloc_fire_o(ftq_alloc_fire_w),
-      .alloc_id_o(ftq_alloc_id_w),
-      .alloc_pc_i(ftq_alloc_pc_w),
-      .alloc_pred_slot_valid_i(bpu2ifu_pred_slot_valid_i),
-      .alloc_pred_slot_idx_i(bpu2ifu_pred_slot_idx_i),
-      .alloc_pred_target_i(bpu2ifu_pred_target_i),
-      .alloc_epoch_i(ftq_alloc_epoch_w),
-      .free_valid_i(ftq_free_valid_w),
-      .free_id_i(ftq_free_id_w),
-      .lookup_valid_i(1'b0),
-      .lookup_id_i('0),
-      .lookup_hit_o(),
-      .lookup_pc_o(),
-      .lookup_pred_slot_valid_o(),
-      .lookup_pred_slot_idx_o(),
-      .lookup_pred_target_o(),
-      .lookup_epoch_o(),
-      .count_o(ftq_count_w)
-  );
-
   bundle_fifo #(
       .DATA_W(FQ_DATA_W),
       .DEPTH(FQ_DEPTH),
@@ -466,7 +425,6 @@ module ifu #(
 
   always_ff @(posedge clk) begin
     if (rst) begin
-      pc_reg <= Cfg.PLEN'(Cfg.RESET_VECTOR);
       fetch_epoch_q <= '0;
 
       req_pc_fifo_q <= '0;
@@ -508,21 +466,8 @@ module ifu #(
         fetch_epoch_q <= flush_next_epoch_w;
 
         req_head_q <= '0;
-        if (req_enq_fire_w) begin
-          req_pc_fifo_q['0] <= bpu_query_pc_w;
-          req_pred_slot_valid_fifo_q['0] <= bpu2ifu_pred_slot_valid_i;
-          req_pred_slot_idx_fifo_q['0] <= bpu2ifu_pred_slot_idx_i;
-          req_pred_target_fifo_q['0] <= bpu2ifu_pred_target_i;
-          req_ftq_id_fifo_q['0] <= ftq_alloc_id_w;
-          req_epoch_fifo_q['0] <= flush_next_epoch_w;
-          req_tail_q <= REQ_PTR_W'(1);
-          req_count_q <= REQ_CNT_W'(1);
-          pc_reg <= bpu2ifu_predicted_pc_i;
-        end else begin
-          req_tail_q <= '0;
-          req_count_q <= '0;
-          pc_reg <= redirect_pc_i;
-        end
+        req_tail_q <= '0;
+        req_count_q <= '0;
 
         inf_head_q <= '0;
         inf_tail_q <= '0;
@@ -535,10 +480,8 @@ module ifu #(
         fault_wait_flush_q <= 1'b0;
       end else if (local_mmu_flush_w) begin
         // Drop stale fetch requests/responses when SATP or SFENCE.VMA changes translation context.
-        // Replay the oldest outstanding virtual PC; keeping speculative pc_reg can
-        // restart mid-instruction after the queue contents carrying RVC state are dropped.
+        // Replay the oldest outstanding virtual PC after the top-level redirect refills FTQ.
         fetch_epoch_q <= flush_next_epoch_w;
-        pc_reg <= local_mmu_replay_pc_w;
         req_head_q <= '0;
         req_tail_q <= '0;
         req_count_q <= '0;
@@ -553,14 +496,13 @@ module ifu #(
         fault_wait_flush_q <= 1'b0;
       end else begin
         if (req_enq_fire_w) begin
-          req_pc_fifo_q[req_tail_q] <= pc_reg;
-          req_pred_slot_valid_fifo_q[req_tail_q] <= bpu2ifu_pred_slot_valid_i;
-          req_pred_slot_idx_fifo_q[req_tail_q] <= bpu2ifu_pred_slot_idx_i;
-          req_pred_target_fifo_q[req_tail_q] <= bpu2ifu_pred_target_i;
-          req_ftq_id_fifo_q[req_tail_q] <= ftq_alloc_id_w;
-          req_epoch_fifo_q[req_tail_q] <= fetch_epoch_q;
+          req_pc_fifo_q[req_tail_q] <= ftq_deq_pc_i;
+          req_pred_slot_valid_fifo_q[req_tail_q] <= ftq_deq_pred_slot_valid_i;
+          req_pred_slot_idx_fifo_q[req_tail_q] <= ftq_deq_pred_slot_idx_i;
+          req_pred_target_fifo_q[req_tail_q] <= ftq_deq_pred_target_i;
+          req_ftq_id_fifo_q[req_tail_q] <= ftq_deq_ftq_id_i;
+          req_epoch_fifo_q[req_tail_q] <= ftq_deq_epoch_i;
           req_tail_q <= req_ptr_inc(req_tail_q);
-          pc_reg <= bpu2ifu_predicted_pc_i;
         end
 
         if (!issue_need_mmu_w) begin
@@ -628,9 +570,8 @@ module ifu #(
       mmu_satp_prev_q <= mmu_satp_i;
     end
 `ifdef TRIATHLON_VERBOSE
-    $display("pc_reg: %h", pc_reg);
-    $display("ifu_bpu(enq_v/enq_r/enq_fire): %0d/%0d/%0d", ifu2bpu_handshake_o.valid,
-             ifu2bpu_handshake_o.ready, req_enq_fire_w);
+    $display("ifu_ftq(deq_v/deq_r/deq_fire pc): %0d/%0d/%0d %h", ftq_deq_valid_i,
+             ftq_deq_ready_o, req_enq_fire_w, ftq_deq_pc_i);
     $display("ifu_req(v/r/fire): %0d/%0d/%0d", req_issue_valid_w,
              icache2ifu_rsp_handshake_i.ready, req_issue_fire_w);
     $display("ifu_rsp(v/cap/drop): %0d/%0d/%0d",
@@ -678,10 +619,10 @@ module ifu #(
     if (ifu_diag_trace_en_q && (flush_i || local_mmu_flush_w) &&
         (ifu_pc_dbg_cnt_q < IFU_PC_DBG_BUDGET) &&
         (((redirect_pc_i & 32'hf0000000) == 32'hc0000000) ||
-         ((pc_reg & 32'hf0000000) == 32'hc0000000))) begin
-      $display("[ifu-flush] flush_i=%0d local=%0d satp_changed=%0d sfence=%0d redir=%h pc_reg=%h req_cnt=%0d inf_cnt=%0d enq=%0d pred=%h epoch=%0d->%0d",
-               flush_i, local_mmu_flush_w, satp_changed_w, mmu_sfence_vma_i, redirect_pc_i, pc_reg,
-               req_count_q, inf_count_q, req_enq_fire_w, bpu2ifu_predicted_pc_i, fetch_epoch_q, flush_next_epoch_w);
+         ((local_mmu_replay_pc_w & 32'hf0000000) == 32'hc0000000))) begin
+      $display("[ifu-flush] flush_i=%0d local=%0d satp_changed=%0d sfence=%0d redir=%h replay=%h req_cnt=%0d inf_cnt=%0d deq=%0d epoch=%0d->%0d",
+               flush_i, local_mmu_flush_w, satp_changed_w, mmu_sfence_vma_i, redirect_pc_i, local_mmu_replay_pc_w,
+               req_count_q, inf_count_q, req_enq_fire_w, fetch_epoch_q, flush_next_epoch_w);
       ifu_pc_dbg_cnt_q <= ifu_pc_dbg_cnt_q + 32'd1;
     end
 

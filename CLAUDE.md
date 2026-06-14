@@ -120,7 +120,7 @@ Triathlon/
 | NRET            | 4                         | Retire/commit width                                |
 | RS_DEPTH        | 16                        | Entries per reservation station                    |
 | ALU_COUNT       | 2                         | Configured ALU count (actual: 4 ALUs instantiated) |
-| FTQ_DEPTH       | 8                         | Fetch target queue depth                           |
+| FTQ_DEPTH       | 16                        | BPU→IFU decoupled fetch target queue depth         |
 | ICACHE          | 32KB, 4-way, 256-bit line | Instruction cache                                  |
 | DCACHE          | 32KB, 4-way, 256-bit line | Data cache                                         |
 | ITLB / DTLB     | 32 entries each           | SV32 instruction/data TLB entries                  |
@@ -137,15 +137,15 @@ Fetch -> Decode -> Rename -> Dispatch -> Issue -> Execute -> Writeback -> Commit
 
 ### Frontend (frontend.sv)
 
-- **IFU (Instruction Fetch Unit)**: Manages PC register, sends fetch requests to ICache/MMU, interfaces with BPU for next-PC prediction. Incorporates an SV32 MMU for instruction page walks. Instruction page fault capture quiesces further fetch enqueue/issue until the backend trap redirect flush arrives, preventing younger user fetch requests from being translated under the trap handler privilege.
-- **BPU (Branch Prediction Unit)**: Highly advanced tournament predictor supporting speculative fetching. Components include:
+- **IFU (Instruction Fetch Unit)**: Consumes FTQ entries, buffers pending/inflight ICache requests, and incorporates an SV32 MMU for instruction page walks. Instruction page fault capture quiesces further fetch enqueue/issue until the backend trap redirect flush arrives, preventing younger user fetch requests from being translated under the trap handler privilege.
+- **BPU (Branch Prediction Unit)**: Highly advanced tournament predictor with an internal PC register; it autonomously generates next-PC predictions into the FTQ and stalls only when the FTQ is full. Components include:
   - **TAGE**: Primary conditional branch predictor.
   - **SC_L (Statistical Correlator)**: Assists TAGE for hard-to-predict branches.
   - **Loop Predictor**: Specialized for loop bounds.
   - **ITTAGE**: Indirect Target TAGE for indirect jumps.
   - **RAS (Return Address Stack)**: Predicts function returns, updated speculatively.
 - **ICache**: 4-way set-associative, 32KB, 256-bit line (8 instructions). Non-blocking architecture with refill interface and 32-entry I-TLB.
-- **Fetch Target Queue (FTQ)**: Tracks fetch PCs, epochs, and prediction metadata for branch resolution and redirect recovery.
+- **Fetch Target Queue (FTQ)**: A head/tail FIFO between BPU and IFU. It carries fetch PC, predicted slot/target, predicted next fetch PC, epoch, and FTQ ID metadata; backend or IFU-local redirects flush the queue and restart BPU prediction from the redirect PC.
 - **Instr Aligner**: 将 IFU 4-word fetch group 半字展开为 ≤8 条 `ibuf_entry_t`（含 RVC `compressed_decoder`、carry、预测截断）。
 - **IBuffer**: 16-entry 纯 FIFO，接收 aligner 对齐条目，4-wide decode-ready 出队；与 IFU/aligner 一同位于 frontend。
 
@@ -556,6 +556,7 @@ make -C npc ASSERT=1 TOPNAME=tb_rob_exception SIM_MAIN=csrc/test/test_rob_except
 | `--commit-trace=START:END`                      | —                               | 等价于 `--commit-trace START:END`                                                                                                                         |
 | `--commit-trace-start N`                        | `0`                             | 与 `--commit-trace` 配合：trace 起始 cycle（含）                                                                                                                |
 | `--commit-trace-end N`                          | `0`（无上限）                        | 与 `--commit-trace` 配合：trace 结束 cycle（含）；`0` 表示不设上限                                                                                                     |
+| `--commit-ring N` / `--commit-ring=N`           | DiffTest 开启时 `64`；否则关闭           | DiffTest 静默 commit ring；保存最近 `N` 条 retire 摘要，成功路径不打印，mismatch 时在架构状态 dump 后输出最近 commit 上下文；`--commit-ring=0` 显式关闭                                      |
 | `--bru-trace`                                   | 禁用                              | 周期级 BRU/flush trace（`[bruwb]`、`[flush]`/`[flushp]`/`[bru]`，**无** cycle 窗口限制）                                                                           |
 | `--fe-trace`                                    | 禁用                              | 取指校验：前端 bundle 与内存指令不一致，或 slot_valid 不完整时打印 `[fe]`                                                                                                     |
 | `--stall-trace [N]` / `--stall-trace=N`         | 禁用；`N=200`                      | 连续 `N` 周期无 commit 时打印 `[stall]`，之后每再 stall `N` 周期重复打印                                                                                                  |
@@ -603,6 +604,7 @@ make -C npc ASSERT=1 TOPNAME=tb_rob_exception SIM_MAIN=csrc/test/test_rob_except
 | `[bruwb]`                                                                                                            | `--bru-trace`                        | 每拍 BRU writeback 有效：pc、操作数、redirect、mispred                                    |
 | `[fe]`                                                                                                               | `--fe-trace`                         | 取指 PC、slot_valid、FE/内存指令 mismatch、预测 NPC                                       |
 | `[stall]`                                                                                                            | `--stall-trace`                      | 无 commit stall：前端/IFU/解码/rename/ROB/LSU 等快照                                    |
+| `[difftest][commit-ring]` / `[commit-ring]`                                                                           | DiffTest mismatch 且 commit ring 开启 | mismatch 后输出最近 `N` 条 retire 摘要：cycle、slot、pc、inst、decoded、npc、写回、a0、store、trap/取指覆盖标志 |
 | `[progress]`                                                                                                         | `--progress`                         | 周期性仿真心跳                                                                        |
 | `[linux-stage]`                                                                                                      | `--linux-early-debug`                | 启动里程碑（每 stage 仅一次，见下表）                                                         |
 | `[debug][...]`                                                                                                       | `--linux-early-debug`                | satp 变更、页表写、异常 flush、SV32 fault walk、UART 等细粒度调试                               |
@@ -691,6 +693,9 @@ make -C npc profile-dashboard
 
 # 限定 commit trace 窗口
 make -C npc sim IMG=.../test.bin ARGS='--commit-trace 100000:150000'
+
+# DiffTest mismatch 默认 dump 最近 64 条 commit；可调大或用 --commit-ring=0 关闭
+make -C npc sim IMG=.../test.bin ARGS='--commit-ring=128'
 
 # merge.py 全系统镜像 + 早期调试
 make -C npc sim DIFFTEST_SO= IMG=../fw_combined.bin \

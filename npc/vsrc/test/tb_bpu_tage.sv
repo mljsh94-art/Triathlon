@@ -35,13 +35,14 @@ module tb_bpu_tage (
   localparam int unsigned TB_BPU_BTB_ENTRIES = 128;
   localparam int unsigned TB_BPU_BHT_ENTRIES = 512;
 
-  handshake_t ifu_to_bpu_handshake_i;
-  handshake_t bpu_to_ifu_handshake_o;
-  ifu_to_bpu_t ifu_to_bpu_i;
-  bpu_to_ifu_t bpu_to_ifu_o;
-  assign ifu_to_bpu_i.pc = pc_i;
-  assign ifu_to_bpu_handshake_i.ready = ifu_ready_i;
-  assign ifu_to_bpu_handshake_i.valid = ifu_valid_i;
+  logic ftq_enq_valid;
+  logic ftq_enq_ready;
+  logic [Cfg.PLEN-1:0] ftq_enq_pc;
+  logic ftq_enq_pred_slot_valid;
+  logic [$clog2(Cfg.INSTR_PER_FETCH)-1:0] ftq_enq_pred_slot_idx;
+  logic [Cfg.PLEN-1:0] ftq_enq_pred_target;
+  logic [Cfg.PLEN-1:0] ftq_enq_pred_npc;
+  assign ftq_enq_ready = ifu_ready_i;
   bpu #(
       .Cfg(Cfg),
       .BTB_ENTRIES(TB_BPU_BTB_ENTRIES),
@@ -53,8 +54,6 @@ module tb_bpu_tage (
   ) i_BPU (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .ifu_to_bpu_handshake_i(ifu_to_bpu_handshake_i),
-      .ifu_to_bpu_i(ifu_to_bpu_i),
       .update_valid_i(update_valid_i),
       .update_pc_i(update_pc_i),
       .update_is_cond_i(update_is_cond_i),
@@ -69,13 +68,20 @@ module tb_bpu_tage (
       .ras_update_is_rvc_i(ras_update_is_rvc_i),
       .ras_update_pc_i(ras_update_pc_i),
       .flush_i(flush_i),
-      .bpu_to_ifu_handshake_o(bpu_to_ifu_handshake_o),
-      .bpu_to_ifu_o(bpu_to_ifu_o)
+      .redirect_valid_i(flush_i || ifu_valid_i),
+      .redirect_pc_i(pc_i),
+      .ftq_enq_valid_o(ftq_enq_valid),
+      .ftq_enq_ready_i(ftq_enq_ready),
+      .ftq_enq_pc_o(ftq_enq_pc),
+      .ftq_enq_pred_slot_valid_o(ftq_enq_pred_slot_valid),
+      .ftq_enq_pred_slot_idx_o(ftq_enq_pred_slot_idx),
+      .ftq_enq_pred_target_o(ftq_enq_pred_target),
+      .ftq_enq_pred_npc_o(ftq_enq_pred_npc)
   );
-  assign npc_o = bpu_to_ifu_o.npc;
-  assign pred_slot_valid_o = bpu_to_ifu_o.pred_slot_valid;
-  assign pred_slot_idx_o = bpu_to_ifu_o.pred_slot_idx;
-  assign pred_slot_target_o = bpu_to_ifu_o.pred_slot_target;
+  assign npc_o = ftq_enq_pred_npc;
+  assign pred_slot_valid_o = ftq_enq_pred_slot_valid;
+  assign pred_slot_idx_o = ftq_enq_pred_slot_idx;
+  assign pred_slot_target_o = ftq_enq_pred_target;
   assign dbg_ghr_o = i_BPU.ghr_q;
   assign dbg_tage_lookup_total_o = i_BPU.dbg_tage_lookup_total_q;
   assign dbg_tage_hit_total_o = i_BPU.dbg_tage_hit_total_q;

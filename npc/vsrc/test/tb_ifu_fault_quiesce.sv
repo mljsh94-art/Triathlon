@@ -27,18 +27,18 @@ module tb_ifu_fault_quiesce #(
     output logic [Cfg.PLEN-1:0] ifetch_fault_pc_o
 );
 
-  handshake_t ifu2bpu_hs;
-  handshake_t bpu2ifu_hs;
+  logic ftq_deq_ready;
+  logic local_redirect_valid;
+  logic [Cfg.PLEN-1:0] local_redirect_pc;
   handshake_t ifu2icache_req_hs;
   handshake_t icache2ifu_rsp_hs;
 
-  assign bpu2ifu_hs.valid = 1'b1;
-  assign bpu2ifu_hs.ready = 1'b1;
   assign icache2ifu_rsp_hs.valid = 1'b0;
   assign icache2ifu_rsp_hs.ready = 1'b1;
 
-  assign bpu_req_valid_o = ifu2bpu_hs.valid;
-  assign bpu_req_ready_o = ifu2bpu_hs.ready;
+  assign bpu_req_valid_o = 1'b1;
+  assign bpu_req_ready_o = ftq_deq_ready;
+  assign bpu_query_pc_o = redirect_pc_i;
   assign icache_req_valid_o = ifu2icache_req_hs.valid;
 
   ifu #(
@@ -46,13 +46,16 @@ module tb_ifu_fault_quiesce #(
   ) dut (
       .clk(clk_i),
       .rst(rst_i),
-      .ifu2bpu_handshake_o(ifu2bpu_hs),
-      .bpu2ifu_handshake_i(bpu2ifu_hs),
-      .ifu2bpu_pc_o(bpu_query_pc_o),
-      .bpu2ifu_predicted_pc_i(bpu_pred_pc_i),
-      .bpu2ifu_pred_slot_valid_i(1'b0),
-      .bpu2ifu_pred_slot_idx_i('0),
-      .bpu2ifu_pred_target_i('0),
+      .ftq_deq_valid_i(1'b1),
+      .ftq_deq_ready_o(ftq_deq_ready),
+      .ftq_deq_pc_i(redirect_pc_i),
+      .ftq_deq_pred_slot_valid_i(1'b0),
+      .ftq_deq_pred_slot_idx_i('0),
+      .ftq_deq_pred_target_i('0),
+      .ftq_deq_pred_npc_i(bpu_pred_pc_i),
+      .ftq_deq_epoch_i(3'd0),
+      .ftq_deq_ftq_id_i('0),
+      .ftq_next_pc_i(bpu_pred_pc_i),
       .ifu2icache_req_handshake_o(ifu2icache_req_hs),
       .icache2ifu_rsp_handshake_i(icache2ifu_rsp_hs),
       .ifu2icache_req_addr_o(icache_req_addr_o),
@@ -68,6 +71,8 @@ module tb_ifu_fault_quiesce #(
       .ifu_ibuffer_rsp_fetch_epoch_o(),
       .flush_i(flush_i),
       .redirect_pc_i(redirect_pc_i),
+      .local_redirect_valid_o(local_redirect_valid),
+      .local_redirect_pc_o(local_redirect_pc),
       .mmu_satp_i(mmu_satp_i),
       .mmu_priv_i(mmu_priv_i),
       .mmu_sum_i(1'b0),
@@ -88,5 +93,7 @@ module tb_ifu_fault_quiesce #(
       .ifetch_fault_tval_o(),
       .ifetch_fault_cause_o()
   );
+
+  wire _unused_local_redirect = &{1'b0, local_redirect_valid, local_redirect_pc[0]};
 
 endmodule

@@ -17,14 +17,15 @@ package global_config_pkg;
     logic ready;
   } handshake_t;
 
-  typedef struct packed {logic [Cfg.PLEN-1:0] pc;} ifu_to_bpu_t;
-
   typedef struct packed {
-    logic [Cfg.PLEN-1:0] npc;
+    logic [Cfg.PLEN-1:0] pc;
     logic                pred_slot_valid;
     logic [$clog2(Cfg.INSTR_PER_FETCH)-1:0] pred_slot_idx;
-    logic [Cfg.PLEN-1:0] pred_slot_target;
-  } bpu_to_ifu_t;
+    logic [Cfg.PLEN-1:0] pred_target;
+    logic [Cfg.PLEN-1:0] pred_npc;
+    logic [FETCH_EPOCH_W-1:0] fetch_epoch;
+    logic [FTQ_ID_W-1:0] ftq_id;
+  } ftq_entry_t;
 
   typedef struct packed {
     logic                 slot_valid;

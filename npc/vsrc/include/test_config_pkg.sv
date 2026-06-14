@@ -46,6 +46,7 @@ package test_config_pkg;
       IFU_REQ_DEPTH : unsigned'(16),
       IFU_INF_DEPTH : unsigned'(16),
       IFU_FQ_DEPTH : unsigned'(16),
+      FTQ_DEPTH : unsigned'(16),
       ENABLE_COMMIT_RAS_UPDATE : unsigned'(1),
       DC_BANKS : unsigned'(4),
       DC_MSHR_DEPTH : unsigned'(16),

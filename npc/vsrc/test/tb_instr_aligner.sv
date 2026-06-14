@@ -12,7 +12,7 @@ module tb_instr_aligner (
     input  logic [                    Cfg.PLEN-1:0] fe_pc_i,
     input  logic [Cfg.INSTR_PER_FETCH-1:0]          fe_slot_valid_i,
     input  logic [Cfg.INSTR_PER_FETCH*Cfg.PLEN-1:0] fe_pred_npc_i,
-    input  logic [Cfg.INSTR_PER_FETCH*((Cfg.IFU_INF_DEPTH >= 2) ? $clog2(Cfg.IFU_INF_DEPTH) : 1)-1:0] fe_ftq_id_i,
+    input  logic [Cfg.INSTR_PER_FETCH*((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] fe_ftq_id_i,
     input  logic [Cfg.INSTR_PER_FETCH*3-1:0] fe_fetch_epoch_i,
     input  logic                                    ibuf_aln_ready_i,
     input  logic                                    flush_i,

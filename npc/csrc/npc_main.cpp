@@ -203,7 +203,7 @@ int main(int argc, char **argv) {
     std::cerr << "Usage: " << argv[0]
               << " <IMG> [--max-cycles N] [-d REF_SO] [--trace [vcd]] [--commit-trace [START[:END]|START [END]]]"
               << " [--commit-trace-start N] [--commit-trace-end N]"
-              << " [--profile] [--profile-json <path>] [--bru-trace] [--fe-trace] [--stall-trace [N]] [--boot-handoff]"
+              << " [--commit-ring N] [--profile] [--profile-json <path>] [--bru-trace] [--fe-trace] [--stall-trace [N]] [--boot-handoff]"
               << " [--dtb <path>] [--firmware-load-base <addr>]"
               << " [--virtio-blk-image <path>]"
               << " [--progress [N]] [--progress-verbose] [--linux-early-debug]\n";
@@ -255,6 +255,9 @@ int main(int argc, char **argv) {
   if (!args.difftest_so.empty()) {
     if (!difftest.init(args.difftest_so, mem.mem.pmem_words, entry_pc)) {
       return 1;
+    }
+    if (!args.commit_ring_explicit) {
+      args.commit_ring_size = 64;
     }
   }
 
@@ -330,12 +333,6 @@ int main(int argc, char **argv) {
       slot.is_rvc = ((top->commit_is_rvc_o >> i) & 0x1) != 0;
       slot.actual_npc = top->commit_actual_npc_o[i];
 
-      observer.on_commit_slot(cycles, top, mem, rf, slot);
-      agent_log_commit_fetch(cycles, slot, top, mem, rf);
-      profile.record_commit(slot.pc, slot.inst, slot.decoded_inst, slot.is_rvc);
-
-      npc::DUTCoreState dut_after =
-          collect_dut_arch_state(top, rf, commit_next_pc(slot, slot.actual_npc));
       npc::DifftestStoreCommit store_commit{};
       bool is_store_commit = ((top->commit_is_store_o >> i) & 0x1) != 0;
       bool store_data_valid = ((top->commit_store_valid_o >> i) & 0x1) != 0;
@@ -350,9 +347,19 @@ int main(int argc, char **argv) {
           read_retire_fetch_truth(top, mem, slot.pc, retire_mem_raw) &&
           !slot.is_rvc && (retire_mem_raw != slot.decoded_inst);
       bool trap_sync = top->dbg_csr_irq_trap_o != 0;
+
+      observer.on_commit_slot(cycles, top, mem, rf, slot, store_commit.valid,
+                              store_commit.addr, store_commit.data, store_commit.op,
+                              trap_sync, retire_fetch_override);
+      agent_log_commit_fetch(cycles, slot, top, mem, rf);
+      profile.record_commit(slot.pc, slot.inst, slot.decoded_inst, slot.is_rvc);
+
+      npc::DUTCoreState dut_after =
+          collect_dut_arch_state(top, rf, commit_next_pc(slot, slot.actual_npc));
       if (!difftest.step_and_check(cycles, slot.pc, slot.decoded_inst, dut_after,
                                    slot.rf_before, rf, store_commit, trap_sync,
                                    retire_fetch_override)) {
+        observer.dump_commit_ring(std::cerr);
         std::cerr << "[difftest] stop on first mismatch\n";
         profile.emit_all_summaries(cycles, top);
         if (tfp) {

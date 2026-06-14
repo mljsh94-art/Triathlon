@@ -79,7 +79,8 @@ SimObserver::SimObserver(const SimArgs &args, uint32_t cfg_instr_per_fetch,
     : args_(args),
       cfg_instr_per_fetch_(cfg_instr_per_fetch),
       cfg_commit_width_(cfg_commit_width),
-      cfg_instr_mask_(make_low_mask(cfg_instr_per_fetch)) {}
+      cfg_instr_mask_(make_low_mask(cfg_instr_per_fetch)),
+      commit_ring_(static_cast<size_t>(args.commit_ring_size)) {}
 
 void SimObserver::configure_mem_watch(MemSystem &mem, uint32_t firmware_base, bool boot_handoff) {
   if (!args_.linux_early_debug || !boot_handoff) {
@@ -95,6 +96,40 @@ bool SimObserver::commit_trace_active(uint64_t cycle) const {
   if (cycle < args_.commit_trace_start) return false;
   if (args_.commit_trace_end != 0 && cycle > args_.commit_trace_end) return false;
   return true;
+}
+
+void SimObserver::record_commit_ring(uint64_t cycle, const CommitSlot &slot,
+                                     const std::array<uint32_t, 32> &rf,
+                                     bool store_commit_valid, uint32_t store_commit_addr,
+                                     uint32_t store_commit_data, uint32_t store_commit_op,
+                                     bool trap_sync, bool retire_fetch_override) {
+  if (commit_ring_.empty()) {
+    return;
+  }
+
+  CommitRingEntry &entry = commit_ring_[commit_ring_next_];
+  entry.cycle = cycle;
+  entry.slot = slot.slot;
+  entry.we = slot.we;
+  entry.rd = slot.rd;
+  entry.data = slot.data;
+  entry.pc = slot.pc;
+  entry.actual_npc = slot.actual_npc;
+  entry.inst = slot.inst;
+  entry.decoded_inst = slot.decoded_inst;
+  entry.is_rvc = slot.is_rvc;
+  entry.a0 = rf[10];
+  entry.store_valid = store_commit_valid;
+  entry.store_addr = store_commit_addr;
+  entry.store_data = store_commit_data;
+  entry.store_op = store_commit_op;
+  entry.trap_sync = trap_sync;
+  entry.retire_fetch_override = retire_fetch_override;
+
+  commit_ring_next_ = (commit_ring_next_ + 1u) % commit_ring_.size();
+  if (commit_ring_count_ < commit_ring_.size()) {
+    commit_ring_count_++;
+  }
 }
 
 LinuxBootStageView SimObserver::make_linux_stage_view(uint64_t cycle, uint32_t slot, uint32_t pc,
@@ -396,7 +431,10 @@ void SimObserver::after_bru_writeback(uint64_t cycle, Vtb_triathlon *top) {
 }
 
 void SimObserver::on_commit_slot(uint64_t cycle, Vtb_triathlon *top, MemSystem &mem,
-                                 std::array<uint32_t, 32> &rf, const CommitSlot &slot) {
+                                 std::array<uint32_t, 32> &rf, const CommitSlot &slot,
+                                 bool store_commit_valid, uint32_t store_commit_addr,
+                                 uint32_t store_commit_data, uint32_t store_commit_op,
+                                 bool trap_sync, bool retire_fetch_override) {
   const uint32_t i = slot.slot;
   const bool we = slot.we;
   const uint32_t rd = slot.rd;
@@ -716,6 +754,8 @@ void SimObserver::on_commit_slot(uint64_t cycle, Vtb_triathlon *top, MemSystem &
           if (in_bitops) linux_bitops_step_logs_++;
         }
       }
+  record_commit_ring(cycle, slot, rf, store_commit_valid, store_commit_addr, store_commit_data,
+                     store_commit_op, trap_sync, retire_fetch_override);
   trace_commit(cycle, slot, rf);
   last_commit_pc_seen_ = pc;
 }
@@ -738,6 +778,54 @@ void SimObserver::trace_commit(uint64_t cycle, const CommitSlot &slot,
             << " a0=0x" << rf[10]
             << std::dec << "\n";
   std::cout.flags(f);
+}
+
+void SimObserver::dump_commit_ring(std::ostream &os) const {
+  if (commit_ring_.empty()) {
+    return;
+  }
+
+  std::ios::fmtflags f(os.flags());
+  if (commit_ring_count_ == 0) {
+    os << "[difftest][commit-ring] last 0/" << commit_ring_.size() << " commits\n";
+    os.flags(f);
+    return;
+  }
+
+  const size_t oldest = (commit_ring_next_ + commit_ring_.size() - commit_ring_count_) %
+                        commit_ring_.size();
+  const size_t newest = (commit_ring_next_ + commit_ring_.size() - 1u) % commit_ring_.size();
+  os << "[difftest][commit-ring] last " << commit_ring_count_ << "/"
+     << commit_ring_.size()
+     << " commits oldest_cycle=" << commit_ring_[oldest].cycle
+     << " newest_cycle=" << commit_ring_[newest].cycle << "\n";
+
+  for (size_t n = 0; n < commit_ring_count_; n++) {
+    const size_t idx = (oldest + n) % commit_ring_.size();
+    const CommitRingEntry &entry = commit_ring_[idx];
+    os << "[commit-ring] cycle=" << entry.cycle
+       << " slot=" << entry.slot
+       << " pc=0x" << std::hex << entry.pc
+       << " inst=0x" << entry.inst
+       << " decoded=0x" << entry.decoded_inst
+       << " npc=0x" << entry.actual_npc
+       << std::dec
+       << " rvc=" << static_cast<int>(entry.is_rvc)
+       << " we=" << static_cast<int>(entry.we)
+       << " rd=x" << entry.rd
+       << " data=0x" << std::hex << entry.data
+       << " a0=0x" << entry.a0;
+    if (entry.store_valid) {
+      os << " store(addr/data/op)=0x" << entry.store_addr
+         << "/0x" << entry.store_data
+         << "/" << std::dec << entry.store_op << std::hex;
+    }
+    os << std::dec
+       << " trap_sync=" << static_cast<int>(entry.trap_sync)
+       << " retire_fetch_override=" << static_cast<int>(entry.retire_fetch_override)
+       << "\n";
+  }
+  os.flags(f);
 }
 
 void SimObserver::emit_progress(uint64_t cycle, Vtb_triathlon *top, MemSystem &mem,
