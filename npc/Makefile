@@ -16,9 +16,19 @@ else
   ASSERT_CFG := $(OBJ_DIR)/.assert_mode_0
 endif
 
+ifeq ($(SNAPSHOT),1)
+  VL_SNAPSHOT_FLAGS := --savable --threads 1
+  SNAPSHOT_CFG := $(OBJ_DIR)/.snapshot_mode_1
+  CXX_SNAPSHOT_FLAG := -DNPC_SNAPSHOT=1
+else
+  VL_SNAPSHOT_FLAGS := --threads 2
+  SNAPSHOT_CFG := $(OBJ_DIR)/.snapshot_mode_0
+  CXX_SNAPSHOT_FLAG := -DNPC_SNAPSHOT=0
+endif
+
 VERILATOR = verilator
 VERILATOR_CFLAGS += -MMD --build -cc \
-				-O3 -j $(shell nproc) --threads 2 \
+				-O3 -j $(shell nproc) $(VL_SNAPSHOT_FLAGS) \
 				--x-assign fast --x-initial fast $(VL_ASSERT_FLAG) -sv \
 				--output-split 30000 --output-split-cfuncs 30000 \
 				-MAKEFLAGS OPT_FAST=-O3 \
@@ -85,7 +95,7 @@ IMG ?=
 ARGS ?=
 NPC_EXE := $(strip $(ARGS) $(DIFFTEST) $(IMG))
 INCFLAGS = $(addprefix -I, $(INC_PATH))
-CXXFLAGS += $(INCFLAGS) -I$(abspath ./include) -I$(abspath ./csrc/include) -DTOP_NAME="\"V$(TOPNAME)\"" -std=c++17 -O3 -march=native -fno-plt
+CXXFLAGS += $(INCFLAGS) -I$(abspath ./include) -I$(abspath ./csrc/include) -DTOP_NAME="\"V$(TOPNAME)\"" $(CXX_SNAPSHOT_FLAG) -std=c++17 -O3 -march=native -fno-plt
 LDFLAGS += -lreadline -ldl -pie $(LLVM_LIBS)
 
 NEED_CHECKS := $(filter-out clean clean-all help,$(MAKECMDGOALS))
@@ -110,7 +120,12 @@ $(ASSERT_CFG):
 	@rm -f $(OBJ_DIR)/.assert_mode_0 $(OBJ_DIR)/.assert_mode_1
 	@touch $@
 
-$(BIN): $(VSRCS) $(CSRCS) $(NVBOARD_ARCHIVE) $(ASSERT_CFG)
+$(SNAPSHOT_CFG):
+	@mkdir -p $(OBJ_DIR)
+	@rm -f $(OBJ_DIR)/.snapshot_mode_0 $(OBJ_DIR)/.snapshot_mode_1
+	@touch $@
+
+$(BIN): $(VSRCS) $(CSRCS) $(NVBOARD_ARCHIVE) $(ASSERT_CFG) $(SNAPSHOT_CFG)
 # 	@rm -rf $(OBJ_DIR)
 	$(VERILATOR) $(VERILATOR_CFLAGS) \
 		--top-module $(TOPNAME) $^ \

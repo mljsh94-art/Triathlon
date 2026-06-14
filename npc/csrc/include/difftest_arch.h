@@ -21,6 +21,8 @@ struct DUTCoreState {
   uint32_t stval;
   uint32_t mtvec;
   uint32_t stvec;
+  uint32_t mscratch;
+  uint32_t sscratch;
   uint32_t mie;
   uint32_t mip;
   uint32_t medeleg;
@@ -31,7 +33,7 @@ struct DUTCoreState {
 inline constexpr bool kDiffTestToDut = false;
 inline constexpr bool kDiffTestToRef = true;
 
-static_assert(sizeof(DUTCoreState) == (32 + 1 + 16) * sizeof(uint32_t),
+static_assert(sizeof(DUTCoreState) == (32 + 1 + 18) * sizeof(uint32_t),
               "DUTCoreState layout drift");
 
 }  // namespace npc

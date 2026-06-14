@@ -426,7 +426,7 @@ Triathlon 使用 Spike `rv32imac` / MSU / Sv32 作为 lockstep 参考模型。�
 | ----- | -------------------------------------------------------------------------------------------- |
 | 核心    | `gpr[32]`, `pc`                                                                              |
 | 特权    | `priv`（0=U, 1=S, 3=M）                                                                        |
-| Trap  | `mstatus`, `sstatus`, `mepc`, `sepc`, `mcause`, `scause`, `mtval`, `stval`, `mtvec`, `stvec` |
+| Trap  | `mstatus`, `sstatus`, `mepc`, `sepc`, `mcause`, `scause`, `mtval`, `stval`, `mtvec`, `stvec`, `mscratch`, `sscratch` |
 | 中断/委托 | `mie`, `mip`, `medeleg`, `mideleg`                                                           |
 | MMU   | `satp`                                                                                       |
 
@@ -500,6 +500,9 @@ RTL 断言/cover 的 Make 变量约定与 **DiffTest 对齐**：同一 `build/$(
 - `ASSERT=1` → `VL_ASSERT_FLAG=--assert`，`ASSERT_CFG=obj_dir/.assert_mode_1`
 - 默认/`ASSERT=` → `VL_ASSERT_FLAG=--noassert`，`ASSERT_CFG=obj_dir/.assert_mode_0`
 - `$(BIN)` 依赖 `$(ASSERT_CFG)`（普通依赖，戳更新触发 Verilator 重编）
+- `SNAPSHOT=1` → Verilator `--savable --threads 1`，并定义 `NPC_SNAPSHOT=1`
+- 默认/`SNAPSHOT=` → Verilator `--threads 2`，并定义 `NPC_SNAPSHOT=0`
+- `$(BIN)` 依赖 `obj_dir/.snapshot_mode_0` / `.snapshot_mode_1`，切换 snapshot 模式会触发重编
 - `sim_assert.sv` 列入 `PKG_VSRCS`，全设计可见
 
 **源码分工**
@@ -565,6 +568,35 @@ make -C npc ASSERT=1 TOPNAME=tb_rob_exception SIM_MAIN=csrc/test/test_rob_except
 | `--firmware-load-base <addr>` / `=addr`         | `0x80020000`（OpenSBI 区）         | `--boot-handoff` 下固件加载基址；须 **4MiB 对齐**（RV32 Linux `setup_vm()` 要求），推荐 `0x80400000`；不得与复位 PC `0x80000000` 重叠                                            |
 | `--virtio-blk-image <path>` / `=path`           | 无                               | VirtIO block 后端磁盘镜像                                                                                                                                    |
 | `--linux-early-debug`                           | 禁用                              | Linux/OpenSBI 早期启动调试：一次性 `[linux-stage]` 里程碑 + 条件 `[debug][...]` 细粒度日志                                                                                 |
+| `--snapshot-interval N` / `=N`                  | `0`（禁用）                         | 每 `N` 个 cycle 在 `--snapshot-dir` 写一次磁盘 snapshot；需要 `SNAPSHOT=1` 构建                                                                                              |
+| `--snapshot-dir <path>` / `=path`               | `build/snapshots`                | snapshot 输出目录；从 `npc/` 运行 `make sim` 时默认落在 `npc/build/snapshots/`                                                                                             |
+| `--snapshot-keep K` / `=K`                      | `3`                             | snapshot 文件轮转保留数量；`0` 表示不删除旧 snapshot                                                                                                                       |
+| `--snapshot-restore <path>` / `=path`           | 禁用                              | 手动从 snapshot 恢复；仍要求传同一 `<IMG>`，并校验镜像 hash、boot 参数、DiffTest 开关等元数据                                                                                       |
+
+
+#### Simulation Snapshot
+
+Snapshot 用于长跑 DiffTest/全系统仿真后的手动 ROI 调试。开启时，仿真器周期性保存 `Vtb_triathlon` 的 Verilator savable 状态、C++ `MemSystem`（DRAM/bootrom/MMIO/ICache/DCache pending 队列）、RF 影子、周期计数和 Spike REF（`DUTCoreState` + pmem 窗口）。`ProfileCollector`、`SimObserver` 内部统计和 VCD 文件句柄不保存，restore 后重新统计/重新打开 trace。
+
+构建必须使用 `SNAPSHOT=1`，该模式会使用 `--savable --threads 1`。默认构建仍为 `--threads 2`，若在非 snapshot 构建中使用 snapshot 参数会报错。
+
+典型流程：
+
+```bash
+# 1. snapshot 构建 + 长跑
+make -C npc SNAPSHOT=1
+make -C npc sim SNAPSHOT=1 IMG=../fw_combined.bin \
+  ARGS='--snapshot-interval=1000000 --snapshot-keep=3 --progress=2000000'
+
+# 2. mismatch 后查看 stderr：commit-ring + nearest snapshot 提示
+
+# 3. 手动从最近 snapshot 恢复，并缩小 commit trace / NDJSON 插桩窗口
+make -C npc sim SNAPSHOT=1 IMG=../fw_combined.bin \
+  ARGS='--snapshot-restore=build/snapshots/triathlon-12000000.snap \
+        --commit-trace=12050000:12100000 --max-cycles=12150000'
+```
+
+`--snapshot-restore` 不会自动重跑 mismatch ROI；mismatch 时仅在 commit-ring 后打印 `[snapshot] nearest=...` 提示。恢复点从 snapshot 保存的 cycle 后一拍继续执行，适合配合 `--commit-trace START:END`、`--stall-trace` 或 NDJSON 插桩缩短复现时间。当前磁盘容器为 `TRSNAP1` 二进制格式（version 2，包含 Spike REF 的 `mscratch`/`sscratch`），blob 带 codec 字段；本机默认写 raw blob，预留 zstd 压缩扩展。
 
 
 #### `--commit-trace` 窗口语法

@@ -62,6 +62,8 @@ static void diff_get_regs(void *buf) {
   ctx->stval = static_cast<uint32_t>(p->get_csr(CSR_STVAL));
   ctx->mtvec = static_cast<uint32_t>(p->get_csr(CSR_MTVEC));
   ctx->stvec = static_cast<uint32_t>(p->get_csr(CSR_STVEC));
+  ctx->mscratch = static_cast<uint32_t>(p->get_csr(CSR_MSCRATCH));
+  ctx->sscratch = static_cast<uint32_t>(p->get_csr(CSR_SSCRATCH));
   ctx->mie = static_cast<uint32_t>(p->get_csr(CSR_MIE));
   ctx->mip = static_cast<uint32_t>(p->get_csr(CSR_MIP));
   ctx->medeleg = static_cast<uint32_t>(p->get_csr(CSR_MEDELEG));
@@ -86,6 +88,8 @@ static void diff_set_regs(void *buf) {
   p->set_csr(CSR_STVAL, ctx->stval);
   p->set_csr(CSR_MTVEC, ctx->mtvec);
   p->set_csr(CSR_STVEC, ctx->stvec);
+  p->set_csr(CSR_MSCRATCH, ctx->mscratch);
+  p->set_csr(CSR_SSCRATCH, ctx->sscratch);
   p->set_csr(CSR_MIE, ctx->mie);
   p->set_csr(CSR_MIP, ctx->mip);
   p->set_csr(CSR_MEDELEG, ctx->medeleg);
@@ -106,6 +110,21 @@ static void diff_memcpy(reg_t dest, void *src, size_t n) {
   }
 
   pmem->store(dest - kPmemBase, copy_n, bytes);
+}
+
+static void diff_memread(reg_t src_addr, void *dest, size_t n) {
+  auto *bytes = static_cast<uint8_t *>(dest);
+  if (src_addr < kPmemBase || src_addr >= (kPmemBase + kPmemSize)) {
+    return;
+  }
+
+  size_t max_n = static_cast<size_t>((kPmemBase + kPmemSize) - src_addr);
+  size_t copy_n = std::min(n, max_n);
+  if (copy_n == 0) {
+    return;
+  }
+
+  pmem->load(src_addr - kPmemBase, copy_n, bytes);
 }
 
 }  // namespace
@@ -136,7 +155,18 @@ __EXPORT void difftest_memcpy(uint32_t addr, void *buf, size_t n, bool direction
   if (direction == npc::kDiffTestToRef) {
     diff_memcpy(addr, buf, n);
   } else {
-    assert(false && "difftest_memcpy FROM_REF not implemented");
+    diff_memread(addr, buf, n);
+  }
+}
+
+__EXPORT void difftest_pmem_snapshot(void *buf, size_t n, bool direction) {
+  assert(s != nullptr && p != nullptr);
+  size_t copy_n = std::min(n, static_cast<size_t>(kPmemSize));
+  if (copy_n == 0) return;
+  if (direction == npc::kDiffTestToRef) {
+    diff_memcpy(kPmemBase, buf, copy_n);
+  } else {
+    diff_memread(kPmemBase, buf, copy_n);
   }
 }
 
@@ -160,5 +190,5 @@ __EXPORT void difftest_raise_intr(uint64_t cause) {
   p->take_trap_public(t, state->pc);
 }
 
-static_assert(sizeof(npc::DUTCoreState) == (32 + 1 + 16) * sizeof(uint32_t),
+static_assert(sizeof(npc::DUTCoreState) == (32 + 1 + 18) * sizeof(uint32_t),
               "wrapper DUTCoreState layout drift");

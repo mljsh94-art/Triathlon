@@ -32,6 +32,11 @@ class Difftest {
                       const DifftestStoreCommit &store_commit,
                       bool trap_sync, bool retire_fetch_override);
 
+  bool capture_ref_state(DUTCoreState &state_out,
+                         std::vector<uint8_t> &pmem_out);
+  bool restore_ref_state(const DUTCoreState &state,
+                         const std::vector<uint8_t> &pmem);
+
   ~Difftest();
 
  private:
@@ -40,6 +45,7 @@ class Difftest {
   using difftest_exec_t = void (*)(uint64_t);
   using difftest_init_t = void (*)(int);
   using difftest_raise_intr_t = void (*)(uint64_t);
+  using difftest_pmem_snapshot_t = void (*)(void *, size_t, bool);
 
   static int32_t sext12(uint32_t imm12);
   static bool is_mmio_addr(uint32_t addr);
@@ -74,6 +80,7 @@ class Difftest {
   difftest_exec_t difftest_exec_ = nullptr;
   difftest_init_t difftest_init_ = nullptr;
   difftest_raise_intr_t difftest_raise_intr_ = nullptr;
+  difftest_pmem_snapshot_t difftest_pmem_snapshot_ = nullptr;
 
   DUTCoreState last_ref_state_ = {};
   bool has_last_ref_state_ = false;

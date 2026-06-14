@@ -21,6 +21,43 @@ bool addr_in_range(uint32_t addr, uint32_t base, uint32_t size) {
   return addr >= base && addr < (base + size);
 }
 
+bool set_core_state_csr(DUTCoreState &state, uint32_t csr, uint32_t value) {
+  switch (csr) {
+    case 0x100u: state.sstatus = value; return true;
+    case 0x105u: state.stvec = value; return true;
+    case 0x140u: state.sscratch = value; return true;
+    case 0x141u: state.sepc = value; return true;
+    case 0x142u: state.scause = value; return true;
+    case 0x143u: state.stval = value; return true;
+    case 0x144u: state.mip = value; return true;  // sip is a delegated view of mip.
+    case 0x180u: state.satp = value; return true;
+    case 0x300u: state.mstatus = value; return true;
+    case 0x304u: state.mie = value; return true;
+    case 0x305u: state.mtvec = value; return true;
+    case 0x340u: state.mscratch = value; return true;
+    case 0x341u: state.mepc = value; return true;
+    case 0x342u: state.mcause = value; return true;
+    case 0x343u: state.mtval = value; return true;
+    case 0x344u: state.mip = value; return true;
+    case 0x302u: state.medeleg = value; return true;
+    case 0x303u: state.mideleg = value; return true;
+    default: return false;
+  }
+}
+
+void restore_trap_entry_csr_before(DUTCoreState &trap_before,
+                                   const DUTCoreState &dut_after,
+                                   uint32_t inst) {
+  if ((inst & 0x7fu) != 0x73u) return;
+  uint32_t funct3 = (inst >> 12) & 0x7u;
+  if (funct3 == 0u) return;
+  uint32_t rd = (inst >> 7) & 0x1fu;
+  if (rd == 0u) return;
+
+  uint32_t csr = (inst >> 20) & 0xfffu;
+  set_core_state_csr(trap_before, csr, dut_after.gpr[rd]);
+}
+
 void agent_log_difftest_step(uint64_t cycle, uint32_t pc, uint32_t inst,
                              const DUTCoreState &ref_before,
                              const DUTCoreState &ref_after,
@@ -90,6 +127,8 @@ bool Difftest::init(const std::string &so_path,
       reinterpret_cast<difftest_init_t>(dlsym(handle_, "difftest_init"));
   difftest_raise_intr_ = reinterpret_cast<difftest_raise_intr_t>(
       dlsym(handle_, "difftest_raise_intr"));
+  difftest_pmem_snapshot_ = reinterpret_cast<difftest_pmem_snapshot_t>(
+      dlsym(handle_, "difftest_pmem_snapshot"));
 
   if (!difftest_memcpy_ || !difftest_regcpy_ || !difftest_exec_ ||
       !difftest_init_) {
@@ -122,6 +161,45 @@ bool Difftest::init(const std::string &so_path,
 
 bool Difftest::enabled() const { return enabled_; }
 
+bool Difftest::capture_ref_state(DUTCoreState &state_out,
+                                 std::vector<uint8_t> &pmem_out) {
+  if (!enabled_) {
+    state_out = {};
+    pmem_out.clear();
+    return true;
+  }
+  difftest_regcpy_(&state_out, kDiffTestToDut);
+  pmem_out.assign(kPmemSize, 0);
+  if (difftest_pmem_snapshot_) {
+    difftest_pmem_snapshot_(pmem_out.data(), pmem_out.size(), kDiffTestToDut);
+  } else {
+    difftest_memcpy_(kPmemBase, pmem_out.data(), pmem_out.size(), kDiffTestToDut);
+  }
+  return true;
+}
+
+bool Difftest::restore_ref_state(const DUTCoreState &state,
+                                 const std::vector<uint8_t> &pmem) {
+  if (!enabled_) return true;
+  if (pmem.size() != kPmemSize) {
+    std::cerr << "[difftest] invalid pmem snapshot size=" << pmem.size()
+              << " expected=" << kPmemSize << "\n";
+    return false;
+  }
+  if (difftest_pmem_snapshot_) {
+    difftest_pmem_snapshot_(const_cast<uint8_t *>(pmem.data()), pmem.size(),
+                            kDiffTestToRef);
+  } else {
+    difftest_memcpy_(kPmemBase, const_cast<uint8_t *>(pmem.data()), pmem.size(),
+                     kDiffTestToRef);
+  }
+  DUTCoreState ref_state = state;
+  difftest_regcpy_(&ref_state, kDiffTestToRef);
+  last_ref_state_ = ref_state;
+  has_last_ref_state_ = true;
+  return true;
+}
+
 bool Difftest::step_and_check(uint64_t cycle, uint32_t pc, uint32_t inst,
                               const DUTCoreState &dut_after,
                               const std::array<uint32_t, 32> &rf_before,
@@ -148,6 +226,7 @@ bool Difftest::step_and_check(uint64_t cycle, uint32_t pc, uint32_t inst,
       }
       trap_before.gpr[0] = 0;
       trap_before.pc = pc;
+      restore_trap_entry_csr_before(trap_before, dut_after, inst);
       difftest_regcpy_(&trap_before, kDiffTestToRef);
       ref_before = trap_before;
     } else {
@@ -382,6 +461,8 @@ bool Difftest::check_arch_state(uint64_t cycle, uint32_t pc, uint32_t inst,
   CHECK_FIELD(stval);
   CHECK_FIELD(mtvec);
   CHECK_FIELD(stvec);
+  CHECK_FIELD(mscratch);
+  CHECK_FIELD(sscratch);
   CHECK_FIELD(mie);
   CHECK_FIELD(mip);
   CHECK_FIELD(medeleg);
@@ -423,6 +504,8 @@ void Difftest::dump_arch_state_compare(const DUTCoreState &dut,
   print_u32("stval", dut.stval, ref.stval);
   print_u32("mtvec", dut.mtvec, ref.mtvec);
   print_u32("stvec", dut.stvec, ref.stvec);
+  print_u32("mscratch", dut.mscratch, ref.mscratch);
+  print_u32("sscratch", dut.sscratch, ref.sscratch);
   print_u32("mie", dut.mie, ref.mie);
   print_u32("mip", dut.mip, ref.mip);
   print_u32("medeleg", dut.medeleg, ref.medeleg);

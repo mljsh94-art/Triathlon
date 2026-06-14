@@ -268,6 +268,54 @@ SimArgs parse_args(int argc, char **argv) {
       args.linux_early_debug = true;
       continue;
     }
+    if (arg == "--snapshot-interval" && i + 1 < argc) {
+      uint64_t v = 0;
+      if (parse_u64(argv[i + 1], v)) {
+        args.snapshot_interval = v;
+        i++;
+      }
+      continue;
+    }
+    if (arg.rfind("--snapshot-interval=", 0) == 0) {
+      uint64_t v = 0;
+      if (parse_u64(arg.substr(std::string("--snapshot-interval=").size()), v)) {
+        args.snapshot_interval = v;
+      }
+      continue;
+    }
+    if (arg == "--snapshot-dir" && i + 1 < argc) {
+      args.snapshot_dir = argv[i + 1];
+      i++;
+      continue;
+    }
+    if (arg.rfind("--snapshot-dir=", 0) == 0) {
+      args.snapshot_dir = arg.substr(std::string("--snapshot-dir=").size());
+      continue;
+    }
+    if (arg == "--snapshot-keep" && i + 1 < argc) {
+      uint64_t v = 0;
+      if (parse_u64(argv[i + 1], v)) {
+        args.snapshot_keep = v;
+        i++;
+      }
+      continue;
+    }
+    if (arg.rfind("--snapshot-keep=", 0) == 0) {
+      uint64_t v = 0;
+      if (parse_u64(arg.substr(std::string("--snapshot-keep=").size()), v)) {
+        args.snapshot_keep = v;
+      }
+      continue;
+    }
+    if (arg == "--snapshot-restore" && i + 1 < argc) {
+      args.snapshot_restore_path = argv[i + 1];
+      i++;
+      continue;
+    }
+    if (arg.rfind("--snapshot-restore=", 0) == 0) {
+      args.snapshot_restore_path = arg.substr(std::string("--snapshot-restore=").size());
+      continue;
+    }
     if (!arg.empty() && arg[0] == '-') {
       continue;
     }

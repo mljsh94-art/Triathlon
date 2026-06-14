@@ -84,6 +84,8 @@ module tb_triathlon #(
     output logic [Cfg.XLEN-1:0]                dbg_csr_stval_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_trap_tval_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_satp_o,
+    output logic [Cfg.XLEN-1:0]                dbg_csr_mscratch_o,
+    output logic [Cfg.XLEN-1:0]                dbg_csr_sscratch_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_mie_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_mip_o,
     output logic [Cfg.XLEN-1:0]                dbg_csr_medeleg_o,
@@ -406,6 +408,8 @@ module tb_triathlon #(
   assign dbg_csr_stval_o   = dut.u_backend.u_csr.csr_stval;
   assign dbg_csr_trap_tval_o = dut.u_backend.u_csr.trap_tval;
   assign dbg_csr_satp_o    = dut.u_backend.u_csr.csr_satp;
+  assign dbg_csr_mscratch_o = dut.u_backend.u_csr.csr_mscratch;
+  assign dbg_csr_sscratch_o = dut.u_backend.u_csr.csr_sscratch;
   assign dbg_csr_mie_o     = dut.u_backend.u_csr.csr_mie;
   assign dbg_csr_mip_o     = dut.u_backend.u_csr.csr_mip;
   assign dbg_csr_medeleg_o = dut.u_backend.u_csr.csr_medeleg;

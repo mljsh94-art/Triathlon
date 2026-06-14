@@ -5,6 +5,7 @@
 #include "memory_models.h"
 #include "profile_collector.h"
 #include "sim_observer.h"
+#include "sim_snapshot.h"
 #include "sim_trap_exit.h"
 #include "verilated.h"
 #include "verilated_vcd_c.h"
@@ -185,6 +186,8 @@ npc::DUTCoreState collect_dut_arch_state(Vtb_triathlon *top,
   state.stval = top->dbg_csr_stval_o;
   state.mtvec = top->dbg_csr_mtvec_o;
   state.stvec = top->dbg_csr_stvec_o;
+  state.mscratch = top->dbg_csr_mscratch_o;
+  state.sscratch = top->dbg_csr_sscratch_o;
   state.mie = top->dbg_csr_mie_o;
   state.mip = top->dbg_csr_mip_o;
   state.medeleg = top->dbg_csr_medeleg_o;
@@ -206,7 +209,9 @@ int main(int argc, char **argv) {
               << " [--commit-ring N] [--profile] [--profile-json <path>] [--bru-trace] [--fe-trace] [--stall-trace [N]] [--boot-handoff]"
               << " [--dtb <path>] [--firmware-load-base <addr>]"
               << " [--virtio-blk-image <path>]"
-              << " [--progress [N]] [--progress-verbose] [--linux-early-debug]\n";
+              << " [--progress [N]] [--progress-verbose] [--linux-early-debug]"
+              << " [--snapshot-interval N] [--snapshot-dir PATH] [--snapshot-keep K]"
+              << " [--snapshot-restore PATH]\n";
     return 1;
   }
 
@@ -278,20 +283,38 @@ int main(int argc, char **argv) {
   }
 #endif
 
-  npc::reset(top, mem, tfp, sim_time);
+  npc::SnapshotMeta snapshot_meta =
+      npc::make_snapshot_meta(args, entry_pc, firmware_base, difftest.enabled());
+
+  std::array<uint32_t, 32> rf{};
+  uint64_t no_commit_cycles = 0;
+  uint64_t start_cycle = 0;
+  if (!args.snapshot_restore_path.empty()) {
+    uint64_t restored_cycle = 0;
+    if (!npc::restore_snapshot(args.snapshot_restore_path, top, mem, difftest,
+                               snapshot_meta, rf, restored_cycle, sim_time,
+                               no_commit_cycles)) {
+      if (tfp) {
+        tfp->close();
+      }
+      delete top;
+      return 1;
+    }
+    start_cycle = restored_cycle + 1u;
+  } else {
+    npc::reset(top, mem, tfp, sim_time);
+  }
 
   const uint32_t cfg_instr_per_fetch =
       probe_cfg_width(static_cast<uint32_t>(top->dbg_cfg_instr_per_fetch_o), 4u);
   const uint32_t cfg_commit_width =
       probe_cfg_width(static_cast<uint32_t>(top->dbg_cfg_nret_o), 4u);
 
-  std::array<uint32_t, 32> rf{};
-  uint64_t no_commit_cycles = 0;
   npc::ProfileCollector profile(args, cfg_instr_per_fetch, cfg_commit_width);
   npc::SimObserver observer(args, cfg_instr_per_fetch, cfg_commit_width);
   observer.configure_mem_watch(mem, firmware_base, args.boot_handoff);
 
-  for (uint64_t cycles = 0; cycles < args.max_cycles; cycles++) {
+  for (uint64_t cycles = start_cycle; cycles < args.max_cycles; cycles++) {
     mem.mem.set_time_us(cycles);
     npc::tick(top, mem, tfp, sim_time);
     profile.observe_cycle(top);
@@ -360,6 +383,13 @@ int main(int argc, char **argv) {
                                    slot.rf_before, rf, store_commit, trap_sync,
                                    retire_fetch_override)) {
         observer.dump_commit_ring(std::cerr);
+        uint64_t snap_cycle = 0;
+        std::string nearest =
+            npc::nearest_snapshot_before_or_at(args.snapshot_dir, cycles, &snap_cycle);
+        if (!nearest.empty()) {
+          std::cerr << "[snapshot] nearest=" << nearest << " cycle=" << snap_cycle
+                    << " (restore: --snapshot-restore=" << nearest << ")\n";
+        }
         std::cerr << "[difftest] stop on first mismatch\n";
         profile.emit_all_summaries(cycles, top);
         if (tfp) {
@@ -388,6 +418,19 @@ int main(int argc, char **argv) {
     }
 
     observer.end_of_cycle(cycles, top, mem, profile, rf, no_commit_cycles);
+    if (args.snapshot_interval != 0 && cycles != 0 &&
+        (cycles % args.snapshot_interval) == 0) {
+      std::string path = npc::snapshot_path_for_cycle(args.snapshot_dir, cycles);
+      if (!npc::capture_snapshot(path, top, mem, difftest, snapshot_meta, rf, cycles,
+                                 sim_time, no_commit_cycles)) {
+        if (tfp) {
+          tfp->close();
+        }
+        delete top;
+        return 1;
+      }
+      npc::rotate_snapshots(args.snapshot_dir, args.snapshot_keep);
+    }
   }
 
   std::cerr << "TIMEOUT after " << args.max_cycles << " cycles\n";
