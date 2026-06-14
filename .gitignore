@@ -17,6 +17,7 @@
 
 # Third-party / large trees (keep local, do not track)
 nemu/
+npc/ref/src/repo/riscv-isa-sim/
 opensbi/
 echo_payload/
 fceux-am/

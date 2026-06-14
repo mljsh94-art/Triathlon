@@ -12,6 +12,10 @@
 !.gitignore
 !README.md
 !ref/*
+!ref/*.so
+!ref/test_*
+# Spike sources: local clone + build in ref/src/repo/riscv-isa-sim/build/ (not tracked)
+ref/src/repo/riscv-isa-sim/
 !verible.filelist
 !Makefile_test
 !tools/
