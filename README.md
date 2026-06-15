@@ -2,7 +2,7 @@
 
 4-wide superscalar out-of-order **RV32IMAC** RISC-V CPU（Tomasulo + in-order retire），SystemVerilog RTL + Verilator 5.008 仿真。支持 AM cpu-tests、DiffTest（NEMU），以及 **OpenSBI + Linux 6.6.30** 全系统启动。
 
-更详细的仿真参数、微架构与调试说明见 [CLAUDE.md](CLAUDE.md)。
+微架构与 AI 入口见英文 [CLAUDE.md](CLAUDE.md)；仿真参数、DiffTest、全系统构建等中文专题见 [docs/](docs/README.md)。
 
 ---
 
@@ -20,7 +20,8 @@ Triathlon/
 │   ├── merge.py         # 合并 OpenSBI + Linux Image + DTB → fw_combined.bin
 ├── fw_combined.bin      # 预构建全系统仿真镜像（可 git 拉取后直接仿真）
 ├── echo_payload/        # 可选最小 S-mode payload（不参与 merge.py 默认流程）
-└── CLAUDE.md            # 开发/仿真详细文档
+├── CLAUDE.md            # 微架构与配置（英文，AI 入口）
+└── docs/                # 中文专题：编译、ARGS、DiffTest、调试、全系统
 ```
 
 ---
@@ -172,7 +173,7 @@ Windows 原生 Git 无法可靠提交 `rootfs/` 内大量符号链接，因此�
 
 ### 2. 可选：Linux 启动临时补丁
 
-若内核在 `check_unaligned_access()` 阶段 panic，可对 `linux/arch/riscv/kernel/cpufeature.c` 做临时 bypass（见 [CLAUDE.md](CLAUDE.md)「Linux 非对齐访问探测临时补丁」）。RTL 稳定后应恢复原始探测逻辑。
+若内核在 `check_unaligned_access()` 阶段 panic，可对 `linux/arch/riscv/kernel/cpufeature.c` 做临时 bypass（见 [docs/full-system.md](docs/full-system.md)）。RTL 稳定后应恢复原始探测逻辑。
 
 ### 3. 编译 OpenSBI
 
@@ -217,7 +218,7 @@ make -C npc sim DIFFTEST= IMG=../fw_combined.bin \
   ARGS='--max-cycles=100000000 --progress=1000000'
 ```
 
-可选早期调试：`ARGS='... --linux-early-debug'`（里程碑见 CLAUDE.md）。
+可选早期调试：`ARGS='... --linux-early-debug'`（里程碑见 [docs/debugging.md](docs/debugging.md)）。
 
 **成功标志（节选）：**
 
@@ -238,5 +239,6 @@ make -C npc sim DIFFTEST= IMG=../fw_combined.bin \
 
 ## 更多文档
 
-- [CLAUDE.md](CLAUDE.md) — 微架构、Makefile 目标、`ARGS` 参数、profile、OpenSBI/Linux 构建细节
-- [npc/tools/profiler/README.md](npc/tools/profiler/README.md) — 性能分析（若有）
+- [CLAUDE.md](CLAUDE.md) — 微架构与配置（英文，AI 入口）
+- [docs/README.md](docs/README.md) — 中文专题：编译测试、ARGS、DiffTest、调试、全系统
+- [npc/tools/profiler/README.md](npc/tools/profiler/README.md) — 性能分析工具
