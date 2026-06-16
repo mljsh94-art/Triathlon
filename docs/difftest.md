@@ -90,4 +90,4 @@ make -C npc verify-assert-programs
 - 直接 `assert`/`$fatal` 不依赖 `--assert`。
 - AM 透传：`NPC_EXTRA='ASSERT=1'`（`abstract-machine/scripts/platform/npc.mk`）。
 
-SNAPSHOT：`SNAPSHOT=1` → `--savable --threads 1`；与 ASSERT 独立，切换均触发重编。
+SNAPSHOT：`SNAPSHOT=1` → `--savable --threads 1`；与 ASSERT 独立，切换均触发重编。Linux 全系统 DiffTest + Snapshot 长跑见 [full-system.md](full-system.md#全系统仿真fw_combinedbin)。

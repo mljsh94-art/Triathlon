@@ -14,8 +14,14 @@ case "${OUT_DIR}" in
   /*) ;;
   npc/profile|npc/profile/*) OUT_DIR="${TRIATHLON_HOME}/${OUT_DIR}" ;;
   profile|profile/*) OUT_DIR="${NPC_HOME}/${OUT_DIR}" ;;
-  npc/build/profile|npc/build/profile/*) OUT_DIR="${TRIATHLON_HOME}/${OUT_DIR}" ;;
-  build/profile|build/profile/*) OUT_DIR="${NPC_HOME}/${OUT_DIR}" ;;
+  npc/build/profile|npc/build/profile/*)
+    echo "[profiler] note: npc/build/profile is deprecated; using npc/profile instead" >&2
+    OUT_DIR="${TRIATHLON_HOME}/${OUT_DIR/npc\/build\/profile/npc/profile}"
+    ;;
+  build/profile|build/profile/*)
+    echo "[profiler] note: build/profile is deprecated; using profile instead" >&2
+    OUT_DIR="${NPC_HOME}/${OUT_DIR/build\/profile/profile}"
+    ;;
   *) OUT_DIR="${NPC_HOME}/${OUT_DIR}" ;;
 esac
 OUT_DIR="${OUT_DIR%/}"
@@ -27,6 +33,9 @@ mkdir -p "${OUT_DIR}"
 
 DHRYSTONE_IMG="${TRIATHLON_HOME}/am-kernels/benchmarks/dhrystone/build/dhrystone-${ARCH}.bin"
 COREMARK_IMG="${TRIATHLON_HOME}/am-kernels/benchmarks/coremark/build/coremark-${ARCH}.bin"
+MICROBENCH_DIR="${TRIATHLON_HOME}/am-kernels/benchmarks/microbench"
+MICROBENCH_IMG="${MICROBENCH_DIR}/build/microbench-${ARCH}.bin"
+MICROBENCH_MAINARGS="${MICROBENCH_MAINARGS:-test}"
 
 export TRIATHLON_HOME
 export AM_HOME="${TRIATHLON_HOME}/abstract-machine"
@@ -41,10 +50,12 @@ make -C "${TRIATHLON_HOME}/abstract-machine/am" clean
 make -C "${TRIATHLON_HOME}/abstract-machine/klib" clean
 make -C "${TRIATHLON_HOME}/am-kernels/benchmarks/dhrystone" clean
 make -C "${TRIATHLON_HOME}/am-kernels/benchmarks/coremark" clean
+make -C "${MICROBENCH_DIR}" clean
 
 echo "[profiler] build benchmark images"
 make -C "${TRIATHLON_HOME}/am-kernels/benchmarks/dhrystone" ARCH="${ARCH}" CROSS_COMPILE="${CROSS_COMPILE}" image
 make -C "${TRIATHLON_HOME}/am-kernels/benchmarks/coremark" ARCH="${ARCH}" CROSS_COMPILE="${CROSS_COMPILE}" image
+make -C "${MICROBENCH_DIR}" ARCH="${ARCH}" CROSS_COMPILE="${CROSS_COMPILE}" insert-arg mainargs="${MICROBENCH_MAINARGS}"
 
 run_profile_sim() {
   local label=$1
@@ -66,6 +77,7 @@ run_profile_sim() {
 
 run_profile_sim dhrystone "${DHRYSTONE_IMG}" "${OUT_DIR}/dhrystone.json" 50000
 run_profile_sim coremark "${COREMARK_IMG}" "${OUT_DIR}/coremark.json" 1000000
+run_profile_sim microbench "${MICROBENCH_IMG}" "${OUT_DIR}/microbench.json" 50000
 
 python3 "${SCRIPT_DIR}/merge_profile_json.py" --run-dir "${OUT_DIR}"
 FINALIZE_ARGS=(--run-dir "${OUT_DIR}")

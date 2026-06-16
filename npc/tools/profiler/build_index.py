@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-BENCHMARKS = ("dhrystone", "coremark")
+BENCHMARKS = ("dhrystone", "coremark", "microbench")
 STALL_GATE_KEYS = ("frontend_empty", "rob_backpressure", "lsu_req_blocked")
 
 

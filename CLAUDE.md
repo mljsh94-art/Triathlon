@@ -59,7 +59,7 @@ Fetch -> Decode -> Rename -> Dispatch -> Issue -> Execute -> Writeback -> Commit
 
 | Block | Role |
 |-------|------|
-| **BPU** | Autonomous next-PC into FTQ; stalls when FTQ full. TAGE, SC_L, loop predictor, ITTAGE, RAS. |
+| **BPU** | Autonomous next-PC into FTQ; stalls when FTQ full. TAGE, stat_corr (SC), loop predictor, ITTAGE, RAS. |
 | **FTQ** | BPU↔IFU FIFO: fetch PC, predicted target, epoch, FTQ id; flushed on redirect. |
 | **IFU** | Consumes FTQ; ICache + SV32 I-MMU. IPF quiesces fetch until backend trap redirect. |
 | **ICache** | 32KB 4-way, 256-bit line, non-blocking refill, 32-entry I-TLB. |

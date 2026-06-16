@@ -142,6 +142,7 @@ void ProfileCollector::emit_pred_summary(const Vtb_triathlon *top) const {
                                         ? (pred_jump_indirect_total_ - pred_jump_indirect_miss_)
                                         : 0;
   uint64_t pred_ret_hit = (pred_ret_total_ >= pred_ret_miss_) ? (pred_ret_total_ - pred_ret_miss_) : 0;
+  const uint64_t redirect_total = mispredict_flush_count_;
 
   uint64_t cond_update_total = static_cast<uint64_t>(top->dbg_bpu_cond_update_total_o);
   uint64_t cond_local_correct = static_cast<uint64_t>(top->dbg_bpu_cond_local_correct_o);
@@ -190,12 +191,15 @@ void ProfileCollector::emit_pred_summary(const Vtb_triathlon *top) const {
       static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_any_correct_o);
 
   std::ios::fmtflags f(std::cout.flags());
-  std::cout << "[pred  ] cond_total=" << pred_cond_total_
+  std::cout << "[pred  ] redirect_total=" << redirect_total
+            << " cond_total=" << pred_cond_total_
             << " cond_miss=" << pred_cond_miss_
             << " cond_hit=" << pred_cond_hit
             << " jump_total=" << pred_jump_total_
             << " jump_miss=" << pred_jump_miss_
             << " jump_hit=" << pred_jump_hit
+            << " jump_miss_redirect_rate="
+            << (redirect_total ? static_cast<double>(pred_jump_miss_) / static_cast<double>(redirect_total) : 0.0)
             << " jump_direct_total=" << pred_jump_direct_total_
             << " jump_direct_miss=" << pred_jump_direct_miss_
             << " jump_direct_hit=" << pred_jump_direct_hit

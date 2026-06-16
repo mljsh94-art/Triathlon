@@ -7,7 +7,7 @@ import html
 import json
 from pathlib import Path
 
-BENCHMARKS = ("dhrystone", "coremark")
+BENCHMARKS = ("dhrystone", "coremark", "microbench")
 STALL_GATE_KEYS = ("frontend_empty", "rob_backpressure", "lsu_req_blocked")
 STALL_DETAIL_KEYS = (
     "stall_decode_blocked_detail",
@@ -69,10 +69,10 @@ TRANSLATIONS = {
     "flush_recovery": "Pipeline Flush 恢复",
     "decode_blocked": "Decode 阶段阻塞",
     "cond_miss_rate": "条件分支 (Conditional)",
-    "jump_miss_rate": "无条件跳转 (总计)",
+    "jump_miss_rate": "无条件跳转 (占 mispredict redirect)",
     "ret_miss_rate": "函数返回 (Return)",
-    "jump_direct_miss_rate": "直接跳转 (Direct)",
-    "jump_indirect_miss_rate": "间接跳转 (Indirect)",
+    "jump_direct_miss_rate": "直接跳转 (占 mispredict redirect)",
+    "jump_indirect_miss_rate": "间接跳转 (占 mispredict redirect)",
     "fq_occ_avg": "平均占用量",
     "fq_occ_max": "最大占用量",
     "fq_bypass_ratio": "Bypass 比例",

@@ -1,4 +1,5 @@
 import config_pkg::*;
+import global_config_pkg::PRED_SLOT_IDX_W;
 
 module ftq #(
     parameter config_pkg::cfg_t Cfg = config_pkg::EmptyCfg,
@@ -12,18 +13,18 @@ module ftq #(
     input  logic enq_valid_i,
     output logic enq_ready_o,
     input  logic [Cfg.PLEN-1:0] enq_pc_i,
-    input  logic enq_pred_slot_valid_i,
-    input  logic [((Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1)-1:0] enq_pred_slot_idx_i,
-    input  logic [Cfg.PLEN-1:0] enq_pred_target_i,
+  input  logic enq_pred_slot_valid_i,
+  input  logic [PRED_SLOT_IDX_W-1:0] enq_pred_slot_idx_i,
+  input  logic [Cfg.PLEN-1:0] enq_pred_target_i,
     input  logic [Cfg.PLEN-1:0] enq_pred_npc_i,
     input  logic [EPOCH_W-1:0] enq_epoch_i,
 
     output logic deq_valid_o,
     input  logic deq_ready_i,
     output logic [Cfg.PLEN-1:0] deq_pc_o,
-    output logic deq_pred_slot_valid_o,
-    output logic [((Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1)-1:0] deq_pred_slot_idx_o,
-    output logic [Cfg.PLEN-1:0] deq_pred_target_o,
+  output logic deq_pred_slot_valid_o,
+  output logic [PRED_SLOT_IDX_W-1:0] deq_pred_slot_idx_o,
+  output logic [Cfg.PLEN-1:0] deq_pred_target_o,
     output logic [Cfg.PLEN-1:0] deq_pred_npc_o,
     output logic [EPOCH_W-1:0] deq_epoch_o,
     output logic [((DEPTH > 1) ? $clog2(DEPTH) : 1)-1:0] deq_ftq_id_o,
@@ -32,7 +33,7 @@ module ftq #(
 );
 
   localparam int unsigned ID_W = (DEPTH > 1) ? $clog2(DEPTH) : 1;
-  localparam int unsigned SLOT_IDX_W = (Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1;
+  localparam int unsigned SLOT_IDX_W = PRED_SLOT_IDX_W;
   localparam int unsigned CNT_W = (DEPTH > 1) ? $clog2(DEPTH + 1) : 1;
 
   logic [ID_W-1:0] head_q;

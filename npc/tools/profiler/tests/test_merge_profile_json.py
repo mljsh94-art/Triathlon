@@ -25,9 +25,11 @@ class MergeProfileJsonTest(unittest.TestCase):
             run_dir = Path(td)
             (run_dir / "dhrystone.json").write_text(json.dumps(bench_obj), encoding="utf-8")
             (run_dir / "coremark.json").write_text(json.dumps(bench_obj), encoding="utf-8")
+            (run_dir / "microbench.json").write_text(json.dumps(bench_obj), encoding="utf-8")
             summary = mod.merge_run_dir(run_dir)
         self.assertIn("dhrystone", summary)
         self.assertIn("coremark", summary)
+        self.assertIn("microbench", summary)
         self.assertEqual(summary["dhrystone"]["ipc"], 0.5)
 
     def test_merge_run_dir_missing_file(self):

@@ -49,19 +49,54 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`）→ `IMG`（
 
 Snapshot 保存 Verilator savable 状态、C++ `MemSystem`、RF 影子、周期计数和 Spike REF。`ProfileCollector`、`SimObserver` 统计和 VCD 句柄不保存。
 
-构建须 `SNAPSHOT=1`（`--savable --threads 1`）。默认 `--threads 2`。
+构建须 `SNAPSHOT=1`（Verilator `--savable --threads 1`）。默认构建为 `--threads 2`，与 Snapshot **不兼容**。
+
+磁盘格式：`TRSNAP1` v2（含 Spike `mscratch`/`sscratch`）。
+
+### 通用 Snapshot 命令
 
 ```bash
+# 须先 SNAPSHOT=1 编译
 make -C npc SNAPSHOT=1
-make -C npc sim SNAPSHOT=1 IMG=../fw_combined.bin \
+
+# 周期性保存（任意 IMG）
+make -C npc sim SNAPSHOT=1 IMG=/path/to/image.bin \
   ARGS='--snapshot-interval=1000000 --snapshot-keep=3 --progress=2000000'
 
-make -C npc sim SNAPSHOT=1 IMG=../fw_combined.bin \
-  ARGS='--snapshot-restore=build/snapshots/triathlon-12000000.snap \
+# 从快照恢复
+make -C npc sim SNAPSHOT=1 IMG=/path/to/image.bin \
+  ARGS='--snapshot-restore=npc/build/snapshots/triathlon-12000000.snap \
         --commit-trace=12050000:12100000 --max-cycles=12150000'
 ```
 
-磁盘格式：`TRSNAP1` v2（含 Spike `mscratch`/`sscratch`）。
+### Linux 全系统 + DiffTest + Snapshot
+
+使用 `fw_combined.bin` 整镜像加载（无 `--boot-handoff`）。完整前置与参数说明见 [full-system.md](full-system.md#全系统仿真fw_combinedbin)。
+
+```bash
+cd /mnt/d/sjj_ict2026/Triathlon
+
+make -C npc/ref
+make -C npc SNAPSHOT=1
+
+make -C npc sim SNAPSHOT=1 \
+  IMG=$PWD/fw_combined.bin \
+  ARGS='--max-cycles=100000000 \
+        --progress=2000000 \
+        --linux-early-debug \
+        --snapshot-interval=5000000 \
+        --snapshot-dir=npc/build/snapshots \
+        --snapshot-keep=3'
+```
+
+不写 `DIFFTEST=` 即开启 Spike DiffTest（`.so` 存在时 Makefile 自动注入 `-d`）。恢复示例：
+
+```bash
+make -C npc sim SNAPSHOT=1 \
+  IMG=$PWD/fw_combined.bin \
+  ARGS='--snapshot-restore=npc/build/snapshots/triathlon-5000000.snap \
+        --max-cycles=100000000 --progress=2000000 --linux-early-debug'
+```
 
 ## `--commit-trace` 窗口语法
 
@@ -102,13 +137,17 @@ linux-stage 阶段表见 [debugging.md](debugging.md)。
 ## 常用组合
 
 ```bash
-make -C npc profile-report PROFILE_OUT_DIR=npc/build/profile/$(date +%Y%m%d-%H%M%S)
+make -C npc profile-report PROFILE_OUT_DIR=npc/profile/$(date +%Y%m%d-%H%M%S)
 make -C npc sim IMG=.../test.bin ARGS='--commit-trace 100000:150000'
-make -C npc sim DIFFTEST= IMG=../fw_combined.bin \
+
+# Linux 全系统 + DiffTest + Snapshot（fw_combined.bin，详见 full-system.md）
+make -C npc sim SNAPSHOT=1 IMG=$PWD/fw_combined.bin \
+  ARGS='--max-cycles=100000000 --progress=2000000 --linux-early-debug \
+        --snapshot-interval=5000000 --snapshot-dir=npc/build/snapshots --snapshot-keep=3'
+
+# Linux 快速调试（关 DiffTest）
+make -C npc sim DIFFTEST= IMG=$PWD/fw_combined.bin \
   ARGS='--max-cycles=2000000 --progress=500000 --linux-early-debug'
-make -C npc sim DIFFTEST= IMG=~/rv32-linux/out/fw_payload.bin \
-  ARGS='--boot-handoff --dtb ~/rv32-linux/out/npc.dtb \
-        --virtio-blk-image ~/rv32-linux/out/rootfs.img \
-        --firmware-load-base 0x80400000 --max-cycles=80000000'
+
 make -C npc sim IMG=.../test.bin ARGS='--trace wave.vcd --max-cycles=50000'
 ```

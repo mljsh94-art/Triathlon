@@ -18,7 +18,7 @@ module ifu #(
     output logic                       ftq_deq_ready_o,
     input  logic [Cfg.PLEN-1:0]        ftq_deq_pc_i,
     input  logic                       ftq_deq_pred_slot_valid_i,
-    input  logic [((Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1)-1:0] ftq_deq_pred_slot_idx_i,
+    input  logic [PRED_SLOT_IDX_W-1:0] ftq_deq_pred_slot_idx_i,
     input  logic [Cfg.PLEN-1:0]        ftq_deq_pred_target_i,
     input  logic [Cfg.PLEN-1:0]        ftq_deq_pred_npc_i,
     input  logic [2:0]                 ftq_deq_epoch_i,
@@ -37,8 +37,9 @@ module ifu #(
     input  logic                      ibuffer_ifu_rsp_ready_i, // frontend aligner/ibuffer 反馈的就绪信号 (可签收)
     output logic [Cfg.PLEN-1:0] ifu_ibuffer_rsp_pc_o, // 这一包指令的起始虚拟 PC 地址
     output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ifu_ibuffer_rsp_data_o, // 发送给后端的指令数据包
-    output logic [Cfg.INSTR_PER_FETCH-1:0] ifu_ibuffer_rsp_slot_valid_o, // 包内各指令槽位的有效性
-    output logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ifu_ibuffer_rsp_pred_npc_o, // 携带的每条指令对应的预测下一拍 PC
+    output logic [PRED_SLOT_COUNT-1:0] ifu_ibuffer_rsp_slot_valid_o, // 半字粒度槽位有效性（h<=pred_slot_idx）
+    output logic [PRED_SLOT_COUNT-1:0][Cfg.PLEN-1:0] ifu_ibuffer_rsp_pred_npc_o, // 半字粒度预测 npc（taken 半字=target）
+    output logic [PRED_SLOT_COUNT-1:0] ifu_ibuffer_rsp_pred_taken_o, // 半字粒度 taken 标记（截断点）
     output logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] ifu_ibuffer_rsp_ftq_id_o, // 指令对应分配的 FTQ ID
     output logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ifu_ibuffer_rsp_fetch_epoch_o, // 当前取指所属的“时空代数” Epoch，用于识别/丢弃错路指令
 
@@ -73,7 +74,7 @@ module ifu #(
 );
 
   localparam int unsigned INSTR_BYTES = Cfg.ILEN / 8;
-  localparam int unsigned SLOT_IDX_W = (Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1;
+  localparam int unsigned SLOT_IDX_W = PRED_SLOT_IDX_W;
   localparam int unsigned EPOCH_W = 3;
   localparam logic [1:0] PRIV_LVL_M = 2'b11;
   localparam logic [1:0] MMU_ACCESS_INSTR = 2'd0;
@@ -97,8 +98,11 @@ module ifu #(
   localparam int unsigned FQ_DEPTH =
       (Cfg.IFU_FQ_DEPTH >= 2) ? Cfg.IFU_FQ_DEPTH : ((Cfg.INSTR_PER_FETCH >= 2) ? Cfg.INSTR_PER_FETCH : 2);
   localparam int unsigned FQ_CNT_W = $clog2(FQ_DEPTH + 1);
+  // bundle 打包：pc + 指令数据(word) + 半字 slot_valid + 半字 pred_npc + 半字 pred_taken +
+  //            ftq_id(word) + epoch(word)
   localparam int unsigned FQ_DATA_W = Cfg.PLEN + (Cfg.INSTR_PER_FETCH * Cfg.ILEN) +
-                                      Cfg.INSTR_PER_FETCH + (Cfg.INSTR_PER_FETCH * Cfg.PLEN) +
+                                      PRED_SLOT_COUNT + (PRED_SLOT_COUNT * Cfg.PLEN) +
+                                      PRED_SLOT_COUNT +
                                       (Cfg.INSTR_PER_FETCH * FTQ_ID_W) +
                                       (Cfg.INSTR_PER_FETCH * EPOCH_W);
 
@@ -150,9 +154,9 @@ module ifu #(
   logic [FTQ_ID_W-1:0] inf_head_ftq_id_w;
   logic [EPOCH_W-1:0] inf_head_epoch_w;
 
-  logic [Cfg.INSTR_PER_FETCH-1:0] rsp_slot_valid_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] rsp_pred_npc_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] rsp_slot_compressed_w;
+  logic [PRED_SLOT_COUNT-1:0] rsp_slot_valid_w;
+  logic [PRED_SLOT_COUNT-1:0][Cfg.PLEN-1:0] rsp_pred_npc_w;
+  logic [PRED_SLOT_COUNT-1:0] rsp_pred_taken_w;
   logic [Cfg.INSTR_PER_FETCH-1:0][FTQ_ID_W-1:0] rsp_ftq_id_w;
   logic [Cfg.INSTR_PER_FETCH-1:0][EPOCH_W-1:0] rsp_fetch_epoch_w;
 
@@ -340,39 +344,33 @@ module ifu #(
   assign fq_deq_ready_w = ibuffer_ifu_rsp_ready_i;
   assign ibuf_pop_w = !fq_empty_w && fq_deq_valid_w && fq_deq_ready_w;
 
-  for (genvar i = 0; i < Cfg.INSTR_PER_FETCH; i++) begin : gen_ifu_rvc_probe
-    compressed_decoder u_compressed_decoder (
-        .instr_i({16'b0, icache2ifu_rsp_data_i[i][15:0]}),
-        .instr_o(),
-        .is_compressed_o(rsp_slot_compressed_w[i]),
-        .is_illegal_o()
-    );
-  end
-
+  // 半字粒度展开：pred_slot_idx 为预测 taken 分支指令的“末半字”索引（含 32-bit 分支高半字）。
+  //  - slot_valid[h] = h <= pred_slot_idx（含分支整条指令；其后半字属错路，置 0）
+  //  - pred_taken[h] = (h == pred_slot_idx)，作为 aligner 的显式截断点
+  //  - pred_npc[h]   = taken 半字给 target；其余半字 fallthrough 由 aligner 按指令边界计算
   always_comb begin
-    for (int i = 0; i < Cfg.INSTR_PER_FETCH; i++) begin
-      logic [Cfg.PLEN-1:0] slot_pc;
-      rsp_slot_valid_w[i] = 1'b1;
-      slot_pc = inf_head_pc_w + Cfg.PLEN'(INSTR_BYTES * i);
-      rsp_pred_npc_w[i] =
-          slot_pc + Cfg.PLEN'(rsp_slot_compressed_w[i] ? 2 : INSTR_BYTES);
-      rsp_ftq_id_w[i] = inf_head_ftq_id_w;
-      rsp_fetch_epoch_w[i] = inf_head_epoch_w;
+    for (int h = 0; h < PRED_SLOT_COUNT; h++) begin
+      rsp_slot_valid_w[h] = 1'b1;
+      rsp_pred_taken_w[h] = 1'b0;
+      rsp_pred_npc_w[h]   = '0;
       if (inf_head_pred_slot_valid_w) begin
-        rsp_slot_valid_w[i] = (i <= int'(inf_head_pred_slot_idx_w));
-        if (i > int'(inf_head_pred_slot_idx_w)) begin
-          rsp_pred_npc_w[i] = '0;
-        end else if (i == int'(inf_head_pred_slot_idx_w)) begin
-          rsp_pred_npc_w[i] = inf_head_pred_target_w;
+        rsp_slot_valid_w[h] = (h <= int'(inf_head_pred_slot_idx_w));
+        if (h == int'(inf_head_pred_slot_idx_w)) begin
+          rsp_pred_taken_w[h] = 1'b1;
+          rsp_pred_npc_w[h]   = inf_head_pred_target_w;
         end
       end
+    end
+    for (int w = 0; w < Cfg.INSTR_PER_FETCH; w++) begin
+      rsp_ftq_id_w[w]      = inf_head_ftq_id_w;
+      rsp_fetch_epoch_w[w] = inf_head_epoch_w;
     end
   end
 
   assign fq_enq_data_w = {inf_head_pc_w, icache2ifu_rsp_data_i, rsp_slot_valid_w, rsp_pred_npc_w,
-                          rsp_ftq_id_w, rsp_fetch_epoch_w};
+                          rsp_pred_taken_w, rsp_ftq_id_w, rsp_fetch_epoch_w};
   assign {ifu_ibuffer_rsp_pc_o, ifu_ibuffer_rsp_data_o, ifu_ibuffer_rsp_slot_valid_o,
-          ifu_ibuffer_rsp_pred_npc_o, ifu_ibuffer_rsp_ftq_id_o,
+          ifu_ibuffer_rsp_pred_npc_o, ifu_ibuffer_rsp_pred_taken_o, ifu_ibuffer_rsp_ftq_id_o,
           ifu_ibuffer_rsp_fetch_epoch_o} = fq_deq_data_w;
   assign ifu_ibuffer_rsp_valid_o = fq_deq_valid_w;
 

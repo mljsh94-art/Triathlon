@@ -52,7 +52,7 @@ module frontend #(
       Cfg.IBUFFER_DEPTH : 16;
 
   localparam int unsigned EPOCH_W = FETCH_EPOCH_W;
-  localparam int unsigned SLOT_IDX_W = (Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1;
+  localparam int unsigned SLOT_IDX_W = PRED_SLOT_IDX_W;
   localparam int unsigned FTQ_CNT_W = (FTQ_DEPTH > 1) ? $clog2(FTQ_DEPTH + 1) : 1;
 
   // --- BPU -> FTQ -> IFU 解耦队列信号 ---
@@ -88,12 +88,15 @@ module frontend #(
   logic flush_icache;
 
   // --- IFU -> aligner -> ibuffer 内部链路（扁平）---
+  // 预测元数据（slot_valid/pred_npc/pred_taken）按半字粒度 PRED_SLOT_COUNT(8) 传递；
+  // 指令数据/ftq_id/fetch_epoch 仍按 word 粒度 INSTR_PER_FETCH(4)。
   logic ifu_ibuf_valid;
   logic ifu_ibuf_ready;
   logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ifu_ibuf_data;
   logic [Cfg.PLEN-1:0] ifu_ibuf_pc;
-  logic [Cfg.INSTR_PER_FETCH-1:0] ifu_ibuf_slot_valid;
-  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ifu_ibuf_pred_npc;
+  logic [PRED_SLOT_COUNT-1:0] ifu_ibuf_slot_valid;
+  logic [PRED_SLOT_COUNT-1:0][Cfg.PLEN-1:0] ifu_ibuf_pred_npc;
+  logic [PRED_SLOT_COUNT-1:0] ifu_ibuf_pred_taken;
   logic [Cfg.INSTR_PER_FETCH-1:0][FTQ_ID_W-1:0] ifu_ibuf_ftq_id;
   logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ifu_ibuf_fetch_epoch;
 
@@ -165,6 +168,7 @@ module frontend #(
       .ifu_ibuffer_rsp_data_o (ifu_ibuf_data),
       .ifu_ibuffer_rsp_slot_valid_o(ifu_ibuf_slot_valid),
       .ifu_ibuffer_rsp_pred_npc_o(ifu_ibuf_pred_npc),
+      .ifu_ibuffer_rsp_pred_taken_o(ifu_ibuf_pred_taken),
       .ifu_ibuffer_rsp_ftq_id_o(ifu_ibuf_ftq_id),
       .ifu_ibuffer_rsp_fetch_epoch_o(ifu_ibuf_fetch_epoch),
 
@@ -207,6 +211,7 @@ module frontend #(
       .fe_pc_i(ifu_ibuf_pc),
       .fe_slot_valid_i(ifu_ibuf_slot_valid),
       .fe_pred_npc_i(ifu_ibuf_pred_npc),
+      .fe_pred_taken_i(ifu_ibuf_pred_taken),
       .fe_ftq_id_i(ifu_ibuf_ftq_id),
       .fe_fetch_epoch_i(ifu_ibuf_fetch_epoch),
       .ibuf_aln_ready_i(ibuf_aln_ready),
@@ -277,16 +282,16 @@ module frontend #(
       .RAS_DEPTH(Cfg.BPU_RAS_DEPTH),
       .USE_GSHARE(Cfg.BPU_USE_GSHARE != 0),
       .USE_TAGE(Cfg.BPU_USE_TAGE != 0),
-      .USE_SC_L(Cfg.BPU_USE_SC_L != 0),
+      .USE_SC(Cfg.BPU_USE_SC != 0),
       .USE_TOURNAMENT(Cfg.BPU_USE_TOURNAMENT != 0),
       .BTB_HASH_ENABLE(Cfg.BPU_BTB_HASH_ENABLE != 0),
       .BHT_HASH_ENABLE(Cfg.BPU_BHT_HASH_ENABLE != 0),
       .GHR_BITS(Cfg.BPU_GHR_BITS),
-      .SC_L_ENTRIES(Cfg.BPU_SC_L_ENTRIES),
-      .SC_L_CONF_THRESH(Cfg.BPU_SC_L_CONF_THRESH),
-      .SC_L_REQUIRE_DISAGREE(Cfg.BPU_SC_L_REQUIRE_DISAGREE != 0),
-      .SC_L_REQUIRE_BOTH_WEAK(Cfg.BPU_SC_L_REQUIRE_BOTH_WEAK != 0),
-      .SC_L_BLOCK_ON_TAGE_HIT(Cfg.BPU_SC_L_BLOCK_ON_TAGE_HIT != 0),
+      .SC_ENTRIES(Cfg.BPU_SC_ENTRIES),
+      .SC_CONF_THRESH(Cfg.BPU_SC_CONF_THRESH),
+      .SC_REQUIRE_DISAGREE(Cfg.BPU_SC_REQUIRE_DISAGREE != 0),
+      .SC_REQUIRE_BOTH_WEAK(Cfg.BPU_SC_REQUIRE_BOTH_WEAK != 0),
+      .SC_BLOCK_ON_TAGE_HIT(Cfg.BPU_SC_BLOCK_ON_TAGE_HIT != 0),
       .USE_LOOP(Cfg.BPU_USE_LOOP != 0),
       .LOOP_ENTRIES(Cfg.BPU_LOOP_ENTRIES),
       .LOOP_TAG_BITS(Cfg.BPU_LOOP_TAG_BITS),

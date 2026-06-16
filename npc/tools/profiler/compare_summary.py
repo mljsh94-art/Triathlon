@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
-BENCHMARKS = ("dhrystone", "coremark")
+BENCHMARKS = ("dhrystone", "coremark", "microbench")
 STALL_KEYS = ("frontend_empty", "lsu_req_blocked", "rob_backpressure")
 
 THRESHOLDS = {

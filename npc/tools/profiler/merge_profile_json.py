@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-BENCHMARKS = ("dhrystone", "coremark")
+BENCHMARKS = ("dhrystone", "coremark", "microbench")
 
 
 def merge_run_dir(run_dir: Path) -> dict:
@@ -29,7 +29,7 @@ def merge_run_dir(run_dir: Path) -> dict:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Merge dhrystone/coremark JSON into summary.json")
+    ap = argparse.ArgumentParser(description="Merge benchmark JSON files into summary.json")
     ap.add_argument("--run-dir", required=True, help="Profile run output directory")
     ap.add_argument(
         "--out",

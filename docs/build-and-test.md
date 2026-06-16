@@ -10,12 +10,12 @@
 |------|----------|----------|
 | `default` / `all` | `make` 或 `make all` | 编译 RTL + C++，生成 `build/tb_triathlon` |
 | `sim` | `make sim` | 编译并运行仿真 |
-| `profile-report` | `make profile-report` | dhrystone/coremark 采集并 merge 为 `summary.json` |
-| `profile-task` | `make profile-task` | 采集到 `npc/build/profile/<PROFILE_TAG>/` |
+| `profile-report` | `make profile-report` | dhrystone/coremark/microbench(test) 采集并 merge 为 `summary.json` |
+| `profile-task` | `make profile-task` | 采集到 `npc/profile/<PROFILE_TAG>/` |
 | `profile-baseline` | `make profile-baseline` | 以 `baseline` 为 tag 的回归基线 |
 | `profile-index` | `make profile-index` | 生成 `index.json` |
 | `profile-dashboard` | `make profile-dashboard` | 生成看板 HTML |
-| `profile-clean` | `make profile-clean` | 清空 `npc/build/profile/` |
+| `profile-clean` | `make profile-clean` | 清空 `npc/profile/` |
 | `clean` | `make clean` | 删除 `build/` |
 | `verify-unit` | `make verify-unit` | ① 单元 ASSERT TB（`MODULE=rob/fe/issue/lsu/all`） |
 | `verify-difftest` | `make verify-difftest` | ② DiffTest 门禁 |
@@ -39,7 +39,7 @@
 | `PROFILE_OUT_DIR` | 自动时间戳 | profile 输出目录 |
 | `PROFILE_TAG` | `latest` | profile-task 目录 tag |
 | `PROFILE_DISPLAY_NAME` | 目录名 | 看板显示名 |
-| `PROFILE_ROOT` | `npc/build/profile` | index/dashboard 扫描根 |
+| `PROFILE_ROOT` | `npc/profile` | index/dashboard 扫描根 |
 
 ## 典型命令
 
@@ -58,6 +58,12 @@ make -C npc TOPNAME=tb_rob_exception SIM_MAIN=csrc/test/test_rob_exception.cpp
 
 # cpu-tests 单项
 cd am-kernels/tests/cpu-tests && make ARCH=riscv32im-npc ALL=dummy run
+
+# Linux 全系统 + DiffTest + Snapshot（详见 full-system.md）
+make -C npc/ref && make -C npc SNAPSHOT=1
+make -C npc sim SNAPSHOT=1 IMG=$PWD/fw_combined.bin \
+  ARGS='--max-cycles=100000000 --progress=2000000 --linux-early-debug \
+        --snapshot-interval=5000000 --snapshot-dir=npc/build/snapshots --snapshot-keep=3'
 ```
 
 DiffTest 与 ASSERT 细节见 [difftest.md](difftest.md)。Profile 见 [profile.md](profile.md)。

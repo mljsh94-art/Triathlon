@@ -11,7 +11,7 @@
 #include <klib.h>
 
 
-#define ITERATIONS 1
+#define ITERATIONS 5
 #define MEM_METHOD MEM_STATIC
 
 /************************/

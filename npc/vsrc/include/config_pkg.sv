@@ -38,12 +38,12 @@ package config_pkg;
     int unsigned BPU_RAS_DEPTH;
     int unsigned BPU_GHR_BITS;
     // Statistical Corrector controls
-    int unsigned BPU_USE_SC_L;
-    int unsigned BPU_SC_L_ENTRIES;
-    int unsigned BPU_SC_L_CONF_THRESH;
-    int unsigned BPU_SC_L_REQUIRE_DISAGREE;
-    int unsigned BPU_SC_L_REQUIRE_BOTH_WEAK;
-    int unsigned BPU_SC_L_BLOCK_ON_TAGE_HIT;
+    int unsigned BPU_USE_SC;
+    int unsigned BPU_SC_ENTRIES;
+    int unsigned BPU_SC_CONF_THRESH;
+    int unsigned BPU_SC_REQUIRE_DISAGREE;
+    int unsigned BPU_SC_REQUIRE_BOTH_WEAK;
+    int unsigned BPU_SC_BLOCK_ON_TAGE_HIT;
     // Loop predictor controls
     int unsigned BPU_USE_LOOP;
     int unsigned BPU_LOOP_ENTRIES;
@@ -148,12 +148,12 @@ package config_pkg;
     int unsigned BPU_RAS_DEPTH;
     int unsigned BPU_GHR_BITS;
     // Statistical Corrector controls
-    int unsigned BPU_USE_SC_L;
-    int unsigned BPU_SC_L_ENTRIES;
-    int unsigned BPU_SC_L_CONF_THRESH;
-    int unsigned BPU_SC_L_REQUIRE_DISAGREE;
-    int unsigned BPU_SC_L_REQUIRE_BOTH_WEAK;
-    int unsigned BPU_SC_L_BLOCK_ON_TAGE_HIT;
+    int unsigned BPU_USE_SC;
+    int unsigned BPU_SC_ENTRIES;
+    int unsigned BPU_SC_CONF_THRESH;
+    int unsigned BPU_SC_REQUIRE_DISAGREE;
+    int unsigned BPU_SC_REQUIRE_BOTH_WEAK;
+    int unsigned BPU_SC_BLOCK_ON_TAGE_HIT;
     // Loop predictor controls
     int unsigned BPU_USE_LOOP;
     int unsigned BPU_LOOP_ENTRIES;

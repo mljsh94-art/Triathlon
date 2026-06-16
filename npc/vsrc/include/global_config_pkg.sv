@@ -11,6 +11,10 @@ package global_config_pkg;
   localparam int unsigned FTQ_ID_W = (Cfg.FTQ_ID_W >= 1) ? Cfg.FTQ_ID_W : 1;
   localparam int unsigned FETCH_EPOCH_W = (Cfg.FETCH_EPOCH_W >= 1) ? Cfg.FETCH_EPOCH_W : 3;
   localparam int unsigned FE_EXPAND_MAX = Cfg.INSTR_PER_FETCH * 2;
+  // FTB 半字 slot：一个 fetch block 内的半字位置数（与译码宽度解耦）。
+  // pred_slot_idx 由 word index(语义) 升级为 half-word index(0~PRED_SLOT_COUNT-1)。
+  localparam int unsigned PRED_SLOT_COUNT = Cfg.INSTR_PER_FETCH * 2;
+  localparam int unsigned PRED_SLOT_IDX_W = (PRED_SLOT_COUNT > 1) ? $clog2(PRED_SLOT_COUNT) : 1;
 
   typedef struct packed {
     logic valid;
@@ -20,7 +24,7 @@ package global_config_pkg;
   typedef struct packed {
     logic [Cfg.PLEN-1:0] pc;
     logic                pred_slot_valid;
-    logic [$clog2(Cfg.INSTR_PER_FETCH)-1:0] pred_slot_idx;
+    logic [PRED_SLOT_IDX_W-1:0] pred_slot_idx;
     logic [Cfg.PLEN-1:0] pred_target;
     logic [Cfg.PLEN-1:0] pred_npc;
     logic [FETCH_EPOCH_W-1:0] fetch_epoch;

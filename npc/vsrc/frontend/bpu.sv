@@ -8,14 +8,14 @@ module bpu #(
     parameter bit BHT_HASH_ENABLE = 1'b1,
     parameter bit USE_GSHARE = 1'b0,
     parameter bit USE_TAGE = 1'b0,
-    parameter bit USE_SC_L = 1'b0,
+    parameter bit USE_SC = 1'b0,
     parameter bit USE_TOURNAMENT = 1'b1,
     parameter int unsigned GHR_BITS = 8,
-    parameter int unsigned SC_L_ENTRIES = 512,
-    parameter int unsigned SC_L_CONF_THRESH = 3,
-    parameter bit SC_L_REQUIRE_DISAGREE = 1'b1,
-    parameter bit SC_L_REQUIRE_BOTH_WEAK = 1'b1,
-    parameter bit SC_L_BLOCK_ON_TAGE_HIT = 1'b1,
+    parameter int unsigned SC_ENTRIES = 512,
+    parameter int unsigned SC_CONF_THRESH = 3,
+    parameter bit SC_REQUIRE_DISAGREE = 1'b1,
+    parameter bit SC_REQUIRE_BOTH_WEAK = 1'b1,
+    parameter bit SC_BLOCK_ON_TAGE_HIT = 1'b1,
     parameter bit USE_LOOP = 1'b0,
     parameter int unsigned LOOP_ENTRIES = 64,
     parameter int unsigned LOOP_TAG_BITS = 10,
@@ -65,7 +65,11 @@ module bpu #(
     output logic [Cfg.PLEN-1:0]     ftq_enq_pred_npc_o
 );
 
-  localparam int unsigned SLOT_IDX_W = (Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1;
+  // FTB：pred_slot_idx 升级为 fetch block 内的半字 index（0~PRED_SLOT_COUNT-1）。
+  localparam int unsigned SLOT_IDX_W = global_config_pkg::PRED_SLOT_IDX_W;
+  localparam int unsigned PRED_SLOT_COUNT = global_config_pkg::PRED_SLOT_COUNT;
+  // fetch block 16B 对齐掩码：block_base = pc & ~(FETCH_WIDTH-1)。
+  localparam logic [Cfg.PLEN-1:0] BLOCK_ALIGN_MASK = ~(Cfg.PLEN'(Cfg.FETCH_WIDTH - 1));
   localparam int unsigned BTB_IDX_W = (BTB_ENTRIES > 1) ? $clog2(BTB_ENTRIES) : 1;
   localparam int unsigned BHT_IDX_W = (BHT_ENTRIES > 1) ? $clog2(BHT_ENTRIES) : 1;
   localparam int unsigned INSTR_BYTES = Cfg.ILEN / 8;
@@ -83,15 +87,25 @@ module bpu #(
   localparam logic [1:0] COND_PROVIDER_SC = 2'd2;
   localparam logic [1:0] COND_PROVIDER_LOOP = 2'd3;
   logic [Cfg.PLEN-1:0] pc_reg_q;
-  logic [BTB_ENTRIES-1:0] btb_valid_q;
-  logic [BTB_ENTRIES-1:0] btb_is_cond_q;
-  logic [BTB_ENTRIES-1:0] btb_is_backward_q;
-  logic [BTB_ENTRIES-1:0] btb_is_call_q;
-  logic [BTB_ENTRIES-1:0] btb_is_ret_q;
-  logic [BTB_ENTRIES-1:0] btb_use_ras_q;
-  logic [BTB_ENTRIES-1:0] btb_is_rvc_q;
-  logic [BTB_ENTRIES-1:0][BTB_TAG_W-1:0] btb_tag_q;
-  logic [BTB_ENTRIES-1:0][Cfg.PLEN-1:0] btb_target_q;
+  // FTB 双槽（方案 A）：每个 fetch block 同时保留 1 个条件分支槽 + 1 个无条件跳转槽，
+  // 消除原单 entry 下 cond/jump 同 block 互相覆盖导致的预测退化。两个 way 各自独立
+  // tag/valid，按 16B 对齐 block_base 共享同一 BTB index。
+  // -- Way-0：条件分支（taken 时训练写入）--
+  logic [BTB_ENTRIES-1:0] btb_cond_valid_q;
+  logic [BTB_ENTRIES-1:0] btb_cond_is_backward_q;
+  logic [BTB_ENTRIES-1:0] btb_cond_is_rvc_q;
+  logic [BTB_ENTRIES-1:0][BTB_TAG_W-1:0] btb_cond_tag_q;
+  logic [BTB_ENTRIES-1:0][Cfg.PLEN-1:0] btb_cond_target_q;
+  logic [BTB_ENTRIES-1:0][SLOT_IDX_W-1:0] btb_cond_offset_q;
+  // -- Way-1：无条件控制流（JAL/JALR/call/ret）--
+  logic [BTB_ENTRIES-1:0] btb_jump_valid_q;
+  logic [BTB_ENTRIES-1:0] btb_jump_is_call_q;
+  logic [BTB_ENTRIES-1:0] btb_jump_is_ret_q;
+  logic [BTB_ENTRIES-1:0] btb_jump_use_ras_q;
+  logic [BTB_ENTRIES-1:0] btb_jump_is_rvc_q;
+  logic [BTB_ENTRIES-1:0][BTB_TAG_W-1:0] btb_jump_tag_q;
+  logic [BTB_ENTRIES-1:0][Cfg.PLEN-1:0] btb_jump_target_q;
+  logic [BTB_ENTRIES-1:0][SLOT_IDX_W-1:0] btb_jump_offset_q;
   logic [BHT_ENTRIES-1:0][1:0] local_bht_q;
   logic [BHT_ENTRIES-1:0][1:0] global_bht_q;
   logic [BHT_ENTRIES-1:0][1:0] chooser_q;
@@ -246,18 +260,23 @@ module bpu #(
     end
   endfunction
 
-  logic [Cfg.INSTR_PER_FETCH-1:0] predict_hit;
-  logic [Cfg.INSTR_PER_FETCH-1:0] predict_taken;
-  logic [Cfg.INSTR_PER_FETCH-1:0] predict_is_cond;
-  logic [Cfg.INSTR_PER_FETCH-1:0] predict_is_call;
-  logic [Cfg.INSTR_PER_FETCH-1:0] predict_is_ret;
-  logic [Cfg.INSTR_PER_FETCH-1:0] predict_is_rvc;
-  logic [Cfg.INSTR_PER_FETCH-1:0] predict_is_indirect;
-  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] predict_pc;
-  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] predict_target;
-  logic [Cfg.INSTR_PER_FETCH-1:0] ittage_raw_hit_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] ittage_hit_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ittage_target_w;
+  // FTB 单分支预测：原 [INSTR_PER_FETCH] per-slot 向量收敛为单分支标量。
+  logic [Cfg.PLEN-1:0] aligned_base_w;
+  logic [BTB_IDX_W-1:0] btb_pred_idx_w;
+  // 双槽各自还原的分支 PC：cond 槽喂 BHT/TAGE/SC/Loop，jump 槽喂 ITTAGE。
+  logic [Cfg.PLEN-1:0] cond_branch_pc_w;
+  logic [Cfg.PLEN-1:0] jump_branch_pc_w;
+  logic predict_hit;
+  logic predict_taken;
+  logic predict_is_cond;
+  logic predict_is_call;
+  logic predict_is_ret;
+  logic predict_is_rvc;
+  logic predict_is_indirect;
+  logic [Cfg.PLEN-1:0] predict_target;
+  logic ittage_raw_hit_w;
+  logic ittage_hit_w;
+  logic [Cfg.PLEN-1:0] ittage_target_w;
   logic [Cfg.PLEN-1:0] spec_ras_top_w;
   logic spec_ras_has_entry_w;
   logic [Cfg.PLEN-1:0] arch_ras_top_w;
@@ -272,29 +291,39 @@ module bpu #(
   logic [Cfg.PLEN-1:0] pred_slot_pc_w;
   logic [Cfg.PLEN-1:0] pred_slot_target_w;
   logic [Cfg.PLEN-1:0] pred_npc_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] tage_hit_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] tage_taken_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] tage_strong_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0][1:0] tage_provider_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] sc_taken_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] sc_confident_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] loop_hit_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] loop_taken_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] loop_confident_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] cond_taken_legacy_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] cond_tage_override_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] cond_sc_override_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] cond_loop_override_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] cond_tage_candidate_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] cond_sc_candidate_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] cond_loop_candidate_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0][1:0] cond_selected_provider_w;
-  logic [Cfg.INSTR_PER_FETCH-1:0] cond_selected_taken_w;
+  logic tage_hit_w;
+  logic tage_taken_w;
+  logic tage_strong_w;
+  logic [1:0] tage_provider_w;
+  logic sc_taken_w;
+  logic sc_confident_w;
+  logic loop_hit_w;
+  logic loop_taken_w;
+  logic loop_confident_w;
+  logic cond_taken_legacy_w;
+  logic cond_tage_override_w;
+  logic cond_sc_override_w;
+  logic cond_loop_override_w;
+  logic cond_tage_candidate_w;
+  logic cond_sc_candidate_w;
+  logic cond_loop_candidate_w;
+  logic [1:0] cond_selected_provider_w;
+  logic cond_selected_taken_w;
 `ifndef SYNTHESIS
 
 `endif
 
   assign ghr_q = spec_ghr_q;
+
+  // FTB 单查询：用 16B 对齐的 block_base 索引 BTB；分支 PC 由 block_base + (hw_offset<<1) 还原。
+  // 方向/间接预测器统一查这个 branch_pc（与 commit 训练用的 update_pc 一致）。
+  assign aligned_base_w = pc_reg_q & BLOCK_ALIGN_MASK;
+  assign btb_pred_idx_w = btb_index(aligned_base_w);
+  assign cond_branch_pc_w = aligned_base_w +
+                            (Cfg.PLEN'(btb_cond_offset_q[btb_pred_idx_w]) << 1);
+  assign jump_branch_pc_w = aligned_base_w +
+                            (Cfg.PLEN'(btb_jump_offset_q[btb_pred_idx_w]) << 1);
+
   always_comb begin
     ittage_predict_ctx_w = spec_path_hist_q;
     if (!flush_i && pred_event_valid_q && pred_event_is_cond_q) begin
@@ -304,7 +333,7 @@ module bpu #(
 
   tage #(
       .Cfg(Cfg),
-      .INSTR_PER_FETCH(Cfg.INSTR_PER_FETCH),
+      .INSTR_PER_FETCH(1),
       .GHR_BITS(GHR_BITS),
       .TABLE_ENTRIES(Cfg.BPU_BHT_ENTRIES),
       .TAG_BITS(TAGE_TAG_BITS),
@@ -315,7 +344,7 @@ module bpu #(
   ) u_tage (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .predict_base_pc_i(pc_reg_q),
+      .predict_base_pc_i(cond_branch_pc_w),
       .predict_ghr_i(spec_ghr_q),
       .predict_hit_o(tage_hit_w),
       .predict_taken_o(tage_taken_w),
@@ -327,21 +356,21 @@ module bpu #(
       .update_taken_i(update_taken_i)
   );
 
-  sc_l #(
+  stat_corr #(
       .Cfg(Cfg),
-      .INSTR_PER_FETCH(Cfg.INSTR_PER_FETCH),
+      .INSTR_PER_FETCH(1),
       .GHR_BITS(GHR_BITS),
-      .ENTRIES(SC_L_ENTRIES),
+      .ENTRIES(SC_ENTRIES),
       .CTR_BITS(4),
-      .CONF_THRESH(SC_L_CONF_THRESH)
-  ) u_sc_l (
+      .CONF_THRESH(SC_CONF_THRESH)
+  ) u_stat_corr (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .predict_base_pc_i(pc_reg_q),
+      .predict_base_pc_i(cond_branch_pc_w),
       .predict_ghr_i(spec_ghr_q),
       .predict_taken_o(sc_taken_w),
       .predict_confident_o(sc_confident_w),
-      .update_valid_i(update_valid_i && update_is_cond_i && USE_SC_L),
+      .update_valid_i(update_valid_i && update_is_cond_i && USE_SC),
       .update_pc_i(update_pc_i),
       .update_ghr_i(arch_ghr_q),
       .update_taken_i(update_taken_i)
@@ -349,14 +378,14 @@ module bpu #(
 
   loop_predictor #(
       .Cfg(Cfg),
-      .INSTR_PER_FETCH(Cfg.INSTR_PER_FETCH),
+      .INSTR_PER_FETCH(1),
       .ENTRIES(LOOP_ENTRIES),
       .TAG_BITS(LOOP_TAG_BITS),
       .CONF_THRESH(LOOP_CONF_THRESH)
   ) u_loop_predictor (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .predict_base_pc_i(pc_reg_q),
+      .predict_base_pc_i(cond_branch_pc_w),
       .predict_taken_o(loop_taken_w),
       .predict_confident_o(loop_confident_w),
       .predict_hit_o(loop_hit_w),
@@ -368,14 +397,14 @@ module bpu #(
 
   ittage #(
       .Cfg(Cfg),
-      .INSTR_PER_FETCH(Cfg.INSTR_PER_FETCH),
+      .INSTR_PER_FETCH(1),
       .ENTRIES(ITTAGE_ENTRIES),
       .TAG_BITS(ITTAGE_TAG_BITS),
       .PATH_HIST_BITS(PATH_HIST_W)
   ) u_ittage (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .predict_base_pc_i(pc_reg_q),
+      .predict_base_pc_i(jump_branch_pc_w),
       .predict_ctx_i(ittage_predict_ctx_w),
       .predict_hit_o(ittage_raw_hit_w),
       .predict_target_o(ittage_target_w),
@@ -402,148 +431,189 @@ module bpu #(
     end
   end
 
+  // FTB 双槽预测：单次 BTB 读取出 cond way + jump way；cond 槽走方向预测器，jump 槽默认
+  // taken（ret 用 RAS、indirect 用 ITTAGE）。两槽都 taken 时取 block 内 offset 更早者。
   always_comb begin
-    for (int i = 0; i < Cfg.INSTR_PER_FETCH; i++) begin
-      logic [BTB_IDX_W-1:0] idx;
-      logic [BHT_IDX_W-1:0] local_idx;
-      logic [BHT_IDX_W-1:0] global_idx;
-      logic [BHT_IDX_W-1:0] chooser_idx;
-      logic [Cfg.PLEN-1:0] slot_pc;
-      logic [1:0] local_ctr_pred;
-      logic [1:0] global_ctr_pred;
-      logic [1:0] selected_ctr_pred;
-      logic local_taken_pred;
-      logic global_taken_pred;
-      logic cond_taken_pred;
-      logic use_global_pred;
-      logic local_legacy_strong;
-      logic global_legacy_strong;
-      logic local_global_disagree;
-      logic selected_legacy_strong;
-      logic tage_provider_ok;
-      logic tage_allow_override;
-      logic sc_allow_override;
-      slot_pc = pc_reg_q + Cfg.PLEN'(INSTR_BYTES * i);
-      idx = btb_index(slot_pc);
-      local_idx = bht_pc_index(slot_pc);
-      global_idx = bht_global_index(slot_pc, spec_ghr_q);
-      chooser_idx = local_idx;
+    logic [BTB_IDX_W-1:0] idx;
+    logic [BHT_IDX_W-1:0] local_idx;
+    logic [BHT_IDX_W-1:0] global_idx;
+    logic [BHT_IDX_W-1:0] chooser_idx;
+    logic [1:0] local_ctr_pred;
+    logic [1:0] global_ctr_pred;
+    logic [1:0] selected_ctr_pred;
+    logic local_taken_pred;
+    logic global_taken_pred;
+    logic cond_taken_pred;
+    logic use_global_pred;
+    logic local_legacy_strong;
+    logic global_legacy_strong;
+    logic local_global_disagree;
+    logic selected_legacy_strong;
+    logic tage_provider_ok;
+    logic tage_allow_override;
+    logic sc_allow_override;
+    logic [BTB_TAG_W-1:0] block_tag;
+    // 两个 way 的解码结果
+    logic cond_hit;
+    logic cond_is_backward_l;
+    logic cond_is_rvc_l;
+    logic [Cfg.PLEN-1:0] cond_target_l;
+    logic jump_hit;
+    logic jump_is_call_l;
+    logic jump_is_ret_l;
+    logic jump_is_rvc_l;
+    logic jump_is_indirect_l;
+    logic [Cfg.PLEN-1:0] jump_target_l;
+    // 每槽 in_range（须落在本 fetch group [pc_reg_q, pc_reg_q+FETCH_WIDTH) 内且整条不越组）
+    logic [Cfg.PLEN-1:0] cond_diff_w;
+    logic [Cfg.PLEN-1:0] cond_start_rel_w;
+    logic [Cfg.PLEN-1:0] cond_end_rel_w;
+    logic cond_ge_w;
+    logic cond_in_range_w;
+    logic [Cfg.PLEN-1:0] jump_diff_w;
+    logic [Cfg.PLEN-1:0] jump_start_rel_w;
+    logic [Cfg.PLEN-1:0] jump_end_rel_w;
+    logic jump_ge_w;
+    logic jump_in_range_w;
+    logic cond_candidate_w;
+    logic jump_candidate_w;
+    logic pick_cond_w;
+    logic pick_jump_w;
 
-      predict_pc[i] = slot_pc;
-      predict_target[i] = btb_target_q[idx];
-      predict_hit[i] = btb_valid_q[idx] && (btb_tag_q[idx] == btb_tag(slot_pc));
-      predict_is_cond[i] = predict_hit[i] && btb_is_cond_q[idx];
-      predict_is_call[i] = predict_hit[i] && btb_is_call_q[idx];
-      predict_is_ret[i] = predict_hit[i] && btb_is_ret_q[idx];
-      predict_is_rvc[i] = predict_hit[i] && btb_is_rvc_q[idx];
-      predict_is_indirect[i] = predict_hit[i] && !btb_is_cond_q[idx] && !btb_is_call_q[idx] && !btb_is_ret_q[idx];
-      ittage_hit_w[i] = USE_ITTAGE && predict_is_indirect[i] && ittage_raw_hit_w[i];
+    idx = btb_pred_idx_w;
+    block_tag = btb_tag(aligned_base_w);
+    // cond 槽方向预测查 cond_branch_pc，jump 槽 ITTAGE 查 jump_branch_pc。
+    local_idx = bht_pc_index(cond_branch_pc_w);
+    global_idx = bht_global_index(cond_branch_pc_w, spec_ghr_q);
+    chooser_idx = local_idx;
 
-      local_ctr_pred = local_bht_q[local_idx];
-      global_ctr_pred = global_bht_q[global_idx];
-      local_taken_pred = local_ctr_pred[1] ||
-                         ((local_ctr_pred == 2'b01) && btb_is_backward_q[idx]);
-      global_taken_pred = global_ctr_pred[1] ||
-                          ((global_ctr_pred == 2'b01) && btb_is_backward_q[idx]);
-      use_global_pred = USE_GSHARE && (!USE_TOURNAMENT || chooser_q[chooser_idx][1]);
-      selected_ctr_pred = use_global_pred ? global_ctr_pred : local_ctr_pred;
-      local_legacy_strong = (local_ctr_pred == 2'b00) || (local_ctr_pred == 2'b11);
-      global_legacy_strong = (global_ctr_pred == 2'b00) || (global_ctr_pred == 2'b11);
-      local_global_disagree = (local_taken_pred != global_taken_pred);
-      selected_legacy_strong = (selected_ctr_pred == 2'b00) || (selected_ctr_pred == 2'b11);
-      cond_taken_pred = use_global_pred ? global_taken_pred : local_taken_pred;
-      cond_taken_legacy_w[i] = cond_taken_pred;
-      cond_tage_override_w[i] = 1'b0;
-      cond_sc_override_w[i] = 1'b0;
-      cond_loop_override_w[i] = 1'b0;
-      cond_tage_candidate_w[i] = 1'b0;
-      cond_sc_candidate_w[i] = 1'b0;
-      cond_loop_candidate_w[i] = 1'b0;
-      cond_selected_provider_w[i] = COND_PROVIDER_LEGACY;
+    // ---- Way-0：条件分支解码 ----
+    cond_hit = btb_cond_valid_q[idx] && (btb_cond_tag_q[idx] == block_tag);
+    cond_is_backward_l = btb_cond_is_backward_q[idx];
+    cond_is_rvc_l = btb_cond_is_rvc_q[idx];
+    cond_target_l = btb_cond_target_q[idx];
 
-      tage_provider_ok = (int'(tage_provider_w[i]) >= int'(TAGE_OVERRIDE_MIN_PROVIDER));
-      tage_allow_override = USE_TAGE && tage_hit_w[i] && tage_strong_w[i] && tage_provider_ok;
-      if (TAGE_OVERRIDE_REQUIRE_LEGACY_WEAK && selected_legacy_strong) begin
-        tage_allow_override = 1'b0;
-      end
-      cond_tage_candidate_w[i] = predict_is_cond[i] && tage_allow_override;
-
-      if (tage_allow_override && (tage_taken_w[i] != cond_taken_legacy_w[i])) begin
-        cond_tage_override_w[i] = 1'b1;
-        cond_taken_pred = tage_taken_w[i];
-        cond_selected_provider_w[i] = COND_PROVIDER_TAGE;
-      end
-
-      sc_allow_override = USE_SC_L && sc_confident_w[i];
-      if (selected_legacy_strong) begin
-        sc_allow_override = 1'b0;
-      end
-      if (SC_L_BLOCK_ON_TAGE_HIT && USE_TAGE && tage_hit_w[i]) begin
-        sc_allow_override = 1'b0;
-      end
-      if (SC_L_REQUIRE_DISAGREE && !local_global_disagree) begin
-        sc_allow_override = 1'b0;
-      end
-      if (SC_L_REQUIRE_BOTH_WEAK && (local_legacy_strong || global_legacy_strong)) begin
-        sc_allow_override = 1'b0;
-      end
-      cond_sc_candidate_w[i] = predict_is_cond[i] && sc_allow_override;
-      if (sc_allow_override && (sc_taken_w[i] != cond_taken_pred)) begin
-        cond_sc_override_w[i] = 1'b1;
-        cond_taken_pred = sc_taken_w[i];
-        cond_selected_provider_w[i] = COND_PROVIDER_SC;
-      end
-      cond_loop_candidate_w[i] = USE_LOOP && predict_is_cond[i] && loop_confident_w[i];
-      if (USE_LOOP && predict_is_cond[i] && loop_confident_w[i] &&
-          (loop_taken_w[i] != cond_taken_pred)) begin
-        cond_loop_override_w[i] = 1'b1;
-        cond_taken_pred = loop_taken_w[i];
-        cond_selected_provider_w[i] = COND_PROVIDER_LOOP;
-      end
-      cond_selected_taken_w[i] = cond_taken_pred;
-
-      predict_taken[i] = 1'b0;
-      if (predict_hit[i]) begin
-        if (btb_is_ret_q[idx]) begin
-          predict_taken[i] = 1'b1;
-          if (spec_ras_has_entry_w) begin
-            predict_target[i] = spec_ras_top_w;
-          end
-        end else if (!btb_is_cond_q[idx]) begin
-          predict_taken[i] = 1'b1;
-          if (predict_is_indirect[i] && ittage_hit_w[i]) begin
-            predict_target[i] = ittage_target_w[i];
-          end
-        end else begin
-          predict_taken[i] = cond_taken_pred;
-        end
-      end
+    // ---- Way-1：无条件控制流解码 ----
+    jump_hit = btb_jump_valid_q[idx] && (btb_jump_tag_q[idx] == block_tag);
+    jump_is_call_l = btb_jump_is_call_q[idx];
+    jump_is_ret_l = btb_jump_is_ret_q[idx];
+    jump_is_rvc_l = btb_jump_is_rvc_q[idx];
+    jump_is_indirect_l = jump_hit && !jump_is_call_l && !jump_is_ret_l;
+    jump_target_l = btb_jump_target_q[idx];
+    ittage_hit_w = USE_ITTAGE && jump_is_indirect_l && ittage_raw_hit_w;
+    // jump 槽预测 target：ret→RAS，indirect→ITTAGE，否则 BTB 直接目标。
+    if (jump_is_ret_l && spec_ras_has_entry_w) begin
+      jump_target_l = spec_ras_top_w;
+    end else if (jump_is_indirect_l && ittage_hit_w) begin
+      jump_target_l = ittage_target_w;
     end
-  end
 
-  always_comb begin
-    pred_slot_valid_w = 1'b0;
-    pred_slot_idx_w = '0;
-    pred_slot_is_call_w = 1'b0;
-    pred_slot_is_ret_w = 1'b0;
-    pred_slot_is_rvc_w = 1'b0;
-    pred_slot_is_cond_w = 1'b0;
-    pred_slot_taken_w = 1'b0;
-    pred_slot_pc_w = '0;
-    pred_slot_target_w = '0;
-    for (int i = 0; i < Cfg.INSTR_PER_FETCH; i++) begin
-      if (!pred_slot_valid_w && predict_taken[i]) begin
-        pred_slot_valid_w = 1'b1;
-        pred_slot_idx_w = SLOT_IDX_W'(i);
-        pred_slot_is_call_w = predict_is_call[i];
-        pred_slot_is_ret_w = predict_is_ret[i];
-        pred_slot_is_rvc_w = predict_is_rvc[i];
-        pred_slot_is_cond_w = predict_is_cond[i];
-        pred_slot_taken_w = predict_taken[i];
-        pred_slot_pc_w = predict_pc[i];
-        pred_slot_target_w = predict_target[i];
-      end
+    // ---- cond 方向预测（沿用 legacy/TAGE/SC/Loop override 链）----
+    local_ctr_pred = local_bht_q[local_idx];
+    global_ctr_pred = global_bht_q[global_idx];
+    local_taken_pred = local_ctr_pred[1] ||
+                       ((local_ctr_pred == 2'b01) && cond_is_backward_l);
+    global_taken_pred = global_ctr_pred[1] ||
+                        ((global_ctr_pred == 2'b01) && cond_is_backward_l);
+    use_global_pred = USE_GSHARE && (!USE_TOURNAMENT || chooser_q[chooser_idx][1]);
+    selected_ctr_pred = use_global_pred ? global_ctr_pred : local_ctr_pred;
+    local_legacy_strong = (local_ctr_pred == 2'b00) || (local_ctr_pred == 2'b11);
+    global_legacy_strong = (global_ctr_pred == 2'b00) || (global_ctr_pred == 2'b11);
+    local_global_disagree = (local_taken_pred != global_taken_pred);
+    selected_legacy_strong = (selected_ctr_pred == 2'b00) || (selected_ctr_pred == 2'b11);
+    cond_taken_pred = use_global_pred ? global_taken_pred : local_taken_pred;
+    cond_taken_legacy_w = cond_taken_pred;
+    cond_tage_override_w = 1'b0;
+    cond_sc_override_w = 1'b0;
+    cond_loop_override_w = 1'b0;
+    cond_tage_candidate_w = 1'b0;
+    cond_sc_candidate_w = 1'b0;
+    cond_loop_candidate_w = 1'b0;
+    cond_selected_provider_w = COND_PROVIDER_LEGACY;
+
+    tage_provider_ok = (int'(tage_provider_w) >= int'(TAGE_OVERRIDE_MIN_PROVIDER));
+    tage_allow_override = USE_TAGE && tage_hit_w && tage_strong_w && tage_provider_ok;
+    if (TAGE_OVERRIDE_REQUIRE_LEGACY_WEAK && selected_legacy_strong) begin
+      tage_allow_override = 1'b0;
     end
+    cond_tage_candidate_w = cond_hit && tage_allow_override;
+
+    if (tage_allow_override && (tage_taken_w != cond_taken_legacy_w)) begin
+      cond_tage_override_w = 1'b1;
+      cond_taken_pred = tage_taken_w;
+      cond_selected_provider_w = COND_PROVIDER_TAGE;
+    end
+
+    sc_allow_override = USE_SC && sc_confident_w;
+    if (selected_legacy_strong) begin
+      sc_allow_override = 1'b0;
+    end
+    if (SC_BLOCK_ON_TAGE_HIT && USE_TAGE && tage_hit_w) begin
+      sc_allow_override = 1'b0;
+    end
+    if (SC_REQUIRE_DISAGREE && !local_global_disagree) begin
+      sc_allow_override = 1'b0;
+    end
+    if (SC_REQUIRE_BOTH_WEAK && (local_legacy_strong || global_legacy_strong)) begin
+      sc_allow_override = 1'b0;
+    end
+    cond_sc_candidate_w = cond_hit && sc_allow_override;
+    if (sc_allow_override && (sc_taken_w != cond_taken_pred)) begin
+      cond_sc_override_w = 1'b1;
+      cond_taken_pred = sc_taken_w;
+      cond_selected_provider_w = COND_PROVIDER_SC;
+    end
+    cond_loop_candidate_w = USE_LOOP && cond_hit && loop_confident_w;
+    if (USE_LOOP && cond_hit && loop_confident_w &&
+        (loop_taken_w != cond_taken_pred)) begin
+      cond_loop_override_w = 1'b1;
+      cond_taken_pred = loop_taken_w;
+      cond_selected_provider_w = COND_PROVIDER_LOOP;
+    end
+    cond_selected_taken_w = cond_taken_pred;
+
+    // ---- 每槽 in_range ----
+    cond_diff_w = cond_branch_pc_w - pc_reg_q;
+    cond_ge_w = (cond_branch_pc_w >= pc_reg_q);
+    cond_start_rel_w = cond_diff_w >> 1;
+    cond_end_rel_w = cond_start_rel_w + (cond_is_rvc_l ? Cfg.PLEN'(0) : Cfg.PLEN'(1));
+    cond_in_range_w = cond_ge_w && (cond_end_rel_w <= Cfg.PLEN'(PRED_SLOT_COUNT - 1));
+
+    jump_diff_w = jump_branch_pc_w - pc_reg_q;
+    jump_ge_w = (jump_branch_pc_w >= pc_reg_q);
+    jump_start_rel_w = jump_diff_w >> 1;
+    jump_end_rel_w = jump_start_rel_w + (jump_is_rvc_l ? Cfg.PLEN'(0) : Cfg.PLEN'(1));
+    jump_in_range_w = jump_ge_w && (jump_end_rel_w <= Cfg.PLEN'(PRED_SLOT_COUNT - 1));
+
+    // ---- 候选与选择：cond 须方向预测 taken；jump 命中即 taken。取 offset 更早者 ----
+    cond_candidate_w = cond_hit && cond_taken_pred && cond_in_range_w;
+    jump_candidate_w = jump_hit && jump_in_range_w;
+    pick_cond_w = cond_candidate_w &&
+                  (!jump_candidate_w || (cond_start_rel_w <= jump_start_rel_w));
+    pick_jump_w = jump_candidate_w && !pick_cond_w;
+
+    // 选中槽属性投影到原有 predict_* / pred_slot_* 接口。
+    predict_hit = pick_cond_w || pick_jump_w;
+    predict_taken = predict_hit;
+    predict_is_cond = pick_cond_w;
+    predict_is_call = pick_jump_w && jump_is_call_l;
+    predict_is_ret = pick_jump_w && jump_is_ret_l;
+    predict_is_indirect = pick_jump_w && jump_is_indirect_l;
+    predict_is_rvc = pick_cond_w ? cond_is_rvc_l : (pick_jump_w && jump_is_rvc_l);
+    predict_target = pick_cond_w ? cond_target_l : jump_target_l;
+
+    pred_slot_valid_w   = predict_hit;
+    pred_slot_idx_w     = pred_slot_valid_w
+                            ? (pick_cond_w ? cond_end_rel_w[SLOT_IDX_W-1:0]
+                                           : jump_end_rel_w[SLOT_IDX_W-1:0])
+                            : '0;
+    pred_slot_is_call_w = pred_slot_valid_w && predict_is_call;
+    pred_slot_is_ret_w  = pred_slot_valid_w && predict_is_ret;
+    pred_slot_is_rvc_w  = pred_slot_valid_w && predict_is_rvc;
+    pred_slot_is_cond_w = pred_slot_valid_w && predict_is_cond;
+    pred_slot_taken_w   = pred_slot_valid_w;
+    pred_slot_pc_w      = pick_cond_w ? cond_branch_pc_w : jump_branch_pc_w;
+    pred_slot_target_w  = predict_target;
   end
 
   assign pred_npc_w = pred_slot_valid_w ? pred_slot_target_w : (pc_reg_q + Cfg.FETCH_WIDTH);
@@ -558,15 +628,20 @@ module bpu #(
   always_ff @(posedge clk_i or posedge rst_i) begin
     if (rst_i) begin
       pc_reg_q <= Cfg.PLEN'(Cfg.RESET_VECTOR);
-      btb_valid_q   <= '0;
-      btb_is_cond_q <= '0;
-      btb_is_backward_q <= '0;
-      btb_is_call_q <= '0;
-      btb_is_ret_q  <= '0;
-      btb_use_ras_q <= '0;
-      btb_is_rvc_q <= '0;
-      btb_tag_q     <= '0;
-      btb_target_q  <= '0;
+      btb_cond_valid_q <= '0;
+      btb_cond_is_backward_q <= '0;
+      btb_cond_is_rvc_q <= '0;
+      btb_cond_tag_q <= '0;
+      btb_cond_target_q <= '0;
+      btb_cond_offset_q <= '0;
+      btb_jump_valid_q <= '0;
+      btb_jump_is_call_q <= '0;
+      btb_jump_is_ret_q <= '0;
+      btb_jump_use_ras_q <= '0;
+      btb_jump_is_rvc_q <= '0;
+      btb_jump_tag_q <= '0;
+      btb_jump_target_q <= '0;
+      btb_jump_offset_q <= '0;
       arch_ras_stack_q   <= '0;
       spec_ras_stack_q   <= '0;
       arch_ras_count_q   <= '0;
@@ -653,11 +728,11 @@ module bpu #(
       logic [RAS_DEPTH-1:0][Cfg.PLEN-1:0] spec_stack_n;
       logic [RAS_CNT_W-1:0] arch_count_n;
       logic [RAS_CNT_W-1:0] spec_count_n;
+      logic [Cfg.PLEN-1:0] up_block_base;
       logic [BTB_IDX_W-1:0] up_btb_idx;
       logic [BHT_IDX_W-1:0] up_local_idx;
       logic [BHT_IDX_W-1:0] up_global_idx;
       logic [BHT_IDX_W-1:0] up_chooser_idx;
-      logic do_btb_write;
       logic pred_fire_w;
       logic local_pred_before;
       logic global_pred_before;
@@ -782,35 +857,45 @@ module bpu #(
       end
 
       if (update_valid_i) begin
-        up_btb_idx = btb_index(update_pc_i);
+        // FTB 训练：BTB 按 16B 对齐 block_base 索引/打 tag；BHT/TAGE 仍用真实分支 PC。
+        up_block_base = update_pc_i & BLOCK_ALIGN_MASK;
+        up_btb_idx = btb_index(up_block_base);
         up_local_idx = bht_pc_index(update_pc_i);
         up_global_idx = bht_global_index(update_pc_i, arch_ghr_q);
         up_chooser_idx = up_local_idx;
-        do_btb_write = (!update_is_cond_i) || update_taken_i;
-
-        if (do_btb_write) begin
-          btb_valid_q[up_btb_idx] <= 1'b1;
-          btb_is_cond_q[up_btb_idx] <= update_is_cond_i;
-          btb_is_backward_q[up_btb_idx] <= update_is_cond_i && (update_target_i < update_pc_i);
-          btb_is_call_q[up_btb_idx] <= update_is_call_i;
-          btb_is_ret_q[up_btb_idx] <= update_is_ret_i;
-          btb_is_rvc_q[up_btb_idx] <= update_is_rvc_i;
-          if (update_is_ret_i) begin
-            btb_use_ras_q[up_btb_idx] <= !arch_ras_has_entry_w || (arch_ras_top_w == update_target_i);
-          end else begin
-            btb_use_ras_q[up_btb_idx] <= 1'b0;
+        // FTB 双槽训练：条件分支（仅 taken）写 cond way；无条件控制流写 jump way。
+        // 半字 offset = (update_pc - block_base) >> 1 = update_pc[SLOT_IDX_W:1]。
+        if (update_is_cond_i) begin
+          if (update_taken_i) begin
+            btb_cond_valid_q[up_btb_idx] <= 1'b1;
+            btb_cond_is_backward_q[up_btb_idx] <= (update_target_i < update_pc_i);
+            btb_cond_is_rvc_q[up_btb_idx] <= update_is_rvc_i;
+            btb_cond_tag_q[up_btb_idx] <= btb_tag(up_block_base);
+            btb_cond_target_q[up_btb_idx] <= update_target_i;
+            btb_cond_offset_q[up_btb_idx] <= update_pc_i[SLOT_IDX_W:1];
           end
-          btb_tag_q[up_btb_idx] <= btb_tag(update_pc_i);
-          btb_target_q[up_btb_idx] <= update_target_i;
+        end else begin
+          btb_jump_valid_q[up_btb_idx] <= 1'b1;
+          btb_jump_is_call_q[up_btb_idx] <= update_is_call_i;
+          btb_jump_is_ret_q[up_btb_idx] <= update_is_ret_i;
+          btb_jump_is_rvc_q[up_btb_idx] <= update_is_rvc_i;
+          if (update_is_ret_i) begin
+            btb_jump_use_ras_q[up_btb_idx] <= !arch_ras_has_entry_w || (arch_ras_top_w == update_target_i);
+          end else begin
+            btb_jump_use_ras_q[up_btb_idx] <= 1'b0;
+          end
+          btb_jump_tag_q[up_btb_idx] <= btb_tag(up_block_base);
+          btb_jump_target_q[up_btb_idx] <= update_target_i;
+          btb_jump_offset_q[up_btb_idx] <= update_pc_i[SLOT_IDX_W:1];
         end
 
         if (update_is_cond_i) begin
           local_pred_before = local_bht_q[up_local_idx][1] ||
                               ((local_bht_q[up_local_idx] == 2'b01) &&
-                               btb_is_backward_q[up_btb_idx]);
+                               btb_cond_is_backward_q[up_btb_idx]);
           global_pred_before = global_bht_q[up_global_idx][1] ||
                                ((global_bht_q[up_global_idx] == 2'b01) &&
-                                btb_is_backward_q[up_btb_idx]);
+                                btb_cond_is_backward_q[up_btb_idx]);
           choose_global_before = USE_GSHARE && (!USE_TOURNAMENT || chooser_q[up_chooser_idx][1]);
           selected_pred_before = choose_global_before ? global_pred_before : local_pred_before;
           local_correct = (local_pred_before == update_taken_i);
@@ -862,7 +947,7 @@ module bpu #(
             dbg_tage_override_correct_q <= dbg_tage_override_correct_q + 64'd1;
           end
         end
-        if (USE_SC_L && update_is_cond_i && (sc_count_n != '0)) begin
+        if (USE_SC && update_is_cond_i && (sc_count_n != '0)) begin
           sc_pop_override = sc_override_n[sc_head_n];
           sc_pop_pred_taken = sc_pred_taken_n[sc_head_n];
           sc_head_n = sc_head_n + TAGE_TRACK_PTR_W'(1);
@@ -1059,10 +1144,10 @@ module bpu #(
       end else begin
         if (USE_TAGE && pred_fire_w && pred_slot_is_cond_w) begin
           dbg_tage_lookup_total_q <= dbg_tage_lookup_total_q + 64'd1;
-          if (tage_hit_w[pred_slot_idx_w]) begin
+          if (tage_hit_w) begin
             dbg_tage_hit_total_q <= dbg_tage_hit_total_q + 64'd1;
           end
-          tage_push_override = cond_tage_override_w[pred_slot_idx_w];
+          tage_push_override = cond_tage_override_w;
           if (tage_push_override) begin
             dbg_tage_override_total_q <= dbg_tage_override_total_q + 64'd1;
           end
@@ -1073,12 +1158,12 @@ module bpu #(
             tage_count_n = tage_count_n + TAGE_TRACK_CNT_W'(1);
           end
         end
-        if (USE_SC_L && pred_fire_w && pred_slot_is_cond_w) begin
+        if (USE_SC && pred_fire_w && pred_slot_is_cond_w) begin
           dbg_sc_lookup_total_q <= dbg_sc_lookup_total_q + 64'd1;
-          if (sc_confident_w[pred_slot_idx_w]) begin
+          if (sc_confident_w) begin
             dbg_sc_confident_total_q <= dbg_sc_confident_total_q + 64'd1;
           end
-          sc_push_override = cond_sc_override_w[pred_slot_idx_w];
+          sc_push_override = cond_sc_override_w;
           if (sc_push_override) begin
             dbg_sc_override_total_q <= dbg_sc_override_total_q + 64'd1;
           end
@@ -1091,13 +1176,13 @@ module bpu #(
         end
         if (USE_LOOP && pred_fire_w && pred_slot_is_cond_w) begin
           dbg_loop_lookup_total_q <= dbg_loop_lookup_total_q + 64'd1;
-          if (loop_hit_w[pred_slot_idx_w]) begin
+          if (loop_hit_w) begin
             dbg_loop_hit_total_q <= dbg_loop_hit_total_q + 64'd1;
           end
-          if (loop_confident_w[pred_slot_idx_w]) begin
+          if (loop_confident_w) begin
             dbg_loop_confident_total_q <= dbg_loop_confident_total_q + 64'd1;
           end
-          loop_push_override = cond_loop_override_w[pred_slot_idx_w];
+          loop_push_override = cond_loop_override_w;
           if (loop_push_override) begin
             dbg_loop_override_total_q <= dbg_loop_override_total_q + 64'd1;
           end
@@ -1109,15 +1194,15 @@ module bpu #(
           end
         end
         if (pred_fire_w && pred_slot_is_cond_w && (cond_count_n < TAGE_TRACK_DEPTH)) begin
-          cond_provider_n[cond_tail_n] = cond_selected_provider_w[pred_slot_idx_w];
-          cond_selected_taken_n[cond_tail_n] = cond_selected_taken_w[pred_slot_idx_w];
-          cond_legacy_taken_n[cond_tail_n] = cond_taken_legacy_w[pred_slot_idx_w];
-          cond_tage_taken_n[cond_tail_n] = tage_taken_w[pred_slot_idx_w];
-          cond_sc_taken_n[cond_tail_n] = sc_taken_w[pred_slot_idx_w];
-          cond_loop_taken_n[cond_tail_n] = loop_taken_w[pred_slot_idx_w];
-          cond_tage_candidate_n[cond_tail_n] = cond_tage_candidate_w[pred_slot_idx_w];
-          cond_sc_candidate_n[cond_tail_n] = cond_sc_candidate_w[pred_slot_idx_w];
-          cond_loop_candidate_n[cond_tail_n] = cond_loop_candidate_w[pred_slot_idx_w];
+          cond_provider_n[cond_tail_n] = cond_selected_provider_w;
+          cond_selected_taken_n[cond_tail_n] = cond_selected_taken_w;
+          cond_legacy_taken_n[cond_tail_n] = cond_taken_legacy_w;
+          cond_tage_taken_n[cond_tail_n] = tage_taken_w;
+          cond_sc_taken_n[cond_tail_n] = sc_taken_w;
+          cond_loop_taken_n[cond_tail_n] = loop_taken_w;
+          cond_tage_candidate_n[cond_tail_n] = cond_tage_candidate_w;
+          cond_sc_candidate_n[cond_tail_n] = cond_sc_candidate_w;
+          cond_loop_candidate_n[cond_tail_n] = cond_loop_candidate_w;
           cond_tail_n = cond_tail_n + TAGE_TRACK_PTR_W'(1);
           cond_count_n = cond_count_n + TAGE_TRACK_CNT_W'(1);
         end

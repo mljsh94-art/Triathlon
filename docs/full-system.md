@@ -65,11 +65,80 @@ make -C linux_workspace/linux ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(np
 
 # 合并
 python3 linux_workspace/merge.py
+```
 
-# 仿真（禁用 DiffTest）
-make -C npc sim DIFFTEST= IMG=../fw_combined.bin \
+## 全系统仿真（`fw_combined.bin`）
+
+镜像为整包加载（默认模式，**不用** `--boot-handoff`）：`<IMG>` 写入 `0x80000000`。详见 [sim-args.md](sim-args.md) 镜像加载模式。
+
+### 前置
+
+```bash
+cd /mnt/d/sjj_ict2026/Triathlon   # 仓库根，WSL 下执行
+
+# Spike DiffTest 库（首次或 ref 变更后）
+make -C npc/ref
+
+# 全系统镜像（首次或 OpenSBI/Linux/merge 变更后）
+python3 linux_workspace/merge.py
+```
+
+DiffTest 在 `npc/ref/riscv32-spike-difftest.so` 存在时 **默认开启**；须关闭时显式写 `DIFFTEST=`。
+
+### 带 Snapshot 编译
+
+Snapshot 须 `SNAPSHOT=1` 构建（Verilator `--savable --threads 1`，比默认 `--threads 2` 慢）。改 RTL 后须重编。
+
+```bash
+make -C npc SNAPSHOT=1
+```
+
+### DiffTest + Snapshot 长跑 Linux
+
+```bash
+make -C npc sim SNAPSHOT=1 \
+  IMG=$PWD/fw_combined.bin \
+  ARGS='--max-cycles=100000000 \
+        --progress=2000000 \
+        --linux-early-debug \
+        --snapshot-interval=5000000 \
+        --snapshot-dir=npc/build/snapshots \
+        --snapshot-keep=3'
+```
+
+| 参数 | 说明 |
+|------|------|
+| 不写 `DIFFTEST=` | 开启 Spike lockstep（默认） |
+| `SNAPSHOT=1` | 编译与运行均需；否则 snapshot 相关 ARGS 无效 |
+| `--snapshot-interval` | 周期性保存；`0` 表示禁用 |
+| `--snapshot-dir` | 快照目录，默认 `npc/build/snapshots` |
+| `--linux-early-debug` | 打印 `[linux-stage]` 启动里程碑（可选） |
+
+Snapshot 格式与恢复语法见 [sim-args.md](sim-args.md#simulation-snapshot)。
+
+### 从 Snapshot 恢复继续跑
+
+```bash
+make -C npc sim SNAPSHOT=1 \
+  IMG=$PWD/fw_combined.bin \
+  ARGS='--snapshot-restore=npc/build/snapshots/triathlon-5000000.snap \
+        --max-cycles=100000000 \
+        --progress=2000000 \
+        --linux-early-debug'
+```
+
+将 `triathlon-5000000.snap` 换为 `--snapshot-dir` 下实际文件名。
+
+### 快速调试（关闭 DiffTest）
+
+启动阶段仅看 RTL 日志、暂不 lockstep 时：
+
+```bash
+make -C npc sim DIFFTEST= IMG=$PWD/fw_combined.bin \
   ARGS='--max-cycles=100000000 --progress=1000000 --linux-early-debug'
 ```
+
+启动阶段表与 NDJSON 排障见 [debugging.md](debugging.md)。
 
 ## merge.py 常量
 
@@ -108,6 +177,7 @@ Linux `check_unaligned_access()` 可能触发 `load address misaligned` panic。
 1. 编译 OpenSBI → 确认 `FW_JUMP_*` 与 merge 一致  
 2. 编译 Linux Image → `CONFIG_32BIT=y`  
 3. `python3 linux_workspace/merge.py` → `fw_combined.bin`  
-4. `make -C npc sim DIFFTEST= IMG=../fw_combined.bin`（ARGS 见 [sim-args.md](sim-args.md)）
+4. `make -C npc/ref` → 构建 DiffTest `.so`（默认启用 lockstep）  
+5. 长跑：`make -C npc SNAPSHOT=1` 后按上文 **DiffTest + Snapshot** 命令仿真（ARGS 见 [sim-args.md](sim-args.md)）
 
 人类可读快速上手见根目录 [README.md](../README.md)。

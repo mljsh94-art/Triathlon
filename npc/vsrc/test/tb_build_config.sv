@@ -19,12 +19,12 @@ module tb_build_config (
     input int unsigned i_BPU_BHT_ENTRIES,
     input int unsigned i_BPU_RAS_DEPTH,
     input int unsigned i_BPU_GHR_BITS,
-    input int unsigned i_BPU_USE_SC_L,
-    input int unsigned i_BPU_SC_L_ENTRIES,
-    input int unsigned i_BPU_SC_L_CONF_THRESH,
-    input int unsigned i_BPU_SC_L_REQUIRE_DISAGREE,
-    input int unsigned i_BPU_SC_L_REQUIRE_BOTH_WEAK,
-    input int unsigned i_BPU_SC_L_BLOCK_ON_TAGE_HIT,
+    input int unsigned i_BPU_USE_SC,
+    input int unsigned i_BPU_SC_ENTRIES,
+    input int unsigned i_BPU_SC_CONF_THRESH,
+    input int unsigned i_BPU_SC_REQUIRE_DISAGREE,
+    input int unsigned i_BPU_SC_REQUIRE_BOTH_WEAK,
+    input int unsigned i_BPU_SC_BLOCK_ON_TAGE_HIT,
     input int unsigned i_BPU_USE_LOOP,
     input int unsigned i_BPU_LOOP_ENTRIES,
     input int unsigned i_BPU_LOOP_TAG_BITS,
@@ -62,12 +62,12 @@ module tb_build_config (
     output int unsigned o_BPU_BHT_ENTRIES,
     output int unsigned o_BPU_RAS_DEPTH,
     output int unsigned o_BPU_GHR_BITS,
-    output int unsigned o_BPU_USE_SC_L,
-    output int unsigned o_BPU_SC_L_ENTRIES,
-    output int unsigned o_BPU_SC_L_CONF_THRESH,
-    output int unsigned o_BPU_SC_L_REQUIRE_DISAGREE,
-    output int unsigned o_BPU_SC_L_REQUIRE_BOTH_WEAK,
-    output int unsigned o_BPU_SC_L_BLOCK_ON_TAGE_HIT,
+    output int unsigned o_BPU_USE_SC,
+    output int unsigned o_BPU_SC_ENTRIES,
+    output int unsigned o_BPU_SC_CONF_THRESH,
+    output int unsigned o_BPU_SC_REQUIRE_DISAGREE,
+    output int unsigned o_BPU_SC_REQUIRE_BOTH_WEAK,
+    output int unsigned o_BPU_SC_BLOCK_ON_TAGE_HIT,
     output int unsigned o_BPU_USE_LOOP,
     output int unsigned o_BPU_LOOP_ENTRIES,
     output int unsigned o_BPU_LOOP_TAG_BITS,
@@ -116,12 +116,12 @@ module tb_build_config (
   assign user_cfg_in.BPU_BHT_ENTRIES = i_BPU_BHT_ENTRIES;
   assign user_cfg_in.BPU_RAS_DEPTH = i_BPU_RAS_DEPTH;
   assign user_cfg_in.BPU_GHR_BITS = i_BPU_GHR_BITS;
-  assign user_cfg_in.BPU_USE_SC_L = i_BPU_USE_SC_L;
-  assign user_cfg_in.BPU_SC_L_ENTRIES = i_BPU_SC_L_ENTRIES;
-  assign user_cfg_in.BPU_SC_L_CONF_THRESH = i_BPU_SC_L_CONF_THRESH;
-  assign user_cfg_in.BPU_SC_L_REQUIRE_DISAGREE = i_BPU_SC_L_REQUIRE_DISAGREE;
-  assign user_cfg_in.BPU_SC_L_REQUIRE_BOTH_WEAK = i_BPU_SC_L_REQUIRE_BOTH_WEAK;
-  assign user_cfg_in.BPU_SC_L_BLOCK_ON_TAGE_HIT = i_BPU_SC_L_BLOCK_ON_TAGE_HIT;
+  assign user_cfg_in.BPU_USE_SC = i_BPU_USE_SC;
+  assign user_cfg_in.BPU_SC_ENTRIES = i_BPU_SC_ENTRIES;
+  assign user_cfg_in.BPU_SC_CONF_THRESH = i_BPU_SC_CONF_THRESH;
+  assign user_cfg_in.BPU_SC_REQUIRE_DISAGREE = i_BPU_SC_REQUIRE_DISAGREE;
+  assign user_cfg_in.BPU_SC_REQUIRE_BOTH_WEAK = i_BPU_SC_REQUIRE_BOTH_WEAK;
+  assign user_cfg_in.BPU_SC_BLOCK_ON_TAGE_HIT = i_BPU_SC_BLOCK_ON_TAGE_HIT;
   assign user_cfg_in.BPU_USE_LOOP = i_BPU_USE_LOOP;
   assign user_cfg_in.BPU_LOOP_ENTRIES = i_BPU_LOOP_ENTRIES;
   assign user_cfg_in.BPU_LOOP_TAG_BITS = i_BPU_LOOP_TAG_BITS;
@@ -169,12 +169,12 @@ module tb_build_config (
   assign o_BPU_BHT_ENTRIES        = cfg_out.BPU_BHT_ENTRIES;
   assign o_BPU_RAS_DEPTH          = cfg_out.BPU_RAS_DEPTH;
   assign o_BPU_GHR_BITS           = cfg_out.BPU_GHR_BITS;
-  assign o_BPU_USE_SC_L           = cfg_out.BPU_USE_SC_L;
-  assign o_BPU_SC_L_ENTRIES       = cfg_out.BPU_SC_L_ENTRIES;
-  assign o_BPU_SC_L_CONF_THRESH   = cfg_out.BPU_SC_L_CONF_THRESH;
-  assign o_BPU_SC_L_REQUIRE_DISAGREE = cfg_out.BPU_SC_L_REQUIRE_DISAGREE;
-  assign o_BPU_SC_L_REQUIRE_BOTH_WEAK = cfg_out.BPU_SC_L_REQUIRE_BOTH_WEAK;
-  assign o_BPU_SC_L_BLOCK_ON_TAGE_HIT = cfg_out.BPU_SC_L_BLOCK_ON_TAGE_HIT;
+  assign o_BPU_USE_SC           = cfg_out.BPU_USE_SC;
+  assign o_BPU_SC_ENTRIES       = cfg_out.BPU_SC_ENTRIES;
+  assign o_BPU_SC_CONF_THRESH   = cfg_out.BPU_SC_CONF_THRESH;
+  assign o_BPU_SC_REQUIRE_DISAGREE = cfg_out.BPU_SC_REQUIRE_DISAGREE;
+  assign o_BPU_SC_REQUIRE_BOTH_WEAK = cfg_out.BPU_SC_REQUIRE_BOTH_WEAK;
+  assign o_BPU_SC_BLOCK_ON_TAGE_HIT = cfg_out.BPU_SC_BLOCK_ON_TAGE_HIT;
   assign o_BPU_USE_LOOP = cfg_out.BPU_USE_LOOP;
   assign o_BPU_LOOP_ENTRIES = cfg_out.BPU_LOOP_ENTRIES;
   assign o_BPU_LOOP_TAG_BITS = cfg_out.BPU_LOOP_TAG_BITS;

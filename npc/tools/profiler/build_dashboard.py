@@ -16,7 +16,7 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 from render_summary_html import write_summary_html_for_run
 
-BENCHMARKS = ("dhrystone", "coremark")
+BENCHMARKS = ("dhrystone", "coremark", "microbench")
 STALL_GATE_KEYS = ("frontend_empty", "rob_backpressure", "lsu_req_blocked")
 
 
@@ -81,8 +81,10 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
     labels = [r.get("display_name") or r.get("run_id", "?") for r in runs]
     dhry_ipc = [r.get("ipc", {}).get("dhrystone", 0) for r in runs]
     core_ipc = [r.get("ipc", {}).get("coremark", 0) for r in runs]
+    micro_ipc = [r.get("ipc", {}).get("microbench", 0) for r in runs]
     dhry_cycles = [r.get("cycles", {}).get("dhrystone", 0) for r in runs]
     core_cycles = [r.get("cycles", {}).get("coremark", 0) for r in runs]
+    micro_cycles = [r.get("cycles", {}).get("microbench", 0) for r in runs]
 
     run_rows: list[str] = []
     detail_sections: list[str] = []
@@ -110,6 +112,7 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
             f"<td class='{status_class}'>{html.escape(status)}</td>"
             f"<td>{run.get('ipc', {}).get('dhrystone', 0):.4f}</td>"
             f"<td>{run.get('ipc', {}).get('coremark', 0):.4f}</td>"
+            f"<td>{run.get('ipc', {}).get('microbench', 0):.4f}</td>"
             f"<td>{alert_html}</td></tr>"
         )
 
@@ -157,8 +160,10 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
         .replace("{{LABELS_JSON}}", json.dumps(labels))
         .replace("{{DHRY_IPC_JSON}}", json.dumps(dhry_ipc))
         .replace("{{CORE_IPC_JSON}}", json.dumps(core_ipc))
+        .replace("{{MICRO_IPC_JSON}}", json.dumps(micro_ipc))
         .replace("{{DHRY_CYCLES_JSON}}", json.dumps(dhry_cycles))
         .replace("{{CORE_CYCLES_JSON}}", json.dumps(core_cycles))
+        .replace("{{MICRO_CYCLES_JSON}}", json.dumps(micro_cycles))
         .replace("{{RUN_TABLE_ROWS}}", "\n".join(run_rows))
         .replace("{{DETAIL_SECTIONS}}", "\n".join(detail_sections))
     )

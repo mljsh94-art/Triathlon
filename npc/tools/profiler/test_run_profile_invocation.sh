@@ -45,6 +45,11 @@ if ! grep -q 'benchmarks/coremark.* clean' "${MAKE_LOG}"; then
   exit 1
 fi
 
+if ! grep -q 'benchmarks/microbench.* clean' "${MAKE_LOG}"; then
+  echo "missing clean for microbench" >&2
+  exit 1
+fi
+
 if ! grep -q 'sim .*DIFFTEST=' "${MAKE_LOG}"; then
   echo "missing DIFFTEST= in sim invocation" >&2
   exit 1
@@ -72,6 +77,11 @@ fi
 
 if ! grep -q 'benchmarks/coremark.*ARCH=riscv32im-npc.*CROSS_COMPILE=riscv64-unknown-elf-.* image' "${MAKE_LOG}"; then
   echo "missing default riscv32i arch for coremark image" >&2
+  exit 1
+fi
+
+if ! grep -q 'benchmarks/microbench.*ARCH=riscv32im-npc.*CROSS_COMPILE=riscv64-unknown-elf-.* insert-arg mainargs=test' "${MAKE_LOG}"; then
+  echo "missing microbench insert-arg mainargs=test" >&2
   exit 1
 fi
 

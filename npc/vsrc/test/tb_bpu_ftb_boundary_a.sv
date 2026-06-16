@@ -1,13 +1,16 @@
+// FTB 半字 offset — 边界 A（预测命中/miss）专用 BPU 单元 TB。
+// 运行（审核通过后）：
+//   make -C npc TOPNAME=tb_bpu_ftb_boundary_a SIM_MAIN=csrc/test/test_bpu_ftb_boundary_a.cpp
 import config_pkg::*;
 import build_config_pkg::*;
 import global_config_pkg::*;
 
-module tb_bpu_tournament (
+module tb_bpu_ftb_boundary_a (
     input logic clk_i,
     input logic rst_i,
     input logic ifu_ready_i,
     input logic ifu_valid_i,
-    input logic [Cfg.XLEN - 1:0] pc_i,
+    input logic [Cfg.XLEN-1:0] pc_i,
     input logic update_valid_i,
     input logic [Cfg.XLEN-1:0] update_pc_i,
     input logic update_is_cond_i,
@@ -24,17 +27,18 @@ module tb_bpu_tournament (
     input logic flush_i,
     output logic [Cfg.XLEN-1:0] npc_o,
     output logic pred_slot_valid_o,
-    output logic [$clog2(Cfg.INSTR_PER_FETCH)-1:0] pred_slot_idx_o,
-    output logic [Cfg.XLEN-1:0] pred_slot_target_o
+    output logic [PRED_SLOT_IDX_W-1:0] pred_slot_idx_o,
+    output logic [Cfg.XLEN-1:0] pred_slot_target_o,
+    output logic [Cfg.PLEN-1:0] ftq_enq_pc_o
 );
-  localparam int unsigned TB_BPU_BTB_ENTRIES = 16;
-  localparam int unsigned TB_BPU_BHT_ENTRIES = 8;
+  localparam bit TB_BPU_USE_GSHARE = 1'b0;
+  localparam bit TB_BPU_USE_TAGE = 1'b0;
+  localparam bit TB_BPU_USE_ITTAGE = 1'b0;
 
   logic ftq_enq_valid;
   logic ftq_enq_ready;
-  logic [Cfg.PLEN-1:0] ftq_enq_pc;
   logic ftq_enq_pred_slot_valid;
-  logic [$clog2(Cfg.INSTR_PER_FETCH)-1:0] ftq_enq_pred_slot_idx;
+  logic [PRED_SLOT_IDX_W-1:0] ftq_enq_pred_slot_idx;
   logic [Cfg.PLEN-1:0] ftq_enq_pred_target;
   logic [Cfg.PLEN-1:0] ftq_enq_pred_npc;
 
@@ -42,14 +46,14 @@ module tb_bpu_tournament (
 
   bpu #(
       .Cfg(Cfg),
-      .BTB_ENTRIES(TB_BPU_BTB_ENTRIES),
-      .BHT_ENTRIES(TB_BPU_BHT_ENTRIES),
-      .BTB_HASH_ENABLE(1'b0),
-      .BHT_HASH_ENABLE(1'b0),
-      .USE_GSHARE(1'b1),
-      .USE_TAGE(1'b0),
-      .GHR_BITS(1)
-  ) i_BPU (
+      .BTB_ENTRIES(128),
+      .BHT_ENTRIES(512),
+      .BTB_HASH_ENABLE(1'b1),
+      .BHT_HASH_ENABLE(1'b1),
+      .USE_GSHARE(TB_BPU_USE_GSHARE),
+      .USE_TAGE(TB_BPU_USE_TAGE),
+      .USE_ITTAGE(TB_BPU_USE_ITTAGE)
+  ) u_bpu (
       .clk_i(clk_i),
       .rst_i(rst_i),
       .update_valid_i(update_valid_i),
@@ -70,7 +74,7 @@ module tb_bpu_tournament (
       .redirect_pc_i(pc_i),
       .ftq_enq_valid_o(ftq_enq_valid),
       .ftq_enq_ready_i(ftq_enq_ready),
-      .ftq_enq_pc_o(ftq_enq_pc),
+      .ftq_enq_pc_o(ftq_enq_pc_o),
       .ftq_enq_pred_slot_valid_o(ftq_enq_pred_slot_valid),
       .ftq_enq_pred_slot_idx_o(ftq_enq_pred_slot_idx),
       .ftq_enq_pred_target_o(ftq_enq_pred_target),

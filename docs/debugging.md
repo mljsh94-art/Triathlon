@@ -39,6 +39,8 @@ make -C npc sim DIFFTEST= IMG=../fw_combined.bin \
   > npc/sim_debug.log 2>&1
 ```
 
+长跑与断点恢复：`make -C npc SNAPSHOT=1` + `--snapshot-interval` / `--snapshot-restore`，见 [full-system.md](full-system.md#全系统仿真fw_combinedbin) 与 [sim-args.md](sim-args.md#simulation-snapshot)。
+
 ## `--linux-early-debug` 启动阶段
 
 每个 stage 仅打印一次 `[linux-stage]`（含 cycle、pc、priv、satp 等）：

@@ -125,6 +125,8 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
           ? pred_jump_indirect_total_ - pred_jump_indirect_miss_
           : 0;
   const uint64_t pred_ret_hit = pred_ret_total_ >= pred_ret_miss_ ? pred_ret_total_ - pred_ret_miss_ : 0;
+  // jump_*_miss 在 flush/redirect 时累计；miss_rate 分母用 mispredict redirect 总数，避免相对 commit 口径 >100%。
+  const uint64_t redirect_total = mispredict_flush_count_;
 
   const uint64_t cond_update_total = static_cast<uint64_t>(top->dbg_bpu_cond_update_total_o);
   const uint64_t cond_local_correct = static_cast<uint64_t>(top->dbg_bpu_cond_local_correct_o);
@@ -262,6 +264,7 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
      << "},";
 
   os << "\"predict\":{";
+  os << "\"redirect_total\":" << redirect_total << ",";
   os << "\"cond_total\":" << pred_cond_total_ << ",\"cond_miss\":" << pred_cond_miss_
      << ",\"cond_hit\":" << pred_cond_hit
      << ",\"cond_miss_rate\":" << safe_div(static_cast<double>(pred_cond_miss_),
@@ -269,19 +272,19 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
      << ",\"jump_total\":" << pred_jump_total_ << ",\"jump_miss\":" << pred_jump_miss_
      << ",\"jump_hit\":" << pred_jump_hit
      << ",\"jump_miss_rate\":" << safe_div(static_cast<double>(pred_jump_miss_),
-                                            static_cast<double>(pred_jump_total_))
+                                            static_cast<double>(redirect_total))
      << ",\"jump_direct_total\":" << pred_jump_direct_total_
      << ",\"jump_direct_miss\":" << pred_jump_direct_miss_
      << ",\"jump_direct_hit\":" << pred_jump_direct_hit
      << ",\"jump_direct_miss_rate\":"
      << safe_div(static_cast<double>(pred_jump_direct_miss_),
-                 static_cast<double>(pred_jump_direct_total_))
+                 static_cast<double>(redirect_total))
      << ",\"jump_indirect_total\":" << pred_jump_indirect_total_
      << ",\"jump_indirect_miss\":" << pred_jump_indirect_miss_
      << ",\"jump_indirect_hit\":" << pred_jump_indirect_hit
      << ",\"jump_indirect_miss_rate\":"
      << safe_div(static_cast<double>(pred_jump_indirect_miss_),
-                 static_cast<double>(pred_jump_indirect_total_))
+                 static_cast<double>(redirect_total))
      << ",\"ret_total\":" << pred_ret_total_ << ",\"ret_miss\":" << pred_ret_miss_
      << ",\"ret_hit\":" << pred_ret_hit
      << ",\"ret_miss_rate\":" << safe_div(static_cast<double>(pred_ret_miss_),

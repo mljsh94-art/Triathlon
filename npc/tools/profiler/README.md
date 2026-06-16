@@ -11,6 +11,7 @@ Default output directory:
 
 - `npc/profile/<timestamp>/dhrystone.json`
 - `npc/profile/<timestamp>/coremark.json`
+- `npc/profile/<timestamp>/microbench.json`
 - `npc/profile/<timestamp>/summary.json`
 - `npc/profile/<timestamp>/metadata.json`
 
@@ -73,7 +74,7 @@ Thresholds:
 
 - IPC drop: `>3%` warn, `>5%` fail
 - CPI rise: `>3%` warn, `>5%` fail
-- cycles rise (dhrystone/coremark): `>5%` warn, `>8%` fail
+- cycles rise (dhrystone/coremark/microbench): `>5%` warn, `>8%` fail
 - key stall share rise (`frontend_empty`, `lsu_req_blocked`, `rob_backpressure`):
   `>5pp` warn, `>8pp` fail
 
@@ -92,4 +93,4 @@ make -C npc sim IMG=path/to/dhrystone.bin DIFFTEST= \
 
 - Benchmark runs use `--profile-json` (no log parsing).
 - Performance job uses `DIFFTEST=`; functional correctness is a separate flow.
-- Fixed benchmarks: **dhrystone** and **coremark**.
+- Fixed benchmarks: **dhrystone**, **coremark**, and **microbench** (`mainargs=test`, overridable via `MICROBENCH_MAINARGS`).

@@ -10,7 +10,7 @@
 | [difftest.md](difftest.md) | Spike DiffTest、Verilator RTL 断言 |
 | [verification.md](verification.md) | verify-* 门禁、DiffTest 验收阶段 |
 | [debugging.md](debugging.md) | NDJSON 日志、linux-early-debug、排障流程 |
-| [full-system.md](full-system.md) | OpenSBI + Linux 构建、merge.py、全系统仿真 |
+| [full-system.md](full-system.md) | OpenSBI + Linux 构建、merge.py、DiffTest + Snapshot 全系统仿真 |
 
 子项目 README：
 
