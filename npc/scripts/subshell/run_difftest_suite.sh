@@ -16,16 +16,16 @@ fail=0
 check_difftest_run() {
   local label="$1"
   shift
-  set +e
-  local out
-  out="$("$@" 2>&1)"
-  local rc=$?
-  set -e
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/verify-difftest.XXXXXX")"
 
-  if echo "$out" | grep -q '\*\*\*FAIL\*\*\*'; then
+  run_streaming "$tmp" "$@"
+  local rc=$RUN_STREAM_RC
+
+  if grep -q '\*\*\*FAIL\*\*\*' "$tmp"; then
     echo "[FAIL] $label contains ***FAIL***"
     fail=1
-  elif echo "$out" | grep -q '\[difftest\] mismatch'; then
+  elif grep -q '\[difftest\] mismatch' "$tmp"; then
     echo "[FAIL] $label difftest mismatch"
     fail=1
   elif [[ $rc -ne 0 ]]; then
@@ -34,7 +34,7 @@ check_difftest_run() {
   else
     echo "[PASS] $label"
   fi
-  echo "$out"
+  rm -f "$tmp"
   log_section_done "$label"
 }
 
@@ -49,7 +49,8 @@ make -C "$NPC_HOME/ref" check
 log_section_done "Spike reference smoke"
 
 log_section "rebuild tb_triathlon (ASSERT off, DiffTest on)"
-make -C "$NPC_HOME" ASSERT= TOPNAME=tb_triathlon -B -j"$(nproc)" >/dev/null
+echo "[verify-difftest] compiling tb_triathlon (may take a few minutes)..."
+make -C "$NPC_HOME" ASSERT= TOPNAME=tb_triathlon -B -j"$(nproc)"
 test -x "$NPC_HOME/build/tb_triathlon"
 log_section_done "rebuild tb_triathlon"
 
@@ -58,12 +59,14 @@ check_difftest_run "cpu-tests" \
   make -C "$CPU_TESTS" ARCH="$ARCH" run
 
 log_section "dhrystone (DiffTest on)"
-make -C "$DHRYSTONE" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" image >/dev/null
+echo "[verify-difftest] building dhrystone image..."
+make -C "$DHRYSTONE" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" image
 check_difftest_run "dhrystone" \
   make -C "$DHRYSTONE" ARCH="$ARCH" run
 
 log_section "coremark (DiffTest on)"
-make -C "$COREMARK" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" image >/dev/null
+echo "[verify-difftest] building coremark image..."
+make -C "$COREMARK" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" image
 check_difftest_run "coremark" \
   make -C "$COREMARK" ARCH="$ARCH" run
 

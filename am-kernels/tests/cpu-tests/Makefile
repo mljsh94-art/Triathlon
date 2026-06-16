@@ -1,7 +1,5 @@
 .PHONY: all run gdb clean latest $(ALL)
 
-RESULT = .result
-$(shell > $(RESULT))
 LOCAL_AM_HOME = $(abspath $(CURDIR)/../../../abstract-machine)
 
 COLOR_RED   = \033[1;31m
@@ -16,17 +14,16 @@ all: $(addprefix Makefile., $(ALL))
 $(ALL): %: Makefile.%
 
 Makefile.%: tests/%.c latest
+	@printf '[cpu-test] %s ...\n' '$*'
 	@printf 'AM_HOME = %s\nNAME = %s\nSRCS = %s\ninclude %s/Makefile\n' "$(LOCAL_AM_HOME)" "$*" "$<" "$(LOCAL_AM_HOME)" > $@
 	@if AM_HOME="$(LOCAL_AM_HOME)" make -s -f $@ ARCH=$(ARCH) $(MAKECMDGOALS); then \
-		printf "[%14s] $(COLOR_GREEN)PASS$(COLOR_NONE)\n" $* >> $(RESULT); \
+		printf '[%14s] $(COLOR_GREEN)PASS$(COLOR_NONE)\n' $*; \
 	else \
-		printf "[%14s] $(COLOR_RED)***FAIL***$(COLOR_NONE)\n" $* >> $(RESULT); \
+		printf '[%14s] $(COLOR_RED)***FAIL***$(COLOR_NONE)\n' $*; \
 	fi
-	-@rm -f Makefile.$*
+	-@rm -f Makefile.$$
 
 run: all
-	@cat $(RESULT)
-	@rm $(RESULT)
 
 gdb: all
 

@@ -15,28 +15,28 @@ fail=0
 check_program_run() {
   local label="$1"
   shift
-  set +e
-  local out
-  out="$("$@" 2>&1)"
-  local rc=$?
-  set -e
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/verify-assert-prog.XXXXXX")"
 
-  if echo "$out" | grep -q '\*\*\*FAIL\*\*\*'; then
+  run_streaming "$tmp" "$@"
+  local rc=$RUN_STREAM_RC
+
+  if grep -q '\*\*\*FAIL\*\*\*' "$tmp"; then
     echo "[FAIL] $label contains ***FAIL***"
     fail=1
-  elif echo "$out" | grep -q '\[assert\]'; then
+  elif grep -q '\[assert\]' "$tmp"; then
     echo "[FAIL] $label triggered unexpected [assert]"
     fail=1
   elif [[ $rc -ne 0 ]]; then
     echo "[FAIL] $label exit rc=$rc"
     fail=1
-  elif ! echo "$out" | grep -q 'HIT GOOD TRAP'; then
+  elif ! grep -q 'HIT GOOD TRAP' "$tmp"; then
     echo "[FAIL] $label missing HIT GOOD TRAP"
     fail=1
   else
     echo "[PASS] $label"
   fi
-  echo "$out"
+  rm -f "$tmp"
   log_section_done "$label"
 }
 
@@ -47,7 +47,8 @@ bash "$SUBSHELL_DIR/run_assert_neg.sh" || exit 1
 log_section_done "negative assert self-check"
 
 log_section "rebuild tb_triathlon (ASSERT=1)"
-make -C "$NPC_HOME" ASSERT=1 TOPNAME=tb_triathlon -B -j"$(nproc)" >/dev/null
+echo "[verify-assert-programs] compiling tb_triathlon with ASSERT=1..."
+make -C "$NPC_HOME" ASSERT=1 TOPNAME=tb_triathlon -B -j"$(nproc)"
 test -x "$NPC_HOME/build/tb_triathlon"
 log_section_done "rebuild tb_triathlon (ASSERT=1)"
 
@@ -56,12 +57,14 @@ check_program_run "cpu-tests" \
   make -C "$CPU_TESTS" ARCH="$ARCH" NPC_EXTRA='ASSERT=1' NPC_DIFFTEST= run
 
 log_section "dhrystone (ASSERT=1, DiffTest off)"
-make -C "$DHRYSTONE" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" image >/dev/null
+echo "[verify-assert-programs] building dhrystone image..."
+make -C "$DHRYSTONE" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" image
 check_program_run "dhrystone" \
   make -C "$DHRYSTONE" ARCH="$ARCH" NPC_EXTRA='ASSERT=1' NPC_DIFFTEST= run
 
 log_section "coremark (ASSERT=1, DiffTest off)"
-make -C "$COREMARK" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" image >/dev/null
+echo "[verify-assert-programs] building coremark image..."
+make -C "$COREMARK" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" image
 check_program_run "coremark" \
   make -C "$COREMARK" ARCH="$ARCH" NPC_EXTRA='ASSERT=1' NPC_DIFFTEST= run
 

@@ -27,25 +27,37 @@ log_section_done() {
   echo "[verify] --- $1: done ---"
 }
 
+# Run a command with live stdout/stderr; also write a copy to logfile for grep.
+# Sets RUN_STREAM_RC to the command exit code (not tee).
+run_streaming() {
+  local logfile="$1"
+  shift
+  set +e
+  "$@" 2>&1 | tee "$logfile"
+  RUN_STREAM_RC=${PIPESTATUS[0]}
+  set -e
+}
+
 run_unit_tb() {
   local top="$1"
   local sim_main="$2"
   local label="${3:-$top}"
   local bin="$NPC_HOME/build/${top}"
+  local tmp
 
   echo "[verify] unit ${label}: ASSERT=1 ${top}"
   make -C "$NPC_HOME" ASSERT=1 TOPNAME="$top" SIM_MAIN="$sim_main" -B -j"$(nproc)" >/dev/null
-  set +e
-  local out
-  out="$("$bin" 2>&1)"
-  local rc=$?
-  set -e
+  tmp="$(mktemp "${TMPDIR:-/tmp}/verify-unit.XXXXXX")"
+  run_streaming "$tmp" "$bin"
+  local rc=$RUN_STREAM_RC
 
-  if [[ $rc -eq 0 ]] && ! echo "$out" | grep -q '\[assert\]'; then
+  if [[ $rc -eq 0 ]] && ! grep -q '\[assert\]' "$tmp"; then
+    rm -f "$tmp"
     echo "[PASS] unit ${label}"
     return 0
   fi
   echo "[FAIL] unit ${label} rc=$rc"
-  echo "$out" | tail -8
+  tail -8 "$tmp"
+  rm -f "$tmp"
   return 1
 }
