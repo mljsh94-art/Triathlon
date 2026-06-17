@@ -75,6 +75,7 @@ module tb_rob_exception (
   logic [DISPATCH_WIDTH-1:0] dispatch_is_call_bus;
   logic [DISPATCH_WIDTH-1:0] dispatch_is_ret_bus;
   logic [DISPATCH_WIDTH-1:0] dispatch_is_rvc_bus;
+  logic [DISPATCH_WIDTH-1:0][Cfg.PLEN-1:0] dispatch_pred_npc_bus;
   logic [DISPATCH_WIDTH-1:0][decode_pkg::FTQ_ID_W-1:0] dispatch_ftq_id_bus;
   logic [DISPATCH_WIDTH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] dispatch_fetch_epoch_bus;
   logic [DISPATCH_WIDTH-1:0] dispatch_is_store_bus;
@@ -115,6 +116,7 @@ module tb_rob_exception (
   logic [COMMIT_WIDTH-1:0] commit_is_call_bus;
   logic [COMMIT_WIDTH-1:0] commit_is_ret_bus;
   logic [COMMIT_WIDTH-1:0] commit_is_rvc_bus;
+  logic [COMMIT_WIDTH-1:0][Cfg.PLEN-1:0] commit_pred_npc_bus;
   logic [COMMIT_WIDTH-1:0][Cfg.PLEN-1:0] commit_actual_npc_bus;
   logic [COMMIT_WIDTH-1:0][decode_pkg::FTQ_ID_W-1:0] commit_ftq_id_bus;
   logic [COMMIT_WIDTH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] commit_fetch_epoch_bus;
@@ -154,6 +156,7 @@ module tb_rob_exception (
   assign dispatch_is_call_bus[0] = 1'b0;
   assign dispatch_is_ret_bus[0] = 1'b0;
   assign dispatch_is_rvc_bus[0] = 1'b0;
+  assign dispatch_pred_npc_bus[0] = '0;
   assign dispatch_ftq_id_bus[0] = '0;
   assign dispatch_fetch_epoch_bus[0] = '0;
   assign dispatch_is_store_bus[0] = dispatch_is_store_i;
@@ -235,6 +238,7 @@ module tb_rob_exception (
       .dispatch_is_call_i(dispatch_is_call_bus),
       .dispatch_is_ret_i(dispatch_is_ret_bus),
       .dispatch_is_rvc_i(dispatch_is_rvc_bus),
+      .dispatch_pred_npc_i(dispatch_pred_npc_bus),
       .dispatch_ftq_id_i(dispatch_ftq_id_bus),
       .dispatch_fetch_epoch_i(dispatch_fetch_epoch_bus),
       .dispatch_is_store_i(dispatch_is_store_bus),
@@ -279,6 +283,7 @@ module tb_rob_exception (
       .commit_is_call_o(commit_is_call_bus),
       .commit_is_ret_o(commit_is_ret_bus),
       .commit_is_rvc_o(commit_is_rvc_bus),
+      .commit_pred_npc_o(commit_pred_npc_bus),
       .commit_actual_npc_o(commit_actual_npc_bus),
       .commit_ftq_id_o(commit_ftq_id_bus),
       .commit_fetch_epoch_o(commit_fetch_epoch_bus),

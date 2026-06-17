@@ -15,7 +15,7 @@ package test_config_pkg;
       BPU_USE_TOURNAMENT : unsigned'(1),
       BPU_BTB_HASH_ENABLE : unsigned'(1),
       BPU_BHT_HASH_ENABLE : unsigned'(1),
-      BPU_BTB_ENTRIES : unsigned'(128),
+      BPU_BTB_ENTRIES : unsigned'(512),
       BPU_BHT_ENTRIES : unsigned'(512),
       BPU_RAS_DEPTH : unsigned'(16),
       BPU_GHR_BITS : unsigned'(8),

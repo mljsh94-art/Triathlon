@@ -132,16 +132,20 @@ module instr_aligner #(
         end
       end
 
-      // 跨 group 的 32-bit carry 指令（上一拍尾半字），不可预测 taken（V1 限制）。
+      // 跨 group 的 32-bit carry 指令：低半字来自上一拍，当前 slot0 是高半字。
+      // 若 BPU 对 pc-2 的分支命中，预测元数据标在当前 slot0。
       if (carry_valid_q && (hw_count >= 1)) begin
         half1 = hw_data[0];
         instr32 = {half1, carry_half_q};
         word_idx = hw_word_idx_arr[0];
+        raw_idx = hw_raw_idx_arr[0];
+        taken_here = fe_pred_taken_i[raw_idx];
         entries_w[wr_idx].instr = instr32;
         entries_w[wr_idx].raw_inst = instr32;
         entries_w[wr_idx].pc = carry_pc_q;
         entries_w[wr_idx].slot_valid = 1'b1;
-        entries_w[wr_idx].pred_npc = carry_pc_q + Cfg.PLEN'(4);
+        entries_w[wr_idx].pred_npc =
+            taken_here ? fe_pred_npc_i[raw_idx] : (carry_pc_q + Cfg.PLEN'(4));
         entries_w[wr_idx].is_rvc = 1'b0;
         entries_w[wr_idx].ftq_id = fe_ftq_id_i[word_idx];
         entries_w[wr_idx].fetch_epoch = fe_fetch_epoch_i[word_idx];

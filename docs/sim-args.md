@@ -41,9 +41,11 @@ Makefile 拼装顺序：`ARGS` → DiffTest（`-d $(DIFFTEST_SO)`）→ `IMG`（
 | `--virtio-blk-image <path>` | 无 | VirtIO 磁盘镜像 |
 | `--linux-early-debug` | 禁用 | OpenSBI/Linux 启动调试 |
 | `--snapshot-interval N` | `0` | 周期性 snapshot；需 `SNAPSHOT=1` |
-| `--snapshot-dir <path>` | `build/snapshots` | snapshot 目录 |
+| `--snapshot-dir <path>` | `snapshots` | snapshot 目录 |
 | `--snapshot-keep K` | `3` | 保留 snapshot 数量 |
 | `--snapshot-restore <path>` | 禁用 | 从 snapshot 恢复 |
+
+说明：`make -C npc` 运行二进制时工作目录是 `npc/`，因此相对路径 `snapshots` 对应仓库中的 `npc/snapshots/`；不要在 ARGS 里再写 `npc/snapshots`，否则会落到 `npc/npc/snapshots/`。
 
 ## Simulation Snapshot
 
@@ -51,7 +53,54 @@ Snapshot 保存 Verilator savable 状态、C++ `MemSystem`、RF 影子、周期�
 
 构建须 `SNAPSHOT=1`（Verilator `--savable --threads 1`）。默认构建为 `--threads 2`，与 Snapshot **不兼容**。
 
-磁盘格式：`TRSNAP1` v2（含 Spike `mscratch`/`sscratch`）。
+磁盘格式：`TRSNAP1` v2（含 Spike `mscratch`/`sscratch`）。实现见 `npc/csrc/lib/sim_snapshot.cpp`。
+
+### 路径与工作目录
+
+| 写法 | `make -C npc` 下实际目录 |
+|------|--------------------------|
+| `--snapshot-dir=snapshots`（推荐，默认） | 仓库 `npc/snapshots/` |
+| `--snapshot-dir=npc/snapshots`（错误） | 仓库 `npc/npc/snapshots/` |
+| `--snapshot-restore=snapshots/triathlon-25000000.snap` | 从 `npc/snapshots/` 读 |
+
+`make -C npc sim` 会在 `npc/` 目录执行 `tb_triathlon`，相对路径均相对 **cwd=`npc/`**，不是仓库根。若历史上曾用旧路径 `build/snapshots` 保存，恢复时 `--snapshot-restore` 须写能命中该文件的路径（例如 `build/snapshots/triathlon-....snap`）。
+
+### 适用场景
+
+Snapshot 用于 **同一版 CPU 二进制** 下跳过重复仿真，不是“改 RTL 后接着跑”的 time machine：
+
+- Linux 全系统长跑：每 N 百万 cycle 存盘，崩溃或手动停止后从最近 snap 继续，免重跑 OpenSBI 启动段。
+- DiffTest 在极远 cycle 失败：从最近 snap 恢复，只跑失败点之前的一小段（配合 `--commit-trace` / `--commit-ring`）。
+- **仅改 C++ 观测**（如 `npc_main` 打 NDJSON、`sim_observer`、profile 参数）：RTL 不变时，旧 snap 通常仍可恢复，恢复后继续打日志。
+
+### 兼容性（能否从旧 snap 恢复）
+
+恢复时有两层校验：
+
+1. **C++ 元数据**（`snapshot_meta_matches`）：`IMG` 文件 hash、`boot_handoff`、`entry_pc`、`firmware_base`、DiffTest 是否开启须与保存时一致。
+2. **Verilator DUT blob**：须与保存时 **同一 Verilator 模型**（RTL + 影响模型的编译选项一致）。
+
+| 变更 | 能否用旧 snap |
+|------|----------------|
+| 仅 `npc/csrc/`（如 `npc_main` NDJSON），RTL 未动 | 通常 **可以** |
+| 仅 CLI（`--progress`、`--commit-ring` 等） | **可以** |
+| `npc/vsrc/` RTL 任意修改后重编 | **不可以** |
+| `SNAPSHOT=0` ↔ `SNAPSHOT=1` | **不可以** |
+| `ASSERT=0` ↔ `ASSERT=1`（会改变 Verilator 模型） | **不可以** |
+| 更换 `fw_combined.bin` 或其它 `IMG` | **不可以**（img hash 不匹配） |
+| 保存时开 DiffTest、恢复时 `DIFFTEST=`（或反之） | **不可以** |
+
+改 RTL 后验证 bug 修复：须 **从头重跑**（或跑到目标 cycle 再存 **新** snap），不能指望改代码前的 snap 接到新二进制上。
+
+### 常见错误
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| `Can't deserialize save-restore file as was made from different model` | snap 与当前 `tb_triathlon` 的 Verilator 模型不一致（常见：改 RTL 后重编） | 用当前二进制重跑并生成新 snap；或 checkout 生成 snap 时的 RTL 再恢复 |
+| `[snapshot] restore metadata mismatch: IMG hash differs` | `IMG` 与保存时不一致 | 使用同一 `fw_combined.bin` |
+| `[snapshot] restore metadata mismatch: difftest enable differs` | DiffTest 开关与保存时不一致 | 恢复命令与保存时同样是否写 `DIFFTEST=` |
+| 找不到 snap 文件 | `--snapshot-dir` 多写了 `npc/` 前缀 | 改用 `snapshots`（默认） |
+| mismatch 提示的 `nearest=...` 路径找不到 | 文档/命令用了错误相对路径 | 见上文「路径与工作目录」 |
 
 ### 通用 Snapshot 命令
 
@@ -65,7 +114,7 @@ make -C npc sim SNAPSHOT=1 IMG=/path/to/image.bin \
 
 # 从快照恢复
 make -C npc sim SNAPSHOT=1 IMG=/path/to/image.bin \
-  ARGS='--snapshot-restore=npc/build/snapshots/triathlon-12000000.snap \
+  ARGS='--snapshot-restore=snapshots/triathlon-12000000.snap \
         --commit-trace=12050000:12100000 --max-cycles=12150000'
 ```
 
@@ -85,7 +134,7 @@ make -C npc sim SNAPSHOT=1 \
         --progress=2000000 \
         --linux-early-debug \
         --snapshot-interval=5000000 \
-        --snapshot-dir=npc/build/snapshots \
+        --snapshot-dir=snapshots \
         --snapshot-keep=3'
 ```
 
@@ -94,7 +143,7 @@ make -C npc sim SNAPSHOT=1 \
 ```bash
 make -C npc sim SNAPSHOT=1 \
   IMG=$PWD/fw_combined.bin \
-  ARGS='--snapshot-restore=npc/build/snapshots/triathlon-5000000.snap \
+  ARGS='--snapshot-restore=snapshots/triathlon-5000000.snap \
         --max-cycles=100000000 --progress=2000000 --linux-early-debug'
 ```
 
@@ -143,7 +192,7 @@ make -C npc sim IMG=.../test.bin ARGS='--commit-trace 100000:150000'
 # Linux 全系统 + DiffTest + Snapshot（fw_combined.bin，详见 full-system.md）
 make -C npc sim SNAPSHOT=1 IMG=$PWD/fw_combined.bin \
   ARGS='--max-cycles=100000000 --progress=2000000 --linux-early-debug \
-        --snapshot-interval=5000000 --snapshot-dir=npc/build/snapshots --snapshot-keep=3'
+        --snapshot-interval=5000000 --snapshot-dir=snapshots --snapshot-keep=3'
 
 # Linux 快速调试（关 DiffTest）
 make -C npc sim DIFFTEST= IMG=$PWD/fw_combined.bin \

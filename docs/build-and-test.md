@@ -63,7 +63,7 @@ cd am-kernels/tests/cpu-tests && make ARCH=riscv32im-npc ALL=dummy run
 make -C npc/ref && make -C npc SNAPSHOT=1
 make -C npc sim SNAPSHOT=1 IMG=$PWD/fw_combined.bin \
   ARGS='--max-cycles=100000000 --progress=2000000 --linux-early-debug \
-        --snapshot-interval=5000000 --snapshot-dir=npc/build/snapshots --snapshot-keep=3'
+        --snapshot-interval=5000000 --snapshot-dir=snapshots --snapshot-keep=3'
 ```
 
 DiffTest 与 ASSERT 细节见 [difftest.md](difftest.md)。Profile 见 [profile.md](profile.md)。

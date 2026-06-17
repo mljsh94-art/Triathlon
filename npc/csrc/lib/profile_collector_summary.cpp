@@ -247,6 +247,20 @@ void ProfileCollector::emit_pred_summary(const Vtb_triathlon *top) const {
             << " redirect_distance_samples=" << redirect_distance_samples_
             << " redirect_distance_sum=" << redirect_distance_sum_
             << " redirect_distance_max=" << redirect_distance_max_
+            << " mispredict_diag_dir_wrong=" << mispredict_diag_dir_wrong_
+            << " mispredict_diag_dir_ok_target_wrong=" << mispredict_diag_dir_ok_target_wrong_
+            << " mispredict_diag_slot_offset_bind=" << mispredict_diag_slot_offset_bind_
+            << " mispredict_diag_ftb_no_entry_tag_miss=" << mispredict_diag_ftb_no_entry_tag_miss_
+            << " mispredict_diag_ftb_hit_cond_nt=" << mispredict_diag_ftb_hit_cond_nt_
+            << " mispredict_diag_ftb_hit_out_of_range=" << mispredict_diag_ftb_hit_out_of_range_
+            << " mispredict_diag_ftb_hit_shadowed=" << mispredict_diag_ftb_hit_shadowed_
+            << " mispredict_diag_ftb_snap_epoch_mismatch=" << mispredict_diag_ftb_snap_epoch_mismatch_
+            << " mispredict_diag_ftb_hit_out_of_range_epoch_ok="
+            << mispredict_diag_ftb_hit_out_of_range_epoch_ok_
+            << " mispredict_diag_ftb_hit_shadowed_epoch_ok=" << mispredict_diag_ftb_hit_shadowed_epoch_ok_
+            << " mispredict_diag_ftb_unclassified=" << mispredict_diag_ftb_unclassified_
+            << " mispredict_diag_other=" << mispredict_diag_other_
+            << " mispredict_diag_no_commit_slot=" << mispredict_diag_no_commit_slot_
             << "\n";
   std::cout.flags(f);
 }

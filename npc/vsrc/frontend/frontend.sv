@@ -64,6 +64,7 @@ module frontend #(
   logic [Cfg.PLEN-1:0] ftq_enq_pred_target;
   logic [Cfg.PLEN-1:0] ftq_enq_pred_npc;
   logic [EPOCH_W-1:0] ftq_enq_epoch;
+  logic [FTQ_ID_W-1:0] ftq_enq_ftq_id;
   logic ftq_deq_valid;
   logic ftq_deq_ready;
   logic [Cfg.PLEN-1:0] ftq_deq_pc;
@@ -263,6 +264,7 @@ module frontend #(
       .enq_pred_target_i(ftq_enq_pred_target),
       .enq_pred_npc_i(ftq_enq_pred_npc),
       .enq_epoch_i(ftq_enq_epoch),
+      .enq_ftq_id_o(ftq_enq_ftq_id),
       .deq_valid_o(ftq_deq_valid),
       .deq_ready_i(ftq_deq_ready),
       .deq_pc_o(ftq_deq_pc),
@@ -330,6 +332,8 @@ module frontend #(
       .redirect_pc_i         (frontend_redirect_pc),
       .ftq_enq_valid_o       (ftq_enq_valid),
       .ftq_enq_ready_i       (ftq_enq_ready),
+      .ftq_enq_id_i          (ftq_enq_ftq_id),
+      .ftq_enq_epoch_i       (ftq_enq_epoch),
       .ftq_enq_pc_o          (ftq_enq_pc),
       .ftq_enq_pred_slot_valid_o(ftq_enq_pred_slot_valid),
       .ftq_enq_pred_slot_idx_o(ftq_enq_pred_slot_idx),

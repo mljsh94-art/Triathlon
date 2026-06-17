@@ -56,6 +56,7 @@ def extract_run_entry(run_dir: Path) -> dict | None:
         "commits": {},
         "stall_gate_share_pct": {},
         "predict_miss_rate": {},
+        "predict_accuracy": {},
     }
     for bench in BENCHMARKS:
         if bench not in summary:
@@ -73,6 +74,16 @@ def extract_run_entry(run_dir: Path) -> dict | None:
             "cond": predict.get("cond_miss_rate", 0.0),
             "jump": predict.get("jump_miss_rate", 0.0),
             "ret": predict.get("ret_miss_rate", 0.0),
+        }
+        entry["predict_accuracy"][bench] = {
+            "cond_selected": predict.get("cond_selected_accuracy", 0.0),
+            "cond_local": predict.get("cond_local_accuracy", 0.0),
+            "cond_global": predict.get("cond_global_accuracy", 0.0),
+            "tage_hit": predict.get("tage_hit_rate", 0.0),
+            "tage_override": predict.get("tage_override_accuracy", 0.0),
+            "ftb_cond_hit": (predict.get("ftb") or {}).get("cond_hit_rate", 0.0),
+            "ftb_jump_hit": (predict.get("ftb") or {}).get("jump_hit_rate", 0.0),
+            "ittage_hit": (predict.get("ittage") or {}).get("hit_rate", 0.0),
         }
     return entry
 

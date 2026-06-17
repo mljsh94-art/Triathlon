@@ -72,6 +72,16 @@ class ProfileCollector {
   static bool is_call_inst(uint32_t inst);
   static bool is_ret_inst(uint32_t inst);
   static bool is_indirect_jump_inst(uint32_t inst);
+  static bool is_compressed_ret_inst(uint16_t inst);
+  static bool is_compressed_indirect_jump_inst(uint16_t inst);
+  static bool find_flush_commit_insn(const Vtb_triathlon *top,
+                                     uint32_t src_pc,
+                                     uint32_t commit_width,
+                                     uint32_t &decoded_inst);
+  static uint32_t flush_jump_classify_inst(const Vtb_triathlon *top,
+                                           uint32_t src_pc,
+                                           uint32_t commit_width,
+                                           const UnifiedMem &mem);
 
   bool profile_enabled() const {
     return args_.profile || !args_.profile_json_path.empty();
@@ -79,6 +89,11 @@ class ProfileCollector {
   void finalize_control_tail();
   bool commit_trace_window_active(uint64_t cycle) const;
   bool should_log_verbose_flush(uint64_t cycle) const;
+  void record_mispredict_diag(const Vtb_triathlon *top,
+                              uint32_t src_pc,
+                              uint32_t actual_npc,
+                              bool is_branch,
+                              bool is_jump);
 
   uint32_t popcount_commit(uint32_t v) const;
   int classify_stall_cycle(const Vtb_triathlon *top) const;
@@ -100,6 +115,10 @@ class ProfileCollector {
   uint32_t cfg_instr_per_fetch_ = 4;
   uint32_t cfg_commit_width_ = 4;
   uint32_t cfg_commit_mask_ = 0xFu;
+  uint32_t cfg_fetch_width_bytes_ = 16;
+  uint32_t cfg_ftq_depth_ = 16;
+  uint32_t cfg_ftq_id_w_ = 4;
+  uint32_t cfg_fetch_epoch_w_ = 3;
 
   uint64_t total_commits_ = 0;
   uint32_t last_commit_pc_ = 0;
@@ -139,6 +158,37 @@ class ProfileCollector {
   uint64_t bru_count_ = 0;
   uint64_t mispredict_flush_count_ = 0;
   uint64_t branch_penalty_cycles_ = 0;
+  uint64_t mispredict_diag_dir_wrong_ = 0;
+  uint64_t mispredict_diag_dir_ok_target_wrong_ = 0;
+  uint64_t mispredict_diag_slot_offset_bind_ = 0;
+  uint64_t mispredict_diag_ftb_no_entry_tag_miss_ = 0;
+  uint64_t mispredict_diag_ftb_hit_cond_nt_ = 0;
+  uint64_t mispredict_diag_ftb_hit_out_of_range_ = 0;
+  uint64_t mispredict_diag_ftb_hit_shadowed_ = 0;
+  uint64_t mispredict_diag_ftb_snap_epoch_mismatch_ = 0;
+  uint64_t mispredict_diag_ftb_hit_out_of_range_epoch_ok_ = 0;
+  uint64_t mispredict_diag_ftb_hit_shadowed_epoch_ok_ = 0;
+  uint64_t mispredict_diag_ftb_unclassified_ = 0;
+  uint64_t mispredict_diag_other_ = 0;
+  uint64_t mispredict_diag_no_commit_slot_ = 0;
+  std::unordered_map<uint32_t, uint64_t> mispredict_diag_ftb_oor_branch_pc_hist_;
+  std::unordered_map<uint32_t, uint64_t> mispredict_diag_ftb_oor_snap_pc_hist_;
+  std::unordered_map<uint32_t, uint64_t> mispredict_diag_ftb_oor_block_byte_off_hist_;
+  std::unordered_map<std::string, uint64_t> mispredict_diag_ftb_oor_kind_hist_;
+  std::unordered_map<uint32_t, uint64_t> mispredict_diag_ftb_no_entry_branch_pc_hist_;
+  std::unordered_map<uint32_t, uint64_t> mispredict_diag_ftb_no_entry_fetch_pc_hist_;
+  std::unordered_map<uint32_t, uint64_t> mispredict_diag_ftb_no_entry_fetch_rel_hist_;
+  std::unordered_map<uint32_t, uint64_t> mispredict_diag_ftb_no_entry_fetch_byte_off_hist_;
+  std::unordered_map<uint32_t, uint64_t> mispredict_diag_ftb_no_entry_block_byte_off_hist_;
+  std::unordered_map<std::string, uint64_t> mispredict_diag_ftb_no_entry_block_delta_hist_;
+  std::unordered_map<uint32_t, uint64_t> mispredict_diag_ftb_no_entry_valid_count_hist_;
+  std::unordered_map<uint32_t, uint64_t> mispredict_diag_ftb_no_entry_cond_count_hist_;
+  std::unordered_map<uint32_t, uint64_t> mispredict_diag_ftb_no_entry_jump_count_hist_;
+  std::unordered_map<std::string, uint64_t> mispredict_diag_ftb_no_entry_kind_hist_;
+  std::unordered_map<std::string, uint64_t> mispredict_diag_ftb_no_entry_cause_hist_;
+  std::unordered_map<uint32_t, uint64_t> bpu_taken_control_pc_hist_;
+  std::unordered_map<uint32_t, uint64_t> bpu_update_pc_hist_;
+  std::unordered_map<std::string, uint64_t> bpu_update_kind_hist_;
   std::unordered_map<std::string, uint64_t> flush_reason_hist_;
   std::unordered_map<std::string, uint64_t> flush_source_hist_;
 

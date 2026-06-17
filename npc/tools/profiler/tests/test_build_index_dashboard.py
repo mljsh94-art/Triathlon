@@ -31,7 +31,15 @@ class BuildIndexDashboardTest(unittest.TestCase):
                 "rob_backpressure": 30,
                 "lsu_req_blocked": 10,
             },
-            "predict": {"cond_miss_rate": 0.1, "jump_miss_rate": 0.2, "ret_miss_rate": 0.05},
+            "predict": {
+                "cond_miss_rate": 0.1,
+                "jump_miss_rate": 0.2,
+                "ret_miss_rate": 0.05,
+                "cond_selected_accuracy": 0.975,
+                "cond_local_accuracy": 0.96,
+                "cond_global_accuracy": 0.97,
+                "tage_hit_rate": 0.93,
+            },
         }
         summary = {"dhrystone": bench, "coremark": bench}
         (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
@@ -65,6 +73,10 @@ class BuildIndexDashboardTest(unittest.TestCase):
             report_text = report.read_text(encoding="utf-8")
             self.assertIn("性能分析报告 - baseline", report_text)
             self.assertIn("Stall 分类", report_text)
+            self.assertIn("方向预测精度", report_text)
+            self.assertIn("Direction acc (commit)", html)
+            acc = index["runs"][0]["predict_accuracy"]["dhrystone"]["cond_selected"]
+            self.assertAlmostEqual(acc, 0.975)
 
     def test_build_index_flat_layout(self):
         index_mod = load_module("build_index")
@@ -82,7 +94,15 @@ class BuildIndexDashboardTest(unittest.TestCase):
                     "rob_backpressure": 30,
                     "lsu_req_blocked": 10,
                 },
-                "predict": {"cond_miss_rate": 0.1, "jump_miss_rate": 0.2, "ret_miss_rate": 0.05},
+                "predict": {
+                "cond_miss_rate": 0.1,
+                "jump_miss_rate": 0.2,
+                "ret_miss_rate": 0.05,
+                "cond_selected_accuracy": 0.975,
+                "cond_local_accuracy": 0.96,
+                "cond_global_accuracy": 0.97,
+                "tage_hit_rate": 0.93,
+            },
             }
             (root / "summary.json").write_text(
                 json.dumps({"dhrystone": bench, "coremark": bench}),

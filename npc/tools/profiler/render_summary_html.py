@@ -15,6 +15,47 @@ STALL_DETAIL_KEYS = (
     "stall_rob_backpressure_detail",
     "stall_other_detail",
 )
+PREDICT_MISS_KEYS = (
+    "cond_miss_rate",
+    "jump_miss_rate",
+    "ret_miss_rate",
+    "jump_direct_miss_rate",
+    "jump_indirect_miss_rate",
+)
+PREDICT_ACCURACY_KEYS = (
+    "cond_selected_accuracy",
+    "cond_local_accuracy",
+    "cond_global_accuracy",
+    "tage_hit_rate",
+    "tage_override_accuracy",
+    "sc_override_accuracy",
+    "loop_override_accuracy",
+)
+FTB_RATE_KEYS = (
+    "cond_hit_rate",
+    "jump_hit_rate",
+    "cond_pick_rate",
+    "jump_pick_rate",
+)
+ITTAGE_RATE_KEYS = (
+    "hit_rate",
+    "use_rate",
+)
+MISPREDICT_DIAG_KEYS = (
+    "dir_wrong",
+    "dir_ok_target_wrong",
+    "slot_offset_bind",
+    "ftb_no_entry_tag_miss",
+    "ftb_hit_cond_nt",
+    "ftb_hit_out_of_range",
+    "ftb_hit_shadowed",
+    "ftb_snap_epoch_mismatch",
+    "ftb_hit_out_of_range_epoch_ok",
+    "ftb_hit_shadowed_epoch_ok",
+    "ftb_unclassified",
+    "ftb_miss",
+    "other",
+)
 
 TRANSLATIONS = {
     "IPC": "IPC (每周期指令数)",
@@ -73,6 +114,35 @@ TRANSLATIONS = {
     "ret_miss_rate": "函数返回 (Return)",
     "jump_direct_miss_rate": "直接跳转 (占 mispredict redirect)",
     "jump_indirect_miss_rate": "间接跳转 (占 mispredict redirect)",
+    "cond_selected_accuracy": "条件分支方向 (Commit 选中精度)",
+    "cond_local_accuracy": "条件分支 Local BHT",
+    "cond_global_accuracy": "条件分支 Global BHT",
+    "tage_hit_rate": "TAGE 命中率",
+    "tage_override_accuracy": "TAGE Override 精度",
+    "sc_override_accuracy": "SC Override 精度",
+    "loop_override_accuracy": "Loop Override 精度",
+    "cond_hit_rate": "FTB Cond Hit",
+    "jump_hit_rate": "FTB Jump Hit",
+    "cond_pick_rate": "FTB Cond Pick",
+    "jump_pick_rate": "FTB Jump Pick",
+    "hit_rate": "ITTAGE Hit",
+    "use_rate": "ITTAGE Use",
+    "dir_wrong": "方向错",
+    "dir_ok_target_wrong": "方向对 Target 错",
+    "slot_offset_bind": "Slot/Offset 绑错",
+    "ftb_no_entry_tag_miss": "FTB 无项/Tag Miss",
+    "ftb_hit_cond_nt": "FTB Hit 方向 NT",
+    "ftb_hit_out_of_range": "FTB Hit 越 Range",
+    "ftb_hit_shadowed": "FTB Hit 被遮蔽",
+    "ftb_snap_epoch_mismatch": "FTB Snap Epoch 不匹配",
+    "ftb_hit_out_of_range_epoch_ok": "FTB Hit 越 Range (Epoch 匹配)",
+    "ftb_hit_shadowed_epoch_ok": "FTB Hit 被遮蔽 (Epoch 匹配)",
+    "ftb_unclassified": "FTB 未分类",
+    "ftb_miss": "FTB Fallthrough 合计",
+    "legacy_accuracy": "Legacy Provider",
+    "tage_accuracy": "TAGE Provider",
+    "sc_accuracy": "SC Provider",
+    "loop_accuracy": "Loop Provider",
     "fq_occ_avg": "平均占用量",
     "fq_occ_max": "最大占用量",
     "fq_bypass_ratio": "Bypass 比例",
@@ -189,6 +259,63 @@ def kv_table(title: str, items: dict) -> str:
     return f"<h3>{esc(title)}</h3><table><thead><tr><th>指标项</th><th>数值</th></tr></thead><tbody>{rows}</tbody></table>"
 
 
+def predict_miss_rows(predict: dict) -> dict[str, float]:
+    return {k: float(predict.get(k, 0) or 0) for k in PREDICT_MISS_KEYS if k in predict}
+
+
+def predict_accuracy_rows(predict: dict) -> dict[str, float]:
+    return {k: float(predict.get(k, 0) or 0) for k in PREDICT_ACCURACY_KEYS if k in predict}
+
+
+def nested_rate_rows(section: dict | None, keys: tuple[str, ...]) -> dict[str, float]:
+    if not section:
+        return {}
+    return {k: float(section.get(k, 0) or 0) for k in keys if k in section}
+
+
+def provider_accuracy_rows(provider: dict | None) -> dict[str, float]:
+    if not provider:
+        return {}
+    return {
+        k: float(provider.get(k, 0) or 0)
+        for k in ("legacy_accuracy", "tage_accuracy", "sc_accuracy", "loop_accuracy")
+        if k in provider
+    }
+
+
+def mispredict_diag_rows(data: dict) -> dict[str, float]:
+    diag = data.get("mispredict_diag", {}) or {}
+    return {k: float(diag.get(k, 0) or 0) for k in MISPREDICT_DIAG_KEYS if diag.get(k, 0)}
+
+
+def format_predict_dashboard_lines(predict: dict) -> tuple[str, str]:
+    """Return (miss line, accuracy line) for dashboard Run Details."""
+    miss = (
+        f"cond={predict.get('cond_miss_rate', 0):.4f} "
+        f"jump={predict.get('jump_miss_rate', 0):.4f} "
+        f"ret={predict.get('ret_miss_rate', 0):.4f}"
+    )
+    acc_bits: list[str] = []
+    for key, label in (
+        ("cond_selected_accuracy", "sel"),
+        ("cond_local_accuracy", "local"),
+        ("cond_global_accuracy", "global"),
+        ("tage_hit_rate", "tage_hit"),
+    ):
+        if key in predict:
+            acc_bits.append(f"{label}={float(predict.get(key, 0) or 0):.4f}")
+    ftb = predict.get("ftb") or {}
+    if "cond_hit_rate" in ftb:
+        acc_bits.append(f"ftb_cond={float(ftb.get('cond_hit_rate', 0) or 0):.4f}")
+    if "jump_hit_rate" in ftb:
+        acc_bits.append(f"ftb_jump={float(ftb.get('jump_hit_rate', 0) or 0):.4f}")
+    ittage = predict.get("ittage") or {}
+    if "hit_rate" in ittage:
+        acc_bits.append(f"ittage={float(ittage.get('hit_rate', 0) or 0):.4f}")
+    acc = " | ".join(acc_bits) if acc_bits else "-"
+    return miss, acc
+
+
 def render_benchmark_section(bench_name: str, data: dict) -> str:
     stall = data.get("stall_category", {}) or {}
     stall_total = float(data.get("stall_total", 0) or 0) or 1.0
@@ -227,13 +354,12 @@ def render_benchmark_section(bench_name: str, data: dict) -> str:
                 title = "其他"
             stall_sections.append(bar_table(f"Stall 明细 · {title}", detail))
 
-    predict_rows = {
-        "cond_miss_rate": predict.get("cond_miss_rate", 0),
-        "jump_miss_rate": predict.get("jump_miss_rate", 0),
-        "ret_miss_rate": predict.get("ret_miss_rate", 0),
-        "jump_direct_miss_rate": predict.get("jump_direct_miss_rate", 0),
-        "jump_indirect_miss_rate": predict.get("jump_indirect_miss_rate", 0),
-    }
+    predict_rows = predict_miss_rows(predict)
+    predict_acc_rows = predict_accuracy_rows(predict)
+    ftb_rows = nested_rate_rows(predict.get("ftb"), FTB_RATE_KEYS)
+    ittage_rows = nested_rate_rows(predict.get("ittage"), ITTAGE_RATE_KEYS)
+    provider_rows = provider_accuracy_rows(predict.get("cond_provider"))
+    diag_rows = mispredict_diag_rows(data)
     ifu_rows = {
         k: ifu[k]
         for k in (
@@ -266,8 +392,13 @@ def render_benchmark_section(bench_name: str, data: dict) -> str:
         f"<div class='two-col' style='margin-top:16px'>"
         f"<div>{''.join(stall_sections[:2])}</div>"
         f"<div>{bar_table('预测 miss 率', {k: float(v) * 100 for k, v in predict_rows.items()}, 100.0)}"
+        f"{bar_table('方向预测精度 (Commit 侧)', {k: float(v) * 100 for k, v in predict_acc_rows.items()}, 100.0) if predict_acc_rows else ''}"
+        f"{bar_table('FTB 命中率 (Fetch 侧)', {k: float(v) * 100 for k, v in ftb_rows.items()}, 100.0) if ftb_rows else ''}"
+        f"{bar_table('ITTAGE (间接跳转)', {k: float(v) * 100 for k, v in ittage_rows.items()}, 100.0) if ittage_rows else ''}"
+        f"{bar_table('Cond Provider 精度', {k: float(v) * 100 for k, v in provider_rows.items()}, 100.0) if provider_rows else ''}"
         f"{kv_table('IFU Fetch Queue', ifu_rows)}"
-        f"{bar_table('Mispredict 分类', mispredict)}"
+        f"{bar_table('Mispredict 分类 (Insn)', mispredict)}"
+        f"{bar_table('Mispredict 诊断 (Flush)', diag_rows) if diag_rows else ''}"
         f"{bar_table('Flush 原因', flush_hist)}"
         f"{bar_table('Commit 宽度分布', {str(k): v for k, v in commit_hist.items()}, float(data.get('cycles', 1) or 1))}"
         f"{kv_table('控制流', control)}"

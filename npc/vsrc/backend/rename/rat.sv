@@ -39,7 +39,7 @@ module rat #(
     // 3. Commit Stage: Retirement Update (状态更新)
     // =========================================================
     // 当指令退休时，如果 RAT 还指向该 ROB ID，说明数据已进入 ARF，需更新 RAT 指向 ARF
-    input logic [DISPATCH_WIDTH-1:0]                    commit_we_i,      // ROB commit_valid
+    input logic [DISPATCH_WIDTH-1:0]                    commit_we_i,      // ROB commit_we
     input logic [DISPATCH_WIDTH-1:0][              4:0] commit_rd_idx_i,  // ROB commit_areg
     input logic [DISPATCH_WIDTH-1:0][ROB_IDX_WIDTH-1:0] commit_rob_idx_i, // 退休指令的 ROB ID (Head Ptr)
 

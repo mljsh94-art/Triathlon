@@ -30,6 +30,7 @@ module rename #(
     output logic            [Cfg.INSTR_PER_FETCH-1:0]               rob_dispatch_is_call_o,
     output logic            [Cfg.INSTR_PER_FETCH-1:0]               rob_dispatch_is_ret_o,
     output logic            [Cfg.INSTR_PER_FETCH-1:0]               rob_dispatch_is_rvc_o,
+    output logic            [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] rob_dispatch_pred_npc_o,
     output logic            [Cfg.INSTR_PER_FETCH-1:0][decode_pkg::FTQ_ID_W-1:0] rob_dispatch_ftq_id_o,
     output logic            [Cfg.INSTR_PER_FETCH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] rob_dispatch_fetch_epoch_o,
 
@@ -63,7 +64,7 @@ module rename #(
     output logic [Cfg.INSTR_PER_FETCH-1:0][ROB_IDX_WIDTH-1:0] issue_rd_rob_idx_o,
 
     // --- From ROB Commit (用於更新 RAT 狀態) ---
-    input logic [Cfg.INSTR_PER_FETCH-1:0] commit_valid_i,
+    input logic [Cfg.INSTR_PER_FETCH-1:0] commit_we_i,
     input logic [Cfg.INSTR_PER_FETCH-1:0][4:0] commit_areg_i,
     input logic [Cfg.INSTR_PER_FETCH-1:0][ROB_IDX_WIDTH-1:0] commit_rob_idx_i,
 
@@ -153,7 +154,7 @@ module rename #(
       .disp_rob_idx_i(new_tags),
 
       // 提交端口 (Retirement)
-      .commit_we_i(commit_valid_i),
+      .commit_we_i(commit_we_i),
       .commit_rd_idx_i(commit_areg_i),
       .commit_rob_idx_i(commit_rob_idx_i),
 
@@ -214,6 +215,7 @@ module rename #(
             ((dec_uops_i[i].rs1 == 5'd1) || (dec_uops_i[i].rs1 == 5'd5)) &&
             (dec_uops_i[i].imm == Cfg.XLEN'(0));
         rob_dispatch_is_rvc_o[i] = dec_uops_i[i].is_rvc;
+        rob_dispatch_pred_npc_o[i] = dec_uops_i[i].pred_npc;
         rob_dispatch_ftq_id_o[i] = dec_uops_i[i].ftq_id;
         rob_dispatch_fetch_epoch_o[i] = dec_uops_i[i].fetch_epoch;
 
@@ -256,6 +258,7 @@ module rename #(
         rob_dispatch_is_call_o[i] = 1'b0;
         rob_dispatch_is_ret_o[i] = 1'b0;
         rob_dispatch_is_rvc_o[i] = 1'b0;
+        rob_dispatch_pred_npc_o[i] = '0;
         rob_dispatch_ftq_id_o[i] = '0;
         rob_dispatch_fetch_epoch_o[i] = '0;
         rob_dispatch_is_store_o[i] = 1'b0;

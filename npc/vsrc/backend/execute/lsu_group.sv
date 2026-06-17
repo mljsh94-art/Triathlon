@@ -48,6 +48,9 @@ module lsu_group #(
     output logic [ROB_IDX_WIDTH-1:0] sb_load_rob_idx_o,
     input  logic                     sb_load_hit_i,
     input  logic [     Cfg.XLEN-1:0] sb_load_data_i,
+    output logic                     sb_order_query_valid_o,
+    output logic [ SB_IDX_WIDTH-1:0] sb_order_query_sb_id_o,
+    input  logic                     sb_order_query_clear_i,
 
     // =========================================================
     // 3) D-Cache Load interface
@@ -697,7 +700,7 @@ module lsu_group #(
   assign store_need_sq = req_is_store && !store_misaligned && !store_page_fault;
   assign amo_inflight = |lane_amo_valid_q;
   assign amo_order_clear = (dbg_lane_busy == '0) && lq_empty && sq_empty &&
-                           (store_wb_count_q == '0);
+                           (store_wb_count_q == '0) && sb_order_query_clear_i;
   assign store_wb_head_valid = (store_wb_count_q != 0);
   assign store_wb_head_rob_idx = store_wb_rob_idx_q[store_wb_head_q];
   assign store_wb_head_data = store_wb_data_q[store_wb_head_q];
@@ -719,6 +722,8 @@ module lsu_group #(
   assign sq_fwd_data_rshift = sq_fwd_query_data >> (8 * req_eff_addr[SQ_BYTE_OFF_W-1:0]);
   assign sb_load_hit_mux = sb_load_hit_i || sq_fwd_query_hit;
   assign sb_load_data_mux = sq_fwd_query_hit ? sq_fwd_data_rshift : sb_load_data_i;
+  assign sb_order_query_valid_o = req_is_amo;
+  assign sb_order_query_sb_id_o = pend_valid_q ? pend_sb_id_q : sb_id_i;
 
   assign lq_alloc_valid = load_alloc_fire && req_is_load;
   assign sq_alloc_valid = store_req_fire && store_need_sq;

@@ -46,6 +46,11 @@ module store_buffer #(
     output logic [Cfg.XLEN-1:0] dcache_req_data_o,
     output decode_pkg::lsu_op_e dcache_req_op_o,
 
+    // Order query for AMO: true when every older store-buffer entry has drained.
+    input  logic                                      order_query_valid_i,
+    input  logic               [$clog2(SB_DEPTH)-1:0] order_query_sb_id_i,
+    output logic                                      order_query_clear_o,
+
     // =======================================================
     // 5. Load Forwarding (From Load Unit) - 關鍵邏輯
     // =======================================================
@@ -282,6 +287,28 @@ module store_buffer #(
   assign dcache_req_addr_o = mem[head_ptr].addr;
   assign dcache_req_data_o = mem[head_ptr].data;
   assign dcache_req_op_o = mem[head_ptr].op;
+
+  logic [$clog2(SB_DEPTH)-1:0] order_query_scan_idx;
+
+  always_comb begin
+    order_query_clear_o = 1'b1;
+    order_query_scan_idx = head_ptr;
+
+    if (order_query_valid_i) begin
+      for (int n = 0; n < SB_DEPTH; n++) begin
+        order_query_scan_idx = head_ptr + $clog2(SB_DEPTH)'(n);
+
+        if (order_query_scan_idx == order_query_sb_id_i) begin
+          break;
+        end
+
+        if (mem[order_query_scan_idx].valid) begin
+          order_query_clear_o = 1'b0;
+          break;
+        end
+      end
+    end
+  end
 
   // =======================================================
   // Store-to-Load Forwarding Logic

@@ -30,7 +30,7 @@ struct SimArgs {
   bool progress_verbose = false;
   bool linux_early_debug = false;
   uint64_t snapshot_interval = 0;  // 0 = disabled
-  std::string snapshot_dir = "build/snapshots";
+  std::string snapshot_dir = "snapshots";
   uint64_t snapshot_keep = 3;
   std::string snapshot_restore_path;
 };

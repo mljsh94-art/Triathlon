@@ -62,10 +62,17 @@ module tb_triathlon #(
     output logic [Cfg.NRET-1:0][4:0]           commit_areg_o,
     output logic [Cfg.NRET-1:0][Cfg.XLEN-1:0]  commit_wdata_o,
     output logic [Cfg.NRET-1:0][Cfg.PLEN-1:0]  commit_pc_o,
+    output logic [Cfg.NRET-1:0][Cfg.PLEN-1:0]  commit_pred_npc_o,
     output logic [Cfg.NRET-1:0][Cfg.PLEN-1:0]  commit_actual_npc_o,
     output logic [Cfg.NRET-1:0][Cfg.ILEN-1:0]  commit_inst_o,
     output logic [Cfg.NRET-1:0][Cfg.ILEN-1:0]  commit_decoded_inst_o,
     output logic [Cfg.NRET-1:0]                commit_is_rvc_o,
+    output logic [Cfg.NRET-1:0]                commit_is_branch_o,
+    output logic [Cfg.NRET-1:0]                commit_is_jump_o,
+    output logic [Cfg.NRET-1:0]                commit_is_call_o,
+    output logic [Cfg.NRET-1:0]                commit_is_ret_o,
+    output logic [Cfg.NRET-1:0][FTQ_ID_W-1:0]  commit_ftq_id_o,
+    output logic [Cfg.NRET-1:0][FETCH_EPOCH_W-1:0] commit_fetch_epoch_o,
     output logic [Cfg.NRET-1:0]                commit_is_store_o,
     output logic [Cfg.NRET-1:0][SB_IDX_W-1:0]  commit_sb_id_o,
     output logic [Cfg.NRET-1:0]                commit_store_valid_o,
@@ -323,6 +330,38 @@ module tb_triathlon #(
     output logic [63:0]                        dbg_bpu_cond_selected_wrong_alt_sc_correct_o,
     output logic [63:0]                        dbg_bpu_cond_selected_wrong_alt_loop_correct_o,
     output logic [63:0]                        dbg_bpu_cond_selected_wrong_alt_any_correct_o,
+    output logic [63:0]                        dbg_bpu_ftb_lookup_total_o,
+    output logic [63:0]                        dbg_bpu_ftb_cond_hit_total_o,
+    output logic [63:0]                        dbg_bpu_ftb_jump_hit_total_o,
+    output logic [63:0]                        dbg_bpu_ftb_cond_pick_total_o,
+    output logic [63:0]                        dbg_bpu_ftb_jump_pick_total_o,
+    output logic [63:0]                        dbg_bpu_ftb_cond_tag_miss_total_o,
+    output logic [63:0]                        dbg_bpu_ftb_jump_tag_miss_total_o,
+    output logic [63:0]                        dbg_bpu_ftb_train_cond_total_o,
+    output logic [63:0]                        dbg_bpu_ftb_train_jump_total_o,
+    output logic [63:0]                        dbg_bpu_ittage_lookup_total_o,
+    output logic [63:0]                        dbg_bpu_ittage_hit_total_o,
+    output logic [63:0]                        dbg_bpu_ittage_use_total_o,
+    output logic [63:0]                        dbg_bpu_ittage_train_total_o,
+    output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_valid_o,
+    output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_cond_hit_o,
+    output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_jump_hit_o,
+    output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_cond_tag_miss_o,
+    output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_jump_tag_miss_o,
+    output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_any_valid_o,
+    output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_tag_hit_o,
+    output logic [FTQ_DEPTH-1:0][2:0]          dbg_bpu_pred_snap_valid_count_o,
+    output logic [FTQ_DEPTH-1:0][2:0]          dbg_bpu_pred_snap_cond_count_o,
+    output logic [FTQ_DEPTH-1:0][2:0]          dbg_bpu_pred_snap_jump_count_o,
+    output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_cond_in_range_o,
+    output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_jump_in_range_o,
+    output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_cond_taken_pred_o,
+    output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_pick_cond_o,
+    output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_pick_jump_o,
+    output logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] dbg_bpu_pred_snap_fetch_pc_o,
+    output logic [FTQ_DEPTH-1:0][FETCH_EPOCH_W-1:0] dbg_bpu_pred_snap_fetch_epoch_o,
+    output logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] dbg_bpu_pred_snap_cond_branch_pc_o,
+    output logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] dbg_bpu_pred_snap_jump_branch_pc_o,
     // Debug (BRU mispred info)
     output logic                               dbg_bru_mispred_o,
     output logic [Cfg.PLEN-1:0]                dbg_bru_pc_o,
@@ -390,10 +429,17 @@ module tb_triathlon #(
   assign commit_areg_o  = dut.u_backend.commit_areg;
   assign commit_wdata_o = dut.u_backend.commit_wdata;
   assign commit_pc_o    = dut.u_backend.commit_pc;
+  assign commit_pred_npc_o = dut.u_backend.commit_pred_npc;
   assign commit_actual_npc_o = dut.u_backend.commit_actual_npc;
   assign commit_inst_o  = dut.u_backend.commit_inst;
   assign commit_decoded_inst_o = dut.u_backend.commit_decoded_inst;
   assign commit_is_rvc_o = dut.u_backend.commit_is_rvc;
+  assign commit_is_branch_o = dut.u_backend.commit_is_branch;
+  assign commit_is_jump_o = dut.u_backend.commit_is_jump;
+  assign commit_is_call_o = dut.u_backend.commit_is_call;
+  assign commit_is_ret_o = dut.u_backend.commit_is_ret;
+  assign commit_ftq_id_o = dut.u_backend.commit_ftq_id;
+  assign commit_fetch_epoch_o = dut.u_backend.commit_fetch_epoch;
   assign commit_is_store_o = dut.u_backend.commit_is_store;
   assign commit_sb_id_o = dut.u_backend.commit_sb_id;
   assign dbg_csr_mtvec_o   = dut.u_backend.u_csr.csr_mtvec;
@@ -787,6 +833,38 @@ module tb_triathlon #(
       dut.u_frontend.i_bpu.dbg_cond_selected_wrong_alt_loop_correct_q;
   assign dbg_bpu_cond_selected_wrong_alt_any_correct_o =
       dut.u_frontend.i_bpu.dbg_cond_selected_wrong_alt_any_correct_q;
+  assign dbg_bpu_ftb_lookup_total_o = dut.u_frontend.i_bpu.dbg_ftb_lookup_total_q;
+  assign dbg_bpu_ftb_cond_hit_total_o = dut.u_frontend.i_bpu.dbg_ftb_cond_hit_total_q;
+  assign dbg_bpu_ftb_jump_hit_total_o = dut.u_frontend.i_bpu.dbg_ftb_jump_hit_total_q;
+  assign dbg_bpu_ftb_cond_pick_total_o = dut.u_frontend.i_bpu.dbg_ftb_cond_pick_total_q;
+  assign dbg_bpu_ftb_jump_pick_total_o = dut.u_frontend.i_bpu.dbg_ftb_jump_pick_total_q;
+  assign dbg_bpu_ftb_cond_tag_miss_total_o = dut.u_frontend.i_bpu.dbg_ftb_cond_tag_miss_total_q;
+  assign dbg_bpu_ftb_jump_tag_miss_total_o = dut.u_frontend.i_bpu.dbg_ftb_jump_tag_miss_total_q;
+  assign dbg_bpu_ftb_train_cond_total_o = dut.u_frontend.i_bpu.dbg_ftb_train_cond_total_q;
+  assign dbg_bpu_ftb_train_jump_total_o = dut.u_frontend.i_bpu.dbg_ftb_train_jump_total_q;
+  assign dbg_bpu_ittage_lookup_total_o = dut.u_frontend.i_bpu.dbg_ittage_lookup_total_q;
+  assign dbg_bpu_ittage_hit_total_o = dut.u_frontend.i_bpu.dbg_ittage_hit_total_q;
+  assign dbg_bpu_ittage_use_total_o = dut.u_frontend.i_bpu.dbg_ittage_use_total_q;
+  assign dbg_bpu_ittage_train_total_o = dut.u_frontend.i_bpu.dbg_ittage_train_total_q;
+  assign dbg_bpu_pred_snap_valid_o = dut.u_frontend.i_bpu.pred_snap_valid_q;
+  assign dbg_bpu_pred_snap_cond_hit_o = dut.u_frontend.i_bpu.pred_snap_cond_hit_q;
+  assign dbg_bpu_pred_snap_jump_hit_o = dut.u_frontend.i_bpu.pred_snap_jump_hit_q;
+  assign dbg_bpu_pred_snap_cond_tag_miss_o = dut.u_frontend.i_bpu.pred_snap_cond_tag_miss_q;
+  assign dbg_bpu_pred_snap_jump_tag_miss_o = dut.u_frontend.i_bpu.pred_snap_jump_tag_miss_q;
+  assign dbg_bpu_pred_snap_any_valid_o = dut.u_frontend.i_bpu.pred_snap_any_valid_q;
+  assign dbg_bpu_pred_snap_tag_hit_o = dut.u_frontend.i_bpu.pred_snap_tag_hit_q;
+  assign dbg_bpu_pred_snap_valid_count_o = dut.u_frontend.i_bpu.pred_snap_valid_count_q;
+  assign dbg_bpu_pred_snap_cond_count_o = dut.u_frontend.i_bpu.pred_snap_cond_count_q;
+  assign dbg_bpu_pred_snap_jump_count_o = dut.u_frontend.i_bpu.pred_snap_jump_count_q;
+  assign dbg_bpu_pred_snap_cond_in_range_o = dut.u_frontend.i_bpu.pred_snap_cond_in_range_q;
+  assign dbg_bpu_pred_snap_jump_in_range_o = dut.u_frontend.i_bpu.pred_snap_jump_in_range_q;
+  assign dbg_bpu_pred_snap_cond_taken_pred_o = dut.u_frontend.i_bpu.pred_snap_cond_taken_pred_q;
+  assign dbg_bpu_pred_snap_pick_cond_o = dut.u_frontend.i_bpu.pred_snap_pick_cond_q;
+  assign dbg_bpu_pred_snap_pick_jump_o = dut.u_frontend.i_bpu.pred_snap_pick_jump_q;
+  assign dbg_bpu_pred_snap_fetch_pc_o = dut.u_frontend.i_bpu.pred_snap_fetch_pc_q;
+  assign dbg_bpu_pred_snap_fetch_epoch_o = dut.u_frontend.i_bpu.pred_snap_fetch_epoch_q;
+  assign dbg_bpu_pred_snap_cond_branch_pc_o = dut.u_frontend.i_bpu.pred_snap_cond_branch_pc_q;
+  assign dbg_bpu_pred_snap_jump_branch_pc_o = dut.u_frontend.i_bpu.pred_snap_jump_branch_pc_q;
 
   // Debug: BRU info (from backend execute)
   assign dbg_bru_mispred_o  = dut.u_backend.bru_mispred;

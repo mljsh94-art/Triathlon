@@ -14,7 +14,7 @@ from pathlib import Path
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
-from render_summary_html import write_summary_html_for_run
+from render_summary_html import format_predict_dashboard_lines, write_summary_html_for_run
 
 BENCHMARKS = ("dhrystone", "coremark", "microbench")
 STALL_GATE_KEYS = ("frontend_empty", "rob_backpressure", "lsu_req_blocked")
@@ -85,6 +85,12 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
     dhry_cycles = [r.get("cycles", {}).get("dhrystone", 0) for r in runs]
     core_cycles = [r.get("cycles", {}).get("coremark", 0) for r in runs]
     micro_cycles = [r.get("cycles", {}).get("microbench", 0) for r in runs]
+    dhry_cond_acc = [
+        r.get("predict_accuracy", {}).get("dhrystone", {}).get("cond_selected", 0) for r in runs
+    ]
+    core_cond_acc = [
+        r.get("predict_accuracy", {}).get("coremark", {}).get("cond_selected", 0) for r in runs
+    ]
 
     run_rows: list[str] = []
     detail_sections: list[str] = []
@@ -135,14 +141,14 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
                 pct = 100.0 * float(val) / float(stall_total) if stall_total else 0.0
                 stall_lines.append(f"{key}: {val} ({pct:.1f}%)")
             predict = b.get("predict", {}) or {}
+            miss_line, acc_line = format_predict_dashboard_lines(predict)
             bench_blocks.append(
                 f"<div><h4>{html.escape(bench)}</h4>"
                 f"<p>IPC={b.get('ipc', 0):.4f} CPI={b.get('cpi', 0):.4f} "
                 f"cycles={b.get('cycles', 0)} commits={b.get('commits', 0)}</p>"
                 f"<p><b>Stall gate:</b> {html.escape(' | '.join(stall_lines))}</p>"
-                f"<p><b>Predict miss:</b> cond={predict.get('cond_miss_rate', 0):.4f} "
-                f"jump={predict.get('jump_miss_rate', 0):.4f} "
-                f"ret={predict.get('ret_miss_rate', 0):.4f}</p></div>"
+                f"<p><b>Predict miss:</b> {html.escape(miss_line)}</p>"
+                f"<p><b>Direction acc (commit):</b> {html.escape(acc_line)}</p></div>"
             )
         detail_sections.append(
             f"<section class='detail'><h3>{html.escape(run_label)}</h3>"
@@ -164,6 +170,8 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
         .replace("{{DHRY_CYCLES_JSON}}", json.dumps(dhry_cycles))
         .replace("{{CORE_CYCLES_JSON}}", json.dumps(core_cycles))
         .replace("{{MICRO_CYCLES_JSON}}", json.dumps(micro_cycles))
+        .replace("{{DHRY_COND_ACC_JSON}}", json.dumps(dhry_cond_acc))
+        .replace("{{CORE_COND_ACC_JSON}}", json.dumps(core_cond_acc))
         .replace("{{RUN_TABLE_ROWS}}", "\n".join(run_rows))
         .replace("{{DETAIL_SECTIONS}}", "\n".join(detail_sections))
     )

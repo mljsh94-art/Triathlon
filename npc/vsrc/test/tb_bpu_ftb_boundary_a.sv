@@ -74,6 +74,8 @@ module tb_bpu_ftb_boundary_a (
       .redirect_pc_i(pc_i),
       .ftq_enq_valid_o(ftq_enq_valid),
       .ftq_enq_ready_i(ftq_enq_ready),
+      .ftq_enq_id_i('0),
+      .ftq_enq_epoch_i('0),
       .ftq_enq_pc_o(ftq_enq_pc_o),
       .ftq_enq_pred_slot_valid_o(ftq_enq_pred_slot_valid),
       .ftq_enq_pred_slot_idx_o(ftq_enq_pred_slot_idx),

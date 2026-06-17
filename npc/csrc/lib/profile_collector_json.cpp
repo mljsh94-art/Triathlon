@@ -49,6 +49,20 @@ void append_str_map(std::ostringstream &os,
   os << "}";
 }
 
+void append_uint_map(std::ostringstream &os, const std::unordered_map<uint32_t, uint64_t> &m) {
+  std::vector<std::pair<uint32_t, uint64_t>> items(m.begin(), m.end());
+  std::sort(items.begin(), items.end(),
+            [](const auto &a, const auto &b) { return a.first < b.first; });
+  os << "{";
+  bool first = true;
+  for (const auto &kv : items) {
+    if (!first) os << ",";
+    first = false;
+    os << "\"" << kv.first << "\":" << kv.second;
+  }
+  os << "}";
+}
+
 void append_top_uint(std::ostringstream &os,
                      const std::unordered_map<uint32_t, uint64_t> &hist,
                      const char *field_name) {
@@ -58,7 +72,7 @@ void append_top_uint(std::ostringstream &os,
     return a.first < b.first;
   });
   os << "[";
-  const size_t limit = std::min<size_t>(5, items.size());
+  const size_t limit = std::min<size_t>(64, items.size());
   for (size_t i = 0; i < limit; i++) {
     if (i > 0) os << ",";
     os << "{\"" << field_name << "\":\"0x" << std::hex << items[i].first << std::dec
@@ -148,6 +162,46 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
   const uint64_t loop_override_total = static_cast<uint64_t>(top->dbg_bpu_loop_override_total_o);
   const uint64_t loop_override_correct = static_cast<uint64_t>(top->dbg_bpu_loop_override_correct_o);
 
+  const uint64_t ftb_lookup_total = static_cast<uint64_t>(top->dbg_bpu_ftb_lookup_total_o);
+  const uint64_t ftb_cond_hit_total = static_cast<uint64_t>(top->dbg_bpu_ftb_cond_hit_total_o);
+  const uint64_t ftb_jump_hit_total = static_cast<uint64_t>(top->dbg_bpu_ftb_jump_hit_total_o);
+  const uint64_t ftb_cond_pick_total = static_cast<uint64_t>(top->dbg_bpu_ftb_cond_pick_total_o);
+  const uint64_t ftb_jump_pick_total = static_cast<uint64_t>(top->dbg_bpu_ftb_jump_pick_total_o);
+  const uint64_t ftb_cond_tag_miss_total = static_cast<uint64_t>(top->dbg_bpu_ftb_cond_tag_miss_total_o);
+  const uint64_t ftb_jump_tag_miss_total = static_cast<uint64_t>(top->dbg_bpu_ftb_jump_tag_miss_total_o);
+  const uint64_t ftb_train_cond_total = static_cast<uint64_t>(top->dbg_bpu_ftb_train_cond_total_o);
+  const uint64_t ftb_train_jump_total = static_cast<uint64_t>(top->dbg_bpu_ftb_train_jump_total_o);
+  const uint64_t ittage_lookup_total = static_cast<uint64_t>(top->dbg_bpu_ittage_lookup_total_o);
+  const uint64_t ittage_hit_total = static_cast<uint64_t>(top->dbg_bpu_ittage_hit_total_o);
+  const uint64_t ittage_use_total = static_cast<uint64_t>(top->dbg_bpu_ittage_use_total_o);
+  const uint64_t ittage_train_total = static_cast<uint64_t>(top->dbg_bpu_ittage_train_total_o);
+  const uint64_t cond_provider_legacy_selected =
+      static_cast<uint64_t>(top->dbg_bpu_cond_provider_legacy_selected_o);
+  const uint64_t cond_provider_tage_selected =
+      static_cast<uint64_t>(top->dbg_bpu_cond_provider_tage_selected_o);
+  const uint64_t cond_provider_sc_selected =
+      static_cast<uint64_t>(top->dbg_bpu_cond_provider_sc_selected_o);
+  const uint64_t cond_provider_loop_selected =
+      static_cast<uint64_t>(top->dbg_bpu_cond_provider_loop_selected_o);
+  const uint64_t cond_provider_legacy_correct =
+      static_cast<uint64_t>(top->dbg_bpu_cond_provider_legacy_correct_o);
+  const uint64_t cond_provider_tage_correct =
+      static_cast<uint64_t>(top->dbg_bpu_cond_provider_tage_correct_o);
+  const uint64_t cond_provider_sc_correct =
+      static_cast<uint64_t>(top->dbg_bpu_cond_provider_sc_correct_o);
+  const uint64_t cond_provider_loop_correct =
+      static_cast<uint64_t>(top->dbg_bpu_cond_provider_loop_correct_o);
+  const uint64_t cond_selected_wrong_alt_legacy_correct =
+      static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_legacy_correct_o);
+  const uint64_t cond_selected_wrong_alt_tage_correct =
+      static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_tage_correct_o);
+  const uint64_t cond_selected_wrong_alt_sc_correct =
+      static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_sc_correct_o);
+  const uint64_t cond_selected_wrong_alt_loop_correct =
+      static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_loop_correct_o);
+  const uint64_t cond_selected_wrong_alt_any_correct =
+      static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_any_correct_o);
+
   const uint64_t control_total =
       control_branch_count_ + control_jal_count_ + control_jalr_count_;
   const uint64_t fq_samples = cycles;
@@ -172,6 +226,98 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
   os << "\"cond_branch\":" << pred_cond_miss_ << ",\"jump_direct\":" << pred_jump_direct_miss_
      << ",\"jump_indirect\":" << pred_jump_indirect_miss_ << ",\"jump\":" << pred_jump_miss_
      << ",\"return\":" << pred_ret_miss_ << "},";
+  const uint64_t mispredict_diag_ftb_miss =
+      mispredict_diag_ftb_no_entry_tag_miss_ + mispredict_diag_ftb_hit_cond_nt_ +
+      mispredict_diag_ftb_hit_out_of_range_ + mispredict_diag_ftb_hit_shadowed_ +
+      mispredict_diag_ftb_unclassified_;
+  const uint64_t mispredict_diag_classified =
+      mispredict_diag_dir_wrong_ + mispredict_diag_dir_ok_target_wrong_ +
+      mispredict_diag_slot_offset_bind_ + mispredict_diag_ftb_miss + mispredict_diag_other_;
+  os << "\"mispredict_diag\":{";
+  os << "\"dir_wrong\":" << mispredict_diag_dir_wrong_
+     << ",\"dir_ok_target_wrong\":" << mispredict_diag_dir_ok_target_wrong_
+     << ",\"slot_offset_bind\":" << mispredict_diag_slot_offset_bind_
+     << ",\"ftb_no_entry_tag_miss\":" << mispredict_diag_ftb_no_entry_tag_miss_
+     << ",\"ftb_hit_cond_nt\":" << mispredict_diag_ftb_hit_cond_nt_
+     << ",\"ftb_hit_out_of_range\":" << mispredict_diag_ftb_hit_out_of_range_
+     << ",\"ftb_hit_shadowed\":" << mispredict_diag_ftb_hit_shadowed_
+     << ",\"ftb_snap_epoch_mismatch\":" << mispredict_diag_ftb_snap_epoch_mismatch_
+     << ",\"ftb_hit_out_of_range_epoch_ok\":" << mispredict_diag_ftb_hit_out_of_range_epoch_ok_
+     << ",\"ftb_hit_shadowed_epoch_ok\":" << mispredict_diag_ftb_hit_shadowed_epoch_ok_
+     << ",\"ftb_unclassified\":" << mispredict_diag_ftb_unclassified_
+     << ",\"ftb_miss\":" << mispredict_diag_ftb_miss
+     << ",\"other\":" << mispredict_diag_other_
+     << ",\"no_commit_slot\":" << mispredict_diag_no_commit_slot_
+     << ",\"classified_total\":" << mispredict_diag_classified
+     << ",\"dir_wrong_rate\":" << safe_div(static_cast<double>(mispredict_diag_dir_wrong_),
+                                           static_cast<double>(mispredict_flush_count_))
+     << ",\"dir_ok_target_wrong_rate\":"
+     << safe_div(static_cast<double>(mispredict_diag_dir_ok_target_wrong_),
+                static_cast<double>(mispredict_flush_count_))
+     << ",\"slot_offset_bind_rate\":"
+     << safe_div(static_cast<double>(mispredict_diag_slot_offset_bind_),
+                static_cast<double>(mispredict_flush_count_))
+     << ",\"ftb_no_entry_tag_miss_rate\":"
+     << safe_div(static_cast<double>(mispredict_diag_ftb_no_entry_tag_miss_),
+                static_cast<double>(mispredict_flush_count_))
+     << ",\"ftb_hit_cond_nt_rate\":"
+     << safe_div(static_cast<double>(mispredict_diag_ftb_hit_cond_nt_),
+                static_cast<double>(mispredict_flush_count_))
+     << ",\"ftb_hit_out_of_range_rate\":"
+     << safe_div(static_cast<double>(mispredict_diag_ftb_hit_out_of_range_),
+                static_cast<double>(mispredict_flush_count_))
+     << ",\"ftb_hit_shadowed_rate\":"
+     << safe_div(static_cast<double>(mispredict_diag_ftb_hit_shadowed_),
+                static_cast<double>(mispredict_flush_count_))
+     << ",\"ftb_snap_epoch_mismatch_rate\":"
+     << safe_div(static_cast<double>(mispredict_diag_ftb_snap_epoch_mismatch_),
+                static_cast<double>(mispredict_flush_count_))
+     << ",\"ftb_hit_out_of_range_epoch_ok_rate\":"
+     << safe_div(static_cast<double>(mispredict_diag_ftb_hit_out_of_range_epoch_ok_),
+                static_cast<double>(mispredict_flush_count_))
+     << ",\"ftb_hit_shadowed_epoch_ok_rate\":"
+     << safe_div(static_cast<double>(mispredict_diag_ftb_hit_shadowed_epoch_ok_),
+                static_cast<double>(mispredict_flush_count_))
+     << ",\"ftb_miss_rate\":"
+     << safe_div(static_cast<double>(mispredict_diag_ftb_miss),
+                static_cast<double>(mispredict_flush_count_));
+  os << ",\"ftb_oor_block_byte_off\":";
+  append_uint_map(os, mispredict_diag_ftb_oor_block_byte_off_hist_);
+  os << ",\"ftb_oor_kind\":";
+  append_str_map(os, mispredict_diag_ftb_oor_kind_hist_);
+  os << ",\"ftb_oor_snap_pc_top\":";
+  append_top_uint(os, mispredict_diag_ftb_oor_snap_pc_hist_, "pc");
+  os << ",\"ftb_oor_branch_pc_top\":";
+  append_top_uint(os, mispredict_diag_ftb_oor_branch_pc_hist_, "pc");
+  os << ",\"ftb_no_entry_block_byte_off\":";
+  append_uint_map(os, mispredict_diag_ftb_no_entry_block_byte_off_hist_);
+  os << ",\"ftb_no_entry_fetch_rel\":";
+  append_uint_map(os, mispredict_diag_ftb_no_entry_fetch_rel_hist_);
+  os << ",\"ftb_no_entry_fetch_byte_off\":";
+  append_uint_map(os, mispredict_diag_ftb_no_entry_fetch_byte_off_hist_);
+  os << ",\"ftb_no_entry_block_delta\":";
+  append_str_map(os, mispredict_diag_ftb_no_entry_block_delta_hist_);
+  os << ",\"ftb_no_entry_valid_count\":";
+  append_uint_map(os, mispredict_diag_ftb_no_entry_valid_count_hist_);
+  os << ",\"ftb_no_entry_cond_count\":";
+  append_uint_map(os, mispredict_diag_ftb_no_entry_cond_count_hist_);
+  os << ",\"ftb_no_entry_jump_count\":";
+  append_uint_map(os, mispredict_diag_ftb_no_entry_jump_count_hist_);
+  os << ",\"ftb_no_entry_kind\":";
+  append_str_map(os, mispredict_diag_ftb_no_entry_kind_hist_);
+  os << ",\"ftb_no_entry_cause\":";
+  append_str_map(os, mispredict_diag_ftb_no_entry_cause_hist_);
+  os << ",\"ftb_no_entry_fetch_pc_top\":";
+  append_top_uint(os, mispredict_diag_ftb_no_entry_fetch_pc_hist_, "pc");
+  os << ",\"ftb_no_entry_branch_pc_top\":";
+  append_top_uint(os, mispredict_diag_ftb_no_entry_branch_pc_hist_, "pc");
+  os << ",\"bpu_taken_control_pc_top\":";
+  append_top_uint(os, bpu_taken_control_pc_hist_, "pc");
+  os << ",\"bpu_update_pc_top\":";
+  append_top_uint(os, bpu_update_pc_hist_, "pc");
+  os << ",\"bpu_update_kind\":";
+  append_str_map(os, bpu_update_kind_hist_);
+  os << "},";
   os << "\"branch_penalty_cycles\":" << branch_penalty_cycles_
      << ",\"wrong_path_kill_uops\":" << wrong_path_killed_uops_
      << ",\"redirect_distance_sum\":" << redirect_distance_sum_
@@ -313,10 +459,71 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
      << ",\"sc_lookup_total\":" << sc_lookup_total << ",\"sc_confident_total\":" << sc_confident_total
      << ",\"sc_override_total\":" << sc_override_total
      << ",\"sc_override_correct\":" << sc_override_correct
+     << ",\"sc_override_accuracy\":"
+     << safe_div(static_cast<double>(sc_override_correct),
+                 static_cast<double>(sc_override_total))
      << ",\"loop_lookup_total\":" << loop_lookup_total << ",\"loop_hit_total\":" << loop_hit_total
      << ",\"loop_confident_total\":" << loop_confident_total
      << ",\"loop_override_total\":" << loop_override_total
-     << ",\"loop_override_correct\":" << loop_override_correct << "},";
+     << ",\"loop_override_correct\":" << loop_override_correct
+     << ",\"loop_override_accuracy\":"
+     << safe_div(static_cast<double>(loop_override_correct),
+                 static_cast<double>(loop_override_total))
+     << ",\"ftb\":{"
+     << "\"lookup_total\":" << ftb_lookup_total
+     << ",\"cond_hit_total\":" << ftb_cond_hit_total
+     << ",\"cond_hit_rate\":"
+     << safe_div(static_cast<double>(ftb_cond_hit_total), static_cast<double>(ftb_lookup_total))
+     << ",\"jump_hit_total\":" << ftb_jump_hit_total
+     << ",\"jump_hit_rate\":"
+     << safe_div(static_cast<double>(ftb_jump_hit_total), static_cast<double>(ftb_lookup_total))
+     << ",\"cond_pick_total\":" << ftb_cond_pick_total
+     << ",\"cond_pick_rate\":"
+     << safe_div(static_cast<double>(ftb_cond_pick_total), static_cast<double>(ftb_lookup_total))
+     << ",\"jump_pick_total\":" << ftb_jump_pick_total
+     << ",\"jump_pick_rate\":"
+     << safe_div(static_cast<double>(ftb_jump_pick_total), static_cast<double>(ftb_lookup_total))
+     << ",\"cond_tag_miss_total\":" << ftb_cond_tag_miss_total
+     << ",\"jump_tag_miss_total\":" << ftb_jump_tag_miss_total
+     << ",\"train_cond_total\":" << ftb_train_cond_total
+     << ",\"train_jump_total\":" << ftb_train_jump_total
+     << "},\"ittage\":{"
+     << "\"lookup_total\":" << ittage_lookup_total
+     << ",\"hit_total\":" << ittage_hit_total
+     << ",\"hit_rate\":"
+     << safe_div(static_cast<double>(ittage_hit_total), static_cast<double>(ittage_lookup_total))
+     << ",\"use_total\":" << ittage_use_total
+     << ",\"use_rate\":"
+     << safe_div(static_cast<double>(ittage_use_total), static_cast<double>(ittage_lookup_total))
+     << ",\"train_total\":" << ittage_train_total
+     << "},\"cond_provider\":{"
+     << "\"legacy_selected\":" << cond_provider_legacy_selected
+     << ",\"legacy_correct\":" << cond_provider_legacy_correct
+     << ",\"legacy_accuracy\":"
+     << safe_div(static_cast<double>(cond_provider_legacy_correct),
+                static_cast<double>(cond_provider_legacy_selected))
+     << ",\"tage_selected\":" << cond_provider_tage_selected
+     << ",\"tage_correct\":" << cond_provider_tage_correct
+     << ",\"tage_accuracy\":"
+     << safe_div(static_cast<double>(cond_provider_tage_correct),
+                static_cast<double>(cond_provider_tage_selected))
+     << ",\"sc_selected\":" << cond_provider_sc_selected
+     << ",\"sc_correct\":" << cond_provider_sc_correct
+     << ",\"sc_accuracy\":"
+     << safe_div(static_cast<double>(cond_provider_sc_correct),
+                static_cast<double>(cond_provider_sc_selected))
+     << ",\"loop_selected\":" << cond_provider_loop_selected
+     << ",\"loop_correct\":" << cond_provider_loop_correct
+     << ",\"loop_accuracy\":"
+     << safe_div(static_cast<double>(cond_provider_loop_correct),
+                static_cast<double>(cond_provider_loop_selected))
+     << "},\"cond_wrong_alt\":{"
+     << "\"legacy_correct\":" << cond_selected_wrong_alt_legacy_correct
+     << ",\"tage_correct\":" << cond_selected_wrong_alt_tage_correct
+     << ",\"sc_correct\":" << cond_selected_wrong_alt_sc_correct
+     << ",\"loop_correct\":" << cond_selected_wrong_alt_loop_correct
+     << ",\"any_correct\":" << cond_selected_wrong_alt_any_correct
+     << "}},";
 
   os << "\"has_commit_detail\":false,\"has_commit_summary\":true,";
   os << "\"stall_mode\":\"cycle\",\"commit_metrics_source\":\"summary\",";

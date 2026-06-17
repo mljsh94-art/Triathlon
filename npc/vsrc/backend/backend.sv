@@ -166,6 +166,7 @@ module backend #(
   logic [    COMMIT_WIDTH-1:0]                    commit_is_call;
   logic [    COMMIT_WIDTH-1:0]                    commit_is_ret;
   logic [    COMMIT_WIDTH-1:0]                    commit_is_rvc;
+  logic [    COMMIT_WIDTH-1:0][     Cfg.PLEN-1:0] commit_pred_npc;
   logic [    COMMIT_WIDTH-1:0][     Cfg.PLEN-1:0] commit_actual_npc;
   logic [    COMMIT_WIDTH-1:0][    FTQ_ID_W-1:0]  commit_ftq_id;
   logic [    COMMIT_WIDTH-1:0][FETCH_EPOCH_W-1:0] commit_fetch_epoch;
@@ -201,6 +202,9 @@ module backend #(
   logic [DISPATCH_WIDTH*2-1:0][     Cfg.XLEN-1:0] rob_query_data;
   logic [DISPATCH_WIDTH*2-1:0][FETCH_EPOCH_W-1:0] rob_query_fetch_epoch;
   logic [DISPATCH_WIDTH*2-1:0][     Cfg.PLEN-1:0] rob_query_pc;
+  logic [DISPATCH_WIDTH*2-1:0]                    rob_query_valid;
+  logic [DISPATCH_WIDTH*2-1:0]                    rob_query_has_rd;
+  logic [DISPATCH_WIDTH*2-1:0][              4:0] rob_query_areg;
   logic [   ROB_IDX_WIDTH-1:0]                    rob_head_ptr;
   logic                                           rob_empty;
   logic [        Cfg.PLEN-1:0]                    rob_head_pc;
@@ -233,6 +237,7 @@ module backend #(
       .dispatch_is_call_i(rob_dispatch_is_call),
       .dispatch_is_ret_i(rob_dispatch_is_ret),
       .dispatch_is_rvc_i(rob_dispatch_is_rvc),
+      .dispatch_pred_npc_i(rob_dispatch_pred_npc),
       .dispatch_ftq_id_i(rob_dispatch_ftq_id),
       .dispatch_fetch_epoch_i(rob_dispatch_fetch_epoch),
       .dispatch_is_store_i(rob_dispatch_is_store),
@@ -278,6 +283,7 @@ module backend #(
       .commit_is_call_o   (commit_is_call),
       .commit_is_ret_o    (commit_is_ret),
       .commit_is_rvc_o    (commit_is_rvc),
+      .commit_pred_npc_o  (commit_pred_npc),
       .commit_actual_npc_o(commit_actual_npc),
       .commit_ftq_id_o(commit_ftq_id),
       .commit_fetch_epoch_o(commit_fetch_epoch),
@@ -300,6 +306,9 @@ module backend #(
       .query_data_o   (rob_query_data),
       .query_fetch_epoch_o(rob_query_fetch_epoch),
       .query_pc_o     (rob_query_pc),
+      .query_valid_o  (rob_query_valid),
+      .query_has_rd_o (rob_query_has_rd),
+      .query_areg_o   (rob_query_areg),
 
       .rob_empty_o(rob_empty),
       .rob_full_o (),
@@ -483,6 +492,9 @@ module backend #(
   logic [ROB_IDX_WIDTH-1:0] sb_load_rob_idx;
   logic sb_load_hit;
   logic [Cfg.XLEN-1:0] sb_load_data;
+  logic sb_order_query_valid;
+  logic [SB_IDX_WIDTH-1:0] sb_order_query_sb_id;
+  logic sb_order_query_clear;
 
   store_buffer #(
       .SB_DEPTH     (SB_DEPTH),
@@ -514,6 +526,10 @@ module backend #(
       .dcache_req_data_o (sb_dcache_req_data),
       .dcache_req_op_o   (sb_dcache_req_op),
 
+      .order_query_valid_i(sb_order_query_valid),
+      .order_query_sb_id_i(sb_order_query_sb_id),
+      .order_query_clear_o(sb_order_query_clear),
+
       .load_addr_i(sb_load_addr),
       .load_rob_idx_i(sb_load_rob_idx),
       .load_hit_o(sb_load_hit),
@@ -541,6 +557,7 @@ module backend #(
   logic            [DISPATCH_WIDTH-1:0]                    rob_dispatch_is_call;
   logic            [DISPATCH_WIDTH-1:0]                    rob_dispatch_is_ret;
   logic            [DISPATCH_WIDTH-1:0]                    rob_dispatch_is_rvc;
+  logic            [DISPATCH_WIDTH-1:0][     Cfg.PLEN-1:0] rob_dispatch_pred_npc;
   logic            [DISPATCH_WIDTH-1:0][    FTQ_ID_W-1:0]  rob_dispatch_ftq_id;
   logic            [DISPATCH_WIDTH-1:0][FETCH_EPOCH_W-1:0] rob_dispatch_fetch_epoch;
   logic            [DISPATCH_WIDTH-1:0]                    rob_dispatch_is_store;
@@ -796,6 +813,7 @@ module backend #(
       .rob_dispatch_is_call_o(rob_dispatch_is_call),
       .rob_dispatch_is_ret_o(rob_dispatch_is_ret),
       .rob_dispatch_is_rvc_o(rob_dispatch_is_rvc),
+      .rob_dispatch_pred_npc_o(rob_dispatch_pred_npc),
       .rob_dispatch_ftq_id_o(rob_dispatch_ftq_id),
       .rob_dispatch_fetch_epoch_o(rob_dispatch_fetch_epoch),
       .rob_dispatch_is_store_o(rob_dispatch_is_store),
@@ -817,7 +835,7 @@ module backend #(
       .issue_rs2_idx_o    (issue_rs2_idx),
       .issue_rd_rob_idx_o (issue_rd_rob_idx),
 
-      .commit_valid_i  (commit_valid),
+      .commit_we_i     (commit_we),
       .commit_areg_i   (commit_areg),
       .commit_rob_idx_i(commit_rob_index),
 
@@ -880,6 +898,17 @@ module backend #(
     end
   endfunction
 
+  function automatic logic rob_tag_older(input logic [ROB_IDX_WIDTH-1:0] producer,
+                                         input logic [ROB_IDX_WIDTH-1:0] consumer);
+    logic [ROB_IDX_WIDTH-1:0] producer_age;
+    logic [ROB_IDX_WIDTH-1:0] consumer_age;
+    begin
+      producer_age = producer - rob_head_ptr;
+      consumer_age = consumer - rob_head_ptr;
+      return producer_age < consumer_age;
+    end
+  endfunction
+
   always_comb begin
     // ARF read addresses
     for (int i = 0; i < DISPATCH_WIDTH; i++) begin
@@ -905,6 +934,18 @@ module backend #(
 
     // Default outputs
     for (int i = 0; i < DISPATCH_WIDTH; i++) begin
+      logic rs1_producer_match;
+      logic rs2_producer_match;
+
+      rs1_producer_match = rob_query_valid[i] &&
+          rob_query_has_rd[i] &&
+          (rob_query_areg[i] == issue_rs1_idx[i]) &&
+          rob_tag_older(issue_rs1_rob_idx[i], issue_rd_rob_idx[i]);
+      rs2_producer_match = rob_query_valid[i+4] &&
+          rob_query_has_rd[i+4] &&
+          (rob_query_areg[i+4] == issue_rs2_idx[i]) &&
+          rob_tag_older(issue_rs2_rob_idx[i], issue_rd_rob_idx[i]);
+
       issue_v1[i] = '0;
       issue_v2[i] = '0;
       issue_q1[i] = '0;
@@ -914,13 +955,12 @@ module backend #(
 
       if (issue_valid[i]) begin
         if (issue_rs1_in_rob[i]) begin
-          if (rob_query_ready[i] && !rs1_tag_allocated[i] &&
-              (rob_query_fetch_epoch[i] == rename_sel_uops[i].fetch_epoch)) begin
+          if (rob_query_ready[i] && !rs1_tag_allocated[i] && rs1_producer_match) begin
             issue_r1[i] = 1'b1;
             issue_v1[i] = rob_query_data[i];
-          end else if (rob_query_ready[i] && !rs1_tag_allocated[i] &&
-                       (rob_query_fetch_epoch[i] != rename_sel_uops[i].fetch_epoch)) begin
-            // Guard against stale ROB-tag aliasing across flush epochs.
+          end else if (!rs1_tag_allocated[i] && !rs1_producer_match) begin
+            // RAT can carry a stale tag after redirects; fall back only when
+            // the current ROB entry is not the source register's producer.
             issue_r1[i] = 1'b1;
             issue_v1[i] = arf_bypass(issue_rs1_idx[i], arf_rdata[i]);
           end else begin
@@ -933,12 +973,10 @@ module backend #(
         end
 
         if (issue_rs2_in_rob[i]) begin
-          if (rob_query_ready[i+4] && !rs2_tag_allocated[i] &&
-              (rob_query_fetch_epoch[i+4] == rename_sel_uops[i].fetch_epoch)) begin
+          if (rob_query_ready[i+4] && !rs2_tag_allocated[i] && rs2_producer_match) begin
             issue_r2[i] = 1'b1;
             issue_v2[i] = rob_query_data[i+4];
-          end else if (rob_query_ready[i+4] && !rs2_tag_allocated[i] &&
-                       (rob_query_fetch_epoch[i+4] != rename_sel_uops[i].fetch_epoch)) begin
+          end else if (!rs2_tag_allocated[i] && !rs2_producer_match) begin
             issue_r2[i] = 1'b1;
             issue_v2[i] = arf_bypass(issue_rs2_idx[i], arf_rdata[i+4]);
           end else begin
@@ -1779,6 +1817,9 @@ module backend #(
       .sb_load_rob_idx_o(sb_load_rob_idx),
       .sb_load_hit_i(sb_load_hit),
       .sb_load_data_i(sb_load_data),
+      .sb_order_query_valid_o(sb_order_query_valid),
+      .sb_order_query_sb_id_o(sb_order_query_sb_id),
+      .sb_order_query_clear_i(sb_order_query_clear),
 
       .ld_req_valid_o(lsu_ld_req_valid),
       .ld_req_ready_i(lsu_ld_req_ready),

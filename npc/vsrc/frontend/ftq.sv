@@ -18,6 +18,7 @@ module ftq #(
   input  logic [Cfg.PLEN-1:0] enq_pred_target_i,
     input  logic [Cfg.PLEN-1:0] enq_pred_npc_i,
     input  logic [EPOCH_W-1:0] enq_epoch_i,
+    output logic [ID_W-1:0] enq_ftq_id_o,
 
     output logic deq_valid_o,
     input  logic deq_ready_i,
@@ -66,6 +67,7 @@ module ftq #(
   assign enq_fire_w   = enq_valid_i && enq_ready_o;
   assign deq_fire_w   = deq_valid_o && deq_ready_i;
 
+  assign enq_ftq_id_o = tail_q;
   assign deq_pc_o = pc_q[head_q];
   assign deq_pred_slot_valid_o = pred_slot_valid_q[head_q];
   assign deq_pred_slot_idx_o = pred_slot_idx_q[head_q];

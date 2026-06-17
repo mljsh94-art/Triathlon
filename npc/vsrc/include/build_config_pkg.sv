@@ -20,7 +20,7 @@ package build_config_pkg;
     cfg.BPU_USE_TOURNAMENT = user_cfg.BPU_USE_TOURNAMENT;
     cfg.BPU_BTB_HASH_ENABLE = user_cfg.BPU_BTB_HASH_ENABLE;
     cfg.BPU_BHT_HASH_ENABLE = user_cfg.BPU_BHT_HASH_ENABLE;
-    cfg.BPU_BTB_ENTRIES = (user_cfg.BPU_BTB_ENTRIES >= 16) ? user_cfg.BPU_BTB_ENTRIES : 128;
+    cfg.BPU_BTB_ENTRIES = (user_cfg.BPU_BTB_ENTRIES >= 16) ? user_cfg.BPU_BTB_ENTRIES : 512;
     cfg.BPU_BHT_ENTRIES = (user_cfg.BPU_BHT_ENTRIES >= 32) ? user_cfg.BPU_BHT_ENTRIES : 512;
     cfg.BPU_RAS_DEPTH = (user_cfg.BPU_RAS_DEPTH >= 4) ? user_cfg.BPU_RAS_DEPTH : 16;
     cfg.BPU_GHR_BITS = (user_cfg.BPU_GHR_BITS >= 4) ? user_cfg.BPU_GHR_BITS : 8;

@@ -35,6 +35,7 @@ module rob #(
     input logic            [DISPATCH_WIDTH-1:0]               dispatch_is_call_i,
     input logic            [DISPATCH_WIDTH-1:0]               dispatch_is_ret_i,
     input logic            [DISPATCH_WIDTH-1:0]               dispatch_is_rvc_i,
+    input logic            [DISPATCH_WIDTH-1:0][Cfg.PLEN-1:0] dispatch_pred_npc_i,
     input logic [DISPATCH_WIDTH-1:0][decode_pkg::FTQ_ID_W-1:0] dispatch_ftq_id_i,
     input logic [DISPATCH_WIDTH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] dispatch_fetch_epoch_i,
 
@@ -98,6 +99,7 @@ module rob #(
     output logic [COMMIT_WIDTH-1:0]                    commit_is_call_o,
     output logic [COMMIT_WIDTH-1:0]                    commit_is_ret_o,
     output logic [COMMIT_WIDTH-1:0]                    commit_is_rvc_o,
+    output logic [COMMIT_WIDTH-1:0][Cfg.PLEN-1:0]      commit_pred_npc_o,
     output logic [COMMIT_WIDTH-1:0][Cfg.PLEN-1:0]      commit_actual_npc_o,
     output logic [COMMIT_WIDTH-1:0][decode_pkg::FTQ_ID_W-1:0] commit_ftq_id_o,
     output logic [COMMIT_WIDTH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] commit_fetch_epoch_o,
@@ -124,6 +126,9 @@ module rob #(
     output logic [QUERY_WIDTH-1:0][         Cfg.XLEN-1:0] query_data_o,
     output logic [QUERY_WIDTH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] query_fetch_epoch_o,
     output logic [QUERY_WIDTH-1:0][Cfg.PLEN-1:0] query_pc_o,
+    output logic [QUERY_WIDTH-1:0] query_valid_o,
+    output logic [QUERY_WIDTH-1:0] query_has_rd_o,
+    output logic [QUERY_WIDTH-1:0][4:0] query_areg_o,
 
     output logic rob_empty_o,
     output logic rob_full_o,
@@ -167,6 +172,7 @@ module rob #(
     logic is_call;
     logic is_ret;
     logic is_rvc;
+    logic [Cfg.PLEN-1:0] pred_npc;
     logic [Cfg.XLEN-1:0] data;
     logic [Cfg.PLEN-1:0] pc;
     logic [Cfg.ILEN-1:0] inst;
@@ -277,6 +283,7 @@ module rob #(
     commit_is_call_o = '0;
     commit_is_ret_o = '0;
     commit_is_rvc_o = '0;
+    commit_pred_npc_o = '0;
     commit_actual_npc_o = '0;
     commit_ftq_id_o = '0;
     commit_fetch_epoch_o = '0;
@@ -359,6 +366,7 @@ module rob #(
               commit_is_call_o[i] = rob_ram[commit_rob_index_o[i]].is_call;
               commit_is_ret_o[i] = rob_ram[commit_rob_index_o[i]].is_ret;
               commit_is_rvc_o[i] = rob_ram[commit_rob_index_o[i]].is_rvc;
+              commit_pred_npc_o[i] = rob_ram[commit_rob_index_o[i]].pred_npc;
               commit_actual_npc_o[i] = head_fast_redirect_pc[i];
               commit_ftq_id_o[i] = rob_ram[commit_rob_index_o[i]].ftq_id;
               commit_fetch_epoch_o[i] = rob_ram[commit_rob_index_o[i]].fetch_epoch;
@@ -391,6 +399,7 @@ module rob #(
               commit_is_call_o[i] = rob_ram[commit_rob_index_o[i]].is_call;
               commit_is_ret_o[i] = rob_ram[commit_rob_index_o[i]].is_ret;
               commit_is_rvc_o[i] = rob_ram[commit_rob_index_o[i]].is_rvc;
+              commit_pred_npc_o[i] = rob_ram[commit_rob_index_o[i]].pred_npc;
               commit_actual_npc_o[i] = head_fast_redirect_pc[i];
               commit_ftq_id_o[i] = rob_ram[commit_rob_index_o[i]].ftq_id;
               commit_fetch_epoch_o[i] = rob_ram[commit_rob_index_o[i]].fetch_epoch;
@@ -415,6 +424,9 @@ module rob #(
       query_data_o[q]  = rob_ram[query_rob_idx_i[q]].data;
       query_fetch_epoch_o[q] = rob_ram[query_rob_idx_i[q]].fetch_epoch;
       query_pc_o[q] = rob_ram[query_rob_idx_i[q]].pc;
+      query_valid_o[q] = rob_ram[query_rob_idx_i[q]].valid;
+      query_has_rd_o[q] = rob_ram[query_rob_idx_i[q]].has_rd;
+      query_areg_o[q] = rob_ram[query_rob_idx_i[q]].areg;
       for (int a = 0; a < DISPATCH_WIDTH; a++) begin
         if (fast_alu_valid_i[a] && (fast_alu_rob_idx_i[a] == query_rob_idx_i[q])) begin
           query_ready_o[q] = 1'b1;
@@ -623,6 +635,7 @@ module rob #(
             rob_ram[w_idx].is_call     <= dispatch_is_call_i[i];
             rob_ram[w_idx].is_ret      <= dispatch_is_ret_i[i];
             rob_ram[w_idx].is_rvc      <= dispatch_is_rvc_i[i];
+            rob_ram[w_idx].pred_npc    <= dispatch_pred_npc_i[i];
             rob_ram[w_idx].pc          <= dispatch_pc_i[i];
             rob_ram[w_idx].inst        <= dispatch_inst_i[i];
             rob_ram[w_idx].decoded_inst <= dispatch_decoded_inst_i[i];

@@ -102,7 +102,7 @@ make -C npc sim SNAPSHOT=1 \
         --progress=2000000 \
         --linux-early-debug \
         --snapshot-interval=5000000 \
-        --snapshot-dir=npc/build/snapshots \
+        --snapshot-dir=snapshots \
         --snapshot-keep=3'
 ```
 
@@ -111,23 +111,32 @@ make -C npc sim SNAPSHOT=1 \
 | 不写 `DIFFTEST=` | 开启 Spike lockstep（默认） |
 | `SNAPSHOT=1` | 编译与运行均需；否则 snapshot 相关 ARGS 无效 |
 | `--snapshot-interval` | 周期性保存；`0` 表示禁用 |
-| `--snapshot-dir` | 快照目录，默认 `npc/build/snapshots` |
+| `--snapshot-dir` | 快照目录，默认 `snapshots`；在 `make -C npc` 下实际位于仓库的 `npc/snapshots` |
 | `--linux-early-debug` | 打印 `[linux-stage]` 启动里程碑（可选） |
 
-Snapshot 格式与恢复语法见 [sim-args.md](sim-args.md#simulation-snapshot)。
+Snapshot 格式、路径与兼容性详见 [sim-args.md](sim-args.md#simulation-snapshot)。
 
 ### 从 Snapshot 恢复继续跑
 
 ```bash
 make -C npc sim SNAPSHOT=1 \
   IMG=$PWD/fw_combined.bin \
-  ARGS='--snapshot-restore=npc/build/snapshots/triathlon-5000000.snap \
+  ARGS='--snapshot-restore=snapshots/triathlon-5000000.snap \
         --max-cycles=100000000 \
         --progress=2000000 \
         --linux-early-debug'
 ```
 
-将 `triathlon-5000000.snap` 换为 `--snapshot-dir` 下实际文件名。
+将 `triathlon-5000000.snap` 换为 `npc/snapshots/` 下实际文件名（ARGS 里写 `snapshots/...` 即可）。
+
+### Snapshot 使用注意（Linux 长跑）
+
+- **改 RTL 后**：旧 snap **不能** 用于新 `tb_triathlon`（Verilator 报 `different model`）。修复 backend/frontend 后须从头跑，或跑到目标 cycle 再存新 snap。
+- **只改 C++ 调试**（如 `npc_main` 写 NDJSON、`--linux-early-debug`）：RTL 与 `SNAPSHOT=1` 构建不变时，可从已有 snap 继续，免重跑数千万 cycle 启动段。
+- **路径**：`make -C npc` 的 cwd 是 `npc/`，默认 `--snapshot-dir=snapshots` → 仓库 `npc/snapshots/`；勿写 `npc/snapshots`（会落到 `npc/npc/snapshots/`）。
+- **IMG 与 DiffTest**：恢复时须与保存 snap 时相同的 `fw_combined.bin` 和 DiffTest 开关（默认开 Spike，关则写 `DIFFTEST=`）。
+
+典型工作流：先 `SNAPSHOT=1` 长跑并 `--snapshot-interval=5000000` 存盘 → difftest 在远 cycle 失败 → 仅加 C++ 日志 → 从最近 snap restore → 短跑复现；若改了 RTL，则放弃旧 snap，重新长跑。
 
 ### 快速调试（关闭 DiffTest）
 

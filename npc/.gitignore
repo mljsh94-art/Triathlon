@@ -31,6 +31,8 @@ ref/src/repo/riscv-isa-sim/
 build/
 !build/cover/
 !build/cover/expected_hits.txt
+snapshots/*
+!snapshots/.gitkeep
 build-cmake/
 profile/
 .history/
