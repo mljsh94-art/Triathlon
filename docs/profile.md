@@ -34,6 +34,8 @@ run_profile.sh → make sim --profile-json → <run_id>/dhrystone.json、coremar
 ```bash
 make -C npc profile-report
 make -C npc profile-report PROFILE_OUT_DIR=npc/profile/$(date +%Y%m%d-%H%M%S)
+# 自定义目录名与看板标签：npc/profile/<name>-<timestamp>/，看板显示 <name>
+make -C npc profile-report PROFILE_NAME=FTBupdate
 
 make -C npc profile-baseline
 make -C npc profile-dashboard

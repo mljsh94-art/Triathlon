@@ -44,14 +44,25 @@ make -C npc profile-dashboard
 `profile-dashboard` runs `build_index.py` then `build_dashboard.py` under `npc/profile/`.
 Each run also gets a rendered `summary.html` (click **查看完整报告** on the dashboard).
 
+## Custom run name (directory + dashboard)
+
+```bash
+# One variable: npc/profile/FTBupdate-<timestamp>/ + dashboard label "FTBupdate"
+make -C npc profile-report PROFILE_NAME=FTBupdate
+make -C npc profile-dashboard
+
+# Or set directory and label separately
+make -C npc profile-report PROFILE_OUT_DIR=npc/profile/my-run \
+  PROFILE_DISPLAY_NAME='BPU修复v1'
+```
+
 ## Rename dashboard labels
 
 Chart/table labels use `display_name` from `metadata.json` (falls back to directory name).
 
 ```bash
-# At collection time
-make -C npc profile-report PROFILE_OUT_DIR=npc/profile/my-run \
-  PROFILE_DISPLAY_NAME='BPU修复v1'
+# At collection time (alias of PROFILE_OUT_DIR + PROFILE_DISPLAY_NAME)
+make -C npc profile-report PROFILE_NAME=BPU修复v1
 
 # Rename an existing run, then refresh dashboard
 python3 npc/tools/profiler/set_display_name.py \

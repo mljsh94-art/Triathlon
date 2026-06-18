@@ -9,6 +9,9 @@ ARCH=riscv32im-npc
 : "${CROSS_COMPILE:=riscv64-unknown-elf-}"
 
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+if [[ -n "${PROFILE_NAME:-}" && -z "${OUT_DIR:-}" ]]; then
+  OUT_DIR="${NPC_HOME}/profile/${PROFILE_NAME}-${TIMESTAMP}"
+fi
 OUT_DIR=${OUT_DIR:-"${NPC_HOME}/profile/${TIMESTAMP}"}
 case "${OUT_DIR}" in
   /*) ;;

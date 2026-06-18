@@ -163,15 +163,27 @@ verify-all:
 
 PROFILE_TOOL_DIR := $(abspath ./tools/profiler)
 CROSS_COMPILE ?= riscv64-unknown-elf-
+PROFILE_NAME ?=
 PROFILE_OUT_DIR ?=
 PROFILE_ROOT ?= $(abspath ./profile)
 PROFILE_TAG ?= latest
 PROFILE_DISPLAY_NAME ?=
 PROFILE_TAG_DIR ?= $(abspath ./profile/$(PROFILE_TAG))
 
+# PROFILE_NAME sets output dir (npc/profile/<name>-<timestamp>) and dashboard label unless overridden.
+ifdef PROFILE_NAME
+ifeq ($(strip $(PROFILE_DISPLAY_NAME)),)
+PROFILE_DISPLAY_NAME := $(PROFILE_NAME)
+endif
+endif
+
 profile-report:
 	@if [ -n "$(PROFILE_OUT_DIR)" ]; then \
 		OUT_DIR=$(PROFILE_OUT_DIR) CROSS_COMPILE=$(CROSS_COMPILE) \
+			PROFILE_DISPLAY_NAME=$(PROFILE_DISPLAY_NAME) \
+			$(PROFILE_TOOL_DIR)/run_profile.sh; \
+	elif [ -n "$(PROFILE_NAME)" ]; then \
+		PROFILE_NAME=$(PROFILE_NAME) CROSS_COMPILE=$(CROSS_COMPILE) \
 			PROFILE_DISPLAY_NAME=$(PROFILE_DISPLAY_NAME) \
 			$(PROFILE_TOOL_DIR)/run_profile.sh; \
 	else \

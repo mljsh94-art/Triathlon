@@ -37,8 +37,9 @@
 | `NPC_EXTRA` | *(空)* | AM `npc.mk` 透传（例：`NPC_EXTRA='ASSERT=1'`） |
 | `CROSS_COMPILE` | `riscv64-unknown-elf-` | profile-report 交叉编译前缀 |
 | `PROFILE_OUT_DIR` | 自动时间戳 | profile 输出目录 |
+| `PROFILE_NAME` | *(空)* | 输出 `npc/profile/<name>-<timestamp>/`，看板 `display_name` 为 `<name>` |
 | `PROFILE_TAG` | `latest` | profile-task 目录 tag |
-| `PROFILE_DISPLAY_NAME` | 目录名 | 看板显示名 |
+| `PROFILE_DISPLAY_NAME` | 目录名 | 看板显示名（可单独覆盖 `PROFILE_NAME` 的标签） |
 | `PROFILE_ROOT` | `npc/profile` | index/dashboard 扫描根 |
 
 ## 典型命令

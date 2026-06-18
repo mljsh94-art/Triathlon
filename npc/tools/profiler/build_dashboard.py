@@ -85,12 +85,6 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
     dhry_cycles = [r.get("cycles", {}).get("dhrystone", 0) for r in runs]
     core_cycles = [r.get("cycles", {}).get("coremark", 0) for r in runs]
     micro_cycles = [r.get("cycles", {}).get("microbench", 0) for r in runs]
-    dhry_cond_acc = [
-        r.get("predict_accuracy", {}).get("dhrystone", {}).get("cond_selected", 0) for r in runs
-    ]
-    core_cond_acc = [
-        r.get("predict_accuracy", {}).get("coremark", {}).get("cond_selected", 0) for r in runs
-    ]
 
     run_rows: list[str] = []
     detail_sections: list[str] = []
@@ -170,8 +164,6 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
         .replace("{{DHRY_CYCLES_JSON}}", json.dumps(dhry_cycles))
         .replace("{{CORE_CYCLES_JSON}}", json.dumps(core_cycles))
         .replace("{{MICRO_CYCLES_JSON}}", json.dumps(micro_cycles))
-        .replace("{{DHRY_COND_ACC_JSON}}", json.dumps(dhry_cond_acc))
-        .replace("{{CORE_COND_ACC_JSON}}", json.dumps(core_cond_acc))
         .replace("{{RUN_TABLE_ROWS}}", "\n".join(run_rows))
         .replace("{{DETAIL_SECTIONS}}", "\n".join(detail_sections))
     )
