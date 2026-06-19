@@ -10,7 +10,7 @@ import decode_pkg::*;
 module lsu_lane #(
     parameter config_pkg::cfg_t Cfg           = config_pkg::EmptyCfg,
     parameter int unsigned      ROB_IDX_WIDTH = 6,
-    parameter int unsigned      SB_DEPTH      = 16,
+    parameter int unsigned      SB_DEPTH      = 32,
     parameter int unsigned      SB_IDX_WIDTH  = $clog2(SB_DEPTH),
     parameter int unsigned      ECAUSE_WIDTH  = 5
 ) (

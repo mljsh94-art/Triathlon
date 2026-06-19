@@ -207,11 +207,25 @@ module tb_triathlon #(
     output logic                               dbg_lsu_ld_rsp_ready_o,
     output logic [Cfg.XLEN-1:0]                dbg_lsu_ld_rsp_data_o,
     output logic                               dbg_lsu_ld_rsp_err_o,
-    output logic [1:0]                         dbg_lsu_state_o,
+    output logic [2:0]                         dbg_lsu_state_o,
     output logic                               dbg_lsu_ld_fire_o,
     output logic                               dbg_lsu_rsp_fire_o,
     output logic [ROB_IDX_W-1:0]               dbg_lsu_inflight_tag_o,
     output logic [Cfg.PLEN-1:0]                dbg_lsu_inflight_addr_o,
+    output logic [3:0][2:0]                    dbg_lsu_lane_state_o,
+    output logic [3:0][ROB_IDX_W-1:0]          dbg_lsu_lane_req_tag_o,
+    output logic [3:0]                         dbg_lsu_lane_ld_req_valid_o,
+    output logic [3:0]                         dbg_lsu_lane_ld_rsp_ready_o,
+    output logic [3:0]                         dbg_lsu_lane_wb_valid_o,
+    output logic [3:0][ROB_IDX_W-1:0]          dbg_lsu_lane_wb_rob_idx_o,
+    output logic                               dbg_lsu_wb_valid_o,
+    output logic [ROB_IDX_W-1:0]               dbg_lsu_wb_rob_idx_o,
+    output logic                               dbg_lsu_store_wb_head_valid_o,
+    output logic [ROB_IDX_W-1:0]               dbg_lsu_store_wb_head_rob_idx_o,
+    output logic [6:0]                         dbg_wb_valid_o,
+    output logic [6:0][ROB_IDX_W-1:0]          dbg_wb_rob_idx_o,
+    output logic [6:0]                         dbg_fu_valid_o,
+    output logic [6:0]                         dbg_fu_ready_o,
     output logic                               dbg_lsu_issue_valid_o,
     output logic                               dbg_lsu_req_ready_o,
     output logic                               dbg_lsu_issue_ready_o,
@@ -628,6 +642,26 @@ module tb_triathlon #(
   assign dbg_lsu_rsp_fire_o     = dut.u_backend.lsu_ld_rsp_valid & dut.u_backend.lsu_ld_rsp_ready;
   assign dbg_lsu_inflight_tag_o = dut.u_backend.u_lsu_group.req_tag_q;
   assign dbg_lsu_inflight_addr_o = dut.u_backend.u_lsu_group.req_addr_q;
+  assign dbg_lsu_lane_state_o[0] = dut.u_backend.u_lsu_group.g_lanes[0].u_lane.state_q;
+  assign dbg_lsu_lane_state_o[1] = dut.u_backend.u_lsu_group.g_lanes[1].u_lane.state_q;
+  assign dbg_lsu_lane_state_o[2] = dut.u_backend.u_lsu_group.g_lanes[2].u_lane.state_q;
+  assign dbg_lsu_lane_state_o[3] = dut.u_backend.u_lsu_group.g_lanes[3].u_lane.state_q;
+  assign dbg_lsu_lane_req_tag_o[0] = dut.u_backend.u_lsu_group.g_lanes[0].u_lane.req_tag_q;
+  assign dbg_lsu_lane_req_tag_o[1] = dut.u_backend.u_lsu_group.g_lanes[1].u_lane.req_tag_q;
+  assign dbg_lsu_lane_req_tag_o[2] = dut.u_backend.u_lsu_group.g_lanes[2].u_lane.req_tag_q;
+  assign dbg_lsu_lane_req_tag_o[3] = dut.u_backend.u_lsu_group.g_lanes[3].u_lane.req_tag_q;
+  assign dbg_lsu_lane_ld_req_valid_o = dut.u_backend.u_lsu_group.lane_ld_req_valid;
+  assign dbg_lsu_lane_ld_rsp_ready_o = dut.u_backend.u_lsu_group.lane_ld_rsp_ready;
+  assign dbg_lsu_lane_wb_valid_o = dut.u_backend.u_lsu_group.lane_wb_valid;
+  assign dbg_lsu_lane_wb_rob_idx_o = dut.u_backend.u_lsu_group.lane_wb_rob_idx;
+  assign dbg_lsu_wb_valid_o = dut.u_backend.lsu_wb_valid;
+  assign dbg_lsu_wb_rob_idx_o = dut.u_backend.lsu_wb_tag;
+  assign dbg_lsu_store_wb_head_valid_o = dut.u_backend.u_lsu_group.store_wb_head_valid;
+  assign dbg_lsu_store_wb_head_rob_idx_o = dut.u_backend.u_lsu_group.store_wb_head_rob_idx;
+  assign dbg_wb_valid_o = dut.u_backend.wb_valid;
+  assign dbg_wb_rob_idx_o = dut.u_backend.wb_rob_idx;
+  assign dbg_fu_valid_o = dut.u_backend.fu_valid;
+  assign dbg_fu_ready_o = dut.u_backend.fu_ready;
   assign dbg_lsu_issue_valid_o  = dut.u_backend.lsu_en;
   assign dbg_lsu_req_ready_o    = dut.u_backend.lsu_req_ready;
   assign dbg_lsu_issue_ready_o  = dut.u_backend.lsu_issue_ready;

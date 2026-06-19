@@ -38,6 +38,8 @@ Key RTL tops: `frontend.sv`, `backend.sv`, `ifu.sv`, `bpu.sv`, `instr_aligner.sv
 | PLEN | 32 | Physical address width |
 | INSTR_PER_FETCH | 4 | Fetch/decode/dispatch width |
 | NRET | 4 | Retire width |
+| SB_DEPTH | 32 | Store buffer entries |
+| ROB_MAX_COMMIT_ST | 2 | Max store commits per cycle |
 | RS_DEPTH | 16 | Reservation station entries per FU queue |
 | ALU_COUNT | 2 | Config value (4 ALUs instantiated) |
 | FTQ_DEPTH | 16 | BPU→IFU fetch target queue |
@@ -75,8 +77,8 @@ Fetch -> Decode -> Rename -> Dispatch -> Issue -> Execute -> Writeback -> Commit
 | **Issue** | ALU RS (4-way), BRU/CSR single, LSU single (ROB-head CSR ordering). |
 | **Execute** | 4× ALU, BRU, LSU group (LQ/SQ, MDP, SV32 D-MMU, RV32A `.W`), CSR (delegation, PLIC/SEIP path, counters, `satp`). |
 | **Writeback** | 7 FU → 4 CDB ports. |
-| **Commit** | 64-entry ROB, up to 4/cycle (stores 1, branches 1, loads 2 max). Mispredict → flush + FE redirect. |
-| **Store buffer** | 16 entries; load forwarding; commit → DCache or MMIO hook. |
+| **Commit** | 64-entry ROB, up to 4/cycle (stores 2, branches 1, loads 2 max). Mispredict → flush + FE redirect. |
+| **Store buffer** | 32 entries; load forwarding; commit → DCache or MMIO hook. |
 
 ### Cache & Memory
 

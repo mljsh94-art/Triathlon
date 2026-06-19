@@ -7,6 +7,197 @@
 
 namespace npc {
 
+namespace {
+
+constexpr int kDebugLaneCount = 4;
+constexpr int kDebugRobIdxWidth = 7;
+constexpr int kDebugWbWidth = 7;
+constexpr int kDebugLsuFuIndex = 3;
+
+struct LsuHeadLaneSnapshot {
+  bool found = false;
+  uint32_t lane = 0;
+  uint32_t state = 0;
+  bool ld_req_valid = false;
+  bool ld_rsp_ready = false;
+  bool wb_valid = false;
+};
+
+bool bit_at(uint32_t mask, int idx) {
+  return ((mask >> idx) & 1u) != 0u;
+}
+
+uint32_t packed_field(uint32_t value, int idx, int width) {
+  const uint32_t mask = (width >= 32) ? 0xffffffffu : ((1u << width) - 1u);
+  return (value >> (idx * width)) & mask;
+}
+
+uint32_t lsu_lane_state(const Vtb_triathlon *top, int idx) {
+  return packed_field(static_cast<uint32_t>(top->dbg_lsu_lane_state_o), idx, 3);
+}
+
+uint32_t lsu_lane_req_tag(const Vtb_triathlon *top, int idx) {
+  return packed_field(static_cast<uint32_t>(top->dbg_lsu_lane_req_tag_o), idx, kDebugRobIdxWidth);
+}
+
+uint32_t lsu_lane_wb_rob_idx(const Vtb_triathlon *top, int idx) {
+  return packed_field(static_cast<uint32_t>(top->dbg_lsu_lane_wb_rob_idx_o), idx, kDebugRobIdxWidth);
+}
+
+uint32_t wb_rob_idx(const Vtb_triathlon *top, int idx) {
+  return packed_field(static_cast<uint32_t>(top->dbg_wb_rob_idx_o), idx, kDebugRobIdxWidth);
+}
+
+bool wb_selects_rob_head(const Vtb_triathlon *top, uint32_t head) {
+  const uint32_t wb_valid = static_cast<uint32_t>(top->dbg_wb_valid_o);
+  for (int i = 0; i < kDebugWbWidth; i++) {
+    if (bit_at(wb_valid, i) && wb_rob_idx(top, i) == head) return true;
+  }
+  return false;
+}
+
+bool lsu_group_wb_selects_rob_head(const Vtb_triathlon *top, uint32_t head) {
+  return top->dbg_lsu_wb_valid_o && static_cast<uint32_t>(top->dbg_lsu_wb_rob_idx_o) == head;
+}
+
+bool lsu_fu_ready(const Vtb_triathlon *top) {
+  return bit_at(static_cast<uint32_t>(top->dbg_fu_ready_o), kDebugLsuFuIndex);
+}
+
+LsuHeadLaneSnapshot find_lsu_head_lane(const Vtb_triathlon *top) {
+  LsuHeadLaneSnapshot snap;
+  const uint32_t head = static_cast<uint32_t>(top->dbg_rob_head_ptr_o);
+  const uint32_t lane_wb_valid = static_cast<uint32_t>(top->dbg_lsu_lane_wb_valid_o);
+  const uint32_t lane_ld_req_valid = static_cast<uint32_t>(top->dbg_lsu_lane_ld_req_valid_o);
+  const uint32_t lane_ld_rsp_ready = static_cast<uint32_t>(top->dbg_lsu_lane_ld_rsp_ready_o);
+
+  for (int i = 0; i < kDebugLaneCount; i++) {
+    if (bit_at(lane_wb_valid, i) &&
+        lsu_lane_wb_rob_idx(top, i) == head) {
+      snap.found = true;
+      snap.lane = static_cast<uint32_t>(i);
+      snap.state = lsu_lane_state(top, i);
+      snap.ld_req_valid = bit_at(lane_ld_req_valid, i);
+      snap.ld_rsp_ready = bit_at(lane_ld_rsp_ready, i);
+      snap.wb_valid = true;
+      return snap;
+    }
+  }
+
+  for (int i = 0; i < kDebugLaneCount; i++) {
+    const uint32_t state = lsu_lane_state(top, i);
+    if (state != 0u && lsu_lane_req_tag(top, i) == head) {
+      snap.found = true;
+      snap.lane = static_cast<uint32_t>(i);
+      snap.state = state;
+      snap.ld_req_valid = bit_at(lane_ld_req_valid, i);
+      snap.ld_rsp_ready = bit_at(lane_ld_rsp_ready, i);
+      snap.wb_valid = bit_at(lane_wb_valid, i);
+      return snap;
+    }
+  }
+
+  return snap;
+}
+
+const char *classify_lsu_head_lane_detail(const Vtb_triathlon *top, bool nonbp) {
+  LsuHeadLaneSnapshot lane = find_lsu_head_lane(top);
+  const uint32_t head = static_cast<uint32_t>(top->dbg_rob_head_ptr_o);
+  const bool lsu_wb_selects_head = lsu_group_wb_selects_rob_head(top, head);
+  const bool cdb_selects_head = wb_selects_rob_head(top, head);
+
+  if (!lane.found) {
+    if (cdb_selects_head) {
+      return nonbp ? "rob_head_lsu_incomplete_cdb_hit_no_lane_nonbp"
+                   : "rob_lsu_incomplete_cdb_hit_no_lane";
+    }
+    if (lsu_wb_selects_head) {
+      if (!lsu_fu_ready(top)) {
+        return nonbp ? "rob_head_lsu_incomplete_group_wb_not_ready_no_lane_nonbp"
+                     : "rob_lsu_incomplete_group_wb_not_ready_no_lane";
+      }
+      return nonbp ? "rob_head_lsu_incomplete_group_wb_hit_no_lane_nonbp"
+                   : "rob_lsu_incomplete_group_wb_hit_no_lane";
+    }
+    if (top->dbg_lsu_wb_valid_o) {
+      return nonbp ? "rob_head_lsu_incomplete_other_lsu_wb_no_lane_nonbp"
+                   : "rob_lsu_incomplete_other_lsu_wb_no_lane";
+    }
+    return nonbp ? "rob_head_lsu_incomplete_lane_not_found_nonbp"
+                 : "rob_lsu_incomplete_lane_not_found";
+  }
+
+  switch (lane.state) {
+    case 0u:
+      return nonbp ? "rob_head_lsu_incomplete_sm_idle_nonbp"
+                   : "rob_lsu_incomplete_sm_idle";
+    case 1u:
+      if (lane.ld_req_valid && !top->dbg_lsu_ld_req_ready_o) {
+        if (top->dbg_sb_dcache_req_valid_o && !top->dbg_sb_dcache_req_ready_o) {
+          return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_sb_conflict_nonbp"
+                       : "rob_lsu_wait_ld_req_ready_sb_conflict";
+        }
+        if (top->dbg_dc_mshr_full_o || !top->dbg_dc_mshr_alloc_ready_o) {
+          return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_mshr_blocked_nonbp"
+                       : "rob_lsu_wait_ld_req_ready_mshr_blocked";
+        }
+        if (top->dcache_miss_req_valid_o && !top->dcache_miss_req_ready_i) {
+          return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_miss_port_busy_nonbp"
+                       : "rob_lsu_wait_ld_req_ready_miss_port_busy";
+        }
+        return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_nonbp"
+                     : "rob_lsu_wait_ld_req_ready";
+      }
+      if (lane.ld_req_valid && top->dbg_lsu_ld_req_ready_o && !top->dbg_lsu_ld_fire_o) {
+        return nonbp ? "rob_head_lsu_incomplete_wait_req_grant_nonbp"
+                     : "rob_lsu_wait_ld_req_grant";
+      }
+      return nonbp ? "rob_head_lsu_incomplete_sm_req_wait_lane_nonbp"
+                   : "rob_lsu_incomplete_sm_req_wait_lane";
+    case 2u:
+      if (!top->dbg_lsu_ld_rsp_valid_o) {
+        return nonbp ? "rob_head_lsu_incomplete_wait_rsp_valid_nonbp"
+                     : "rob_lsu_wait_ld_rsp_valid";
+      }
+      if (!lane.ld_rsp_ready || !top->dbg_lsu_ld_rsp_ready_o) {
+        return nonbp ? "rob_head_lsu_incomplete_wait_rsp_ready_nonbp"
+                     : "rob_lsu_wait_ld_rsp_ready";
+      }
+      if (!top->dbg_lsu_rsp_fire_o) {
+        return nonbp ? "rob_head_lsu_incomplete_rsp_fire_gap_nonbp"
+                     : "rob_lsu_wait_ld_rsp_fire";
+      }
+      return nonbp ? "rob_head_lsu_incomplete_rsp_to_wb_nonbp"
+                   : "rob_lsu_rsp_to_wb";
+    case 3u:
+      if (lane.wb_valid) {
+        if (lsu_wb_selects_head) {
+          return nonbp ? "rob_head_lsu_incomplete_wait_wb_visible_nonbp"
+                       : "rob_lsu_wait_wb_visible";
+        }
+        if (top->dbg_lsu_store_wb_head_valid_o) {
+          return nonbp ? "rob_head_lsu_incomplete_wait_wb_store_priority_nonbp"
+                       : "rob_lsu_wait_wb_store_priority";
+        }
+        return nonbp ? "rob_head_lsu_incomplete_wait_wb_select_nonbp"
+                     : "rob_lsu_wait_wb_select";
+      }
+      return nonbp ? "rob_head_lsu_incomplete_wait_wb_no_lane_valid_nonbp"
+                   : "rob_lsu_wait_wb_no_lane_valid";
+    case 4u:
+      return nonbp ? "rob_head_lsu_incomplete_mmio_wait_rob_nonbp"
+                   : "rob_lsu_mmio_wait_rob";
+    case 5u:
+      return nonbp ? "rob_head_lsu_incomplete_mmio_req_nonbp"
+                   : "rob_lsu_mmio_req";
+    default:
+      return nonbp ? "rob_head_lsu_incomplete_sm_illegal_nonbp"
+                   : "rob_lsu_incomplete_sm_illegal";
+  }
+}
+
+}  // namespace
+
 void ProfileCollector::on_no_commit_cycle(uint64_t cycles,
                                           uint64_t no_commit_cycles,
                                           const Vtb_triathlon *top) {
@@ -25,7 +216,8 @@ void ProfileCollector::on_no_commit_cycle(uint64_t cycles,
   if (top->dbg_bru_ready_not_issued_o) branch_ready_not_issued_cycles_++;
   if (top->dbg_alu_ready_not_issued_o) alu_ready_not_issued_cycles_++;
   if (!top->dbg_rob_head_complete_o &&
-      (top->dbg_bru_wb_head_hit_o || top->dbg_alu_wb_head_hit_o)) {
+      (top->dbg_bru_wb_head_hit_o || top->dbg_alu_wb_head_hit_o ||
+       wb_selects_rob_head(top, static_cast<uint32_t>(top->dbg_rob_head_ptr_o)))) {
     complete_not_visible_cycles_++;
   }
 
@@ -127,6 +319,35 @@ void ProfileCollector::on_no_commit_cycle(uint64_t cycles,
               << " lsu_inflight(tag/addr)=0x" << std::hex
               << static_cast<uint32_t>(top->dbg_lsu_inflight_tag_o)
               << "/0x" << top->dbg_lsu_inflight_addr_o
+              << " lsu_lane_state=0x"
+              << lsu_lane_state(top, 0)
+              << "/" << lsu_lane_state(top, 1)
+              << "/" << lsu_lane_state(top, 2)
+              << "/" << lsu_lane_state(top, 3)
+              << " lsu_lane_req_tag=0x"
+              << lsu_lane_req_tag(top, 0)
+              << "/" << lsu_lane_req_tag(top, 1)
+              << "/" << lsu_lane_req_tag(top, 2)
+              << "/" << lsu_lane_req_tag(top, 3)
+              << " lsu_lane_wb(v/tag)=0x"
+              << std::hex << static_cast<uint32_t>(top->dbg_lsu_lane_wb_valid_o)
+              << "/0x" << lsu_lane_wb_rob_idx(top, 0)
+              << "/" << lsu_lane_wb_rob_idx(top, 1)
+              << "/" << lsu_lane_wb_rob_idx(top, 2)
+              << "/" << lsu_lane_wb_rob_idx(top, 3)
+              << " lsu_wb(v/tag/store_head)=0x" << static_cast<int>(top->dbg_lsu_wb_valid_o)
+              << "/0x" << static_cast<uint32_t>(top->dbg_lsu_wb_rob_idx_o)
+              << "/0x" << static_cast<int>(top->dbg_lsu_store_wb_head_valid_o)
+              << " wb(v/tags)=0x" << static_cast<uint32_t>(top->dbg_wb_valid_o)
+              << "/0x" << wb_rob_idx(top, 0)
+              << "/" << wb_rob_idx(top, 1)
+              << "/" << wb_rob_idx(top, 2)
+              << "/" << wb_rob_idx(top, 3)
+              << "/" << wb_rob_idx(top, 4)
+              << "/" << wb_rob_idx(top, 5)
+              << "/" << wb_rob_idx(top, 6)
+              << " fu(v/r)=0x" << static_cast<uint32_t>(top->dbg_fu_valid_o)
+              << "/0x" << static_cast<uint32_t>(top->dbg_fu_ready_o)
               << " lsug(busy/alloc_fire/alloc_lane/ld_owner)=0x"
               << static_cast<uint32_t>(top->dbg_lsu_grp_lane_busy_o)
               << std::dec << "/" << static_cast<int>(top->dbg_lsu_grp_alloc_fire_o)
@@ -422,52 +643,7 @@ const char *ProfileCollector::classify_rob_backpressure_detail_cycle(const Vtb_t
     if (fu == 1u) return "rob_head_fu_alu_incomplete";
     if (fu == 2u) return "rob_head_fu_branch_incomplete";
     if (fu == 3u) {
-      uint32_t sm = static_cast<uint32_t>(top->dbg_lsu_state_o);
-      bool ld_valid = top->dbg_lsu_ld_req_valid_o;
-      bool ld_ready = top->dbg_lsu_ld_req_ready_o;
-      bool rsp_valid = top->dbg_lsu_ld_rsp_valid_o;
-      bool rsp_ready = top->dbg_lsu_ld_rsp_ready_o;
-      uint32_t owner = static_cast<uint32_t>(top->dbg_lsu_grp_ld_owner_o);
-      bool alloc_fire = top->dbg_lsu_grp_alloc_fire_o;
-
-      if (sm == 0u) return "rob_lsu_incomplete_sm_idle";
-      if (sm == 1u) {
-        if (ld_valid && !ld_ready) {
-          if (owner != 0u) {
-            if (rsp_valid && rsp_ready) return "rob_lsu_wait_ld_req_ready_owner_rsp_fire";
-            if (!rsp_valid && rsp_ready) return "rob_lsu_wait_ld_req_ready_owner_rsp_valid";
-            if (rsp_valid && !rsp_ready) return "rob_lsu_wait_ld_req_ready_owner_rsp_ready";
-          }
-          if (top->dbg_sb_dcache_req_valid_o && !top->dbg_sb_dcache_req_ready_o) {
-            return "rob_lsu_wait_ld_req_ready_sb_conflict";
-          }
-          bool mshr_blocked = top->dbg_dc_mshr_full_o || !top->dbg_dc_mshr_alloc_ready_o;
-          if (mshr_blocked) return "rob_lsu_wait_ld_req_ready_mshr_blocked";
-          if (top->dcache_miss_req_valid_o && !top->dcache_miss_req_ready_i) {
-            return "rob_lsu_wait_ld_req_ready_miss_port_busy";
-          }
-          return "rob_lsu_wait_ld_req_ready";
-        }
-        if (!ld_valid && !ld_ready) {
-          if (owner != 0u) {
-            if (rsp_valid && rsp_ready) return "rob_lsu_wait_ld_owner_rsp_fire";
-            if (!rsp_valid && rsp_ready) return "rob_lsu_wait_ld_owner_rsp_valid";
-            if (rsp_valid && !rsp_ready) return "rob_lsu_wait_ld_owner_rsp_ready";
-            return "rob_lsu_wait_ld_owner_hold";
-          }
-          if (!alloc_fire) return "rob_lsu_wait_ld_arb_no_grant";
-        }
-        if (!top->dbg_lsu_ld_fire_o) return "rob_lsu_wait_ld_req_fire";
-        return "rob_lsu_incomplete_sm_req_unknown";
-      }
-      if (sm == 2u) {
-        if (!rsp_valid) return "rob_lsu_wait_ld_rsp_valid";
-        if (rsp_valid && !rsp_ready) return "rob_lsu_wait_ld_rsp_ready";
-        if (!top->dbg_lsu_rsp_fire_o) return "rob_lsu_wait_ld_rsp_fire";
-        return "rob_lsu_incomplete_sm_rsp_unknown";
-      }
-      if (sm == 3u) return "rob_lsu_wait_wb";
-      return "rob_lsu_incomplete_sm_illegal";
+      return classify_lsu_head_lane_detail(top, false);
     }
     if (fu == 4u || fu == 5u) return "rob_head_fu_mdu_incomplete";
     if (fu == 6u) return "rob_head_fu_csr_incomplete";
@@ -481,7 +657,6 @@ const char *ProfileCollector::classify_other_detail_cycle(const Vtb_triathlon *t
   uint32_t rob_count = static_cast<uint32_t>(top->dbg_rob_count_o);
   bool ren_ready = top->dbg_ren_ready_o;
   bool ren_fire = top->dbg_ren_fire_o;
-  uint32_t sm = static_cast<uint32_t>(top->dbg_lsu_state_o);
   uint32_t fu = static_cast<uint32_t>(top->dbg_rob_head_fu_o);
   bool rob_head_complete = top->dbg_rob_head_complete_o;
   bool rob_head_is_store = top->dbg_rob_head_is_store_o;
@@ -495,8 +670,16 @@ const char *ProfileCollector::classify_other_detail_cycle(const Vtb_triathlon *t
     return "rob_empty_refill_other";
   }
 
-  if (sm == 3u) {
-    if (fu == 3u && !rob_head_complete) return "lsu_wait_wb_head_lsu_incomplete";
+  if (top->dbg_lsu_wb_valid_o) {
+    const uint32_t head = static_cast<uint32_t>(top->dbg_rob_head_ptr_o);
+    if (fu == 3u && !rob_head_complete) {
+      if (wb_selects_rob_head(top, head)) return "lsu_wait_wb_head_lsu_cdb_visible";
+      if (lsu_group_wb_selects_rob_head(top, head)) {
+        return lsu_fu_ready(top) ? "lsu_wait_wb_head_lsu_group_visible"
+                                 : "lsu_wait_wb_head_lsu_cdb_blocked";
+      }
+      return "lsu_wait_wb_other_lsu_head_lsu_incomplete";
+    }
     if (fu == 3u && rob_head_complete) return "lsu_wait_wb_head_lsu_complete";
     if (q2_incomplete) return "lsu_wait_wb_q2_incomplete";
     return "lsu_wait_wb_other";
@@ -534,24 +717,7 @@ const char *ProfileCollector::classify_other_detail_cycle(const Vtb_triathlon *t
       return "rob_head_branch_wait_operand_or_select_incomplete_nonbp";
     }
     if (fu == 3u) {
-      bool ld_valid = top->dbg_lsu_ld_req_valid_o;
-      bool ld_ready = top->dbg_lsu_ld_req_ready_o;
-      bool rsp_valid = top->dbg_lsu_ld_rsp_valid_o;
-      bool rsp_ready = top->dbg_lsu_ld_rsp_ready_o;
-      if (sm == 0u) return "rob_head_lsu_incomplete_sm_idle_nonbp";
-      if (sm == 1u) {
-        if (ld_valid && !ld_ready) return "rob_head_lsu_incomplete_wait_req_ready_nonbp";
-        if (!ld_valid && !ld_ready) return "rob_head_lsu_incomplete_wait_owner_or_alloc_nonbp";
-        if (!top->dbg_lsu_ld_fire_o) return "rob_head_lsu_incomplete_req_fire_gap_nonbp";
-        return "rob_head_lsu_incomplete_sm_req_unknown_nonbp";
-      }
-      if (sm == 2u) {
-        if (!rsp_valid) return "rob_head_lsu_incomplete_wait_rsp_valid_nonbp";
-        if (rsp_valid && !rsp_ready) return "rob_head_lsu_incomplete_wait_rsp_ready_nonbp";
-        if (!top->dbg_lsu_rsp_fire_o) return "rob_head_lsu_incomplete_rsp_fire_gap_nonbp";
-        return "rob_head_lsu_incomplete_sm_rsp_unknown_nonbp";
-      }
-      return "rob_head_lsu_incomplete_sm_other_nonbp";
+      return classify_lsu_head_lane_detail(top, true);
     }
     if (fu == 4u || fu == 5u) return "rob_head_mdu_incomplete_nonbp";
     if (fu == 6u) return "rob_head_csr_incomplete_nonbp";
@@ -562,10 +728,10 @@ const char *ProfileCollector::classify_other_detail_cycle(const Vtb_triathlon *t
   if (!ren_ready) return "ren_not_ready";
   if (!ren_fire) return "ren_no_fire";
 
-  if (sm == 1u && top->dbg_lsu_ld_req_valid_o && top->dbg_lsu_ld_req_ready_o && !top->dbg_lsu_ld_fire_o) {
+  if (top->dbg_lsu_ld_req_valid_o && top->dbg_lsu_ld_req_ready_o && !top->dbg_lsu_ld_fire_o) {
     return "lsu_req_fire_gap";
   }
-  if (sm == 2u && top->dbg_lsu_ld_rsp_valid_o && top->dbg_lsu_ld_rsp_ready_o && !top->dbg_lsu_rsp_fire_o) {
+  if (top->dbg_lsu_ld_rsp_valid_o && top->dbg_lsu_ld_rsp_ready_o && !top->dbg_lsu_rsp_fire_o) {
     return "lsu_rsp_fire_gap";
   }
 

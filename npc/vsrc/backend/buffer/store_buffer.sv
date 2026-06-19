@@ -3,7 +3,7 @@ import config_pkg::*;
 import decode_pkg::*;
 
 module store_buffer #(
-    parameter int unsigned SB_DEPTH = 16,  // Store Buffer 深度
+    parameter int unsigned SB_DEPTH = 32,  // Store Buffer 深度
     parameter int unsigned ROB_IDX_WIDTH = 6,
     parameter int unsigned DISPATCH_WIDTH = 4,
     parameter int unsigned COMMIT_WIDTH = 4
@@ -111,8 +111,17 @@ module store_buffer #(
     end
   end
 
+  logic is_dummy_store;
+  logic wb_fire;
+  assign is_dummy_store = (mem[head_ptr].op == decode_pkg::LSU_SC_FAIL);
+  assign wb_fire = mem[head_ptr].valid && mem[head_ptr].committed &&
+                   mem[head_ptr].addr_valid && mem[head_ptr].data_valid &&
+                   (dcache_req_ready_i || is_dummy_store);
+
   // --- 分配接口邏輯 ---
   logic [$clog2(SB_DEPTH):0] alloc_count;
+  logic [$clog2(SB_DEPTH):0] drain_credit;
+  assign drain_credit = wb_fire ? {{($clog2(SB_DEPTH)){1'b0}}, 1'b1} : '0;
 
   always_comb begin
     int off;
@@ -120,7 +129,7 @@ module store_buffer #(
     for (int i = 0; i < DISPATCH_WIDTH; i++) begin
       if (alloc_req_i[i]) alloc_count++;
     end
-    alloc_ready_o = (count + alloc_count <= SB_DEPTH);
+    alloc_ready_o = (count + alloc_count <= SB_DEPTH + drain_credit);
 
     off = 0;
     for (int i = 0; i < DISPATCH_WIDTH; i++) begin
@@ -136,13 +145,6 @@ module store_buffer #(
   // =======================================================
   // Main Sequential Logic
   // =======================================================
-  logic is_dummy_store;
-  logic wb_fire;
-  assign is_dummy_store = (mem[head_ptr].op == decode_pkg::LSU_SC_FAIL);
-  assign wb_fire = mem[head_ptr].valid && mem[head_ptr].committed &&
-                   mem[head_ptr].addr_valid && mem[head_ptr].data_valid &&
-                   (dcache_req_ready_i || is_dummy_store);
-
   logic [$clog2(SB_DEPTH):0] alloc_num;
   always_comb begin
     if (alloc_fire_i && alloc_ready_o) begin
@@ -214,9 +216,29 @@ module store_buffer #(
       end
 
       // ------------------------------------
-      // 2. Allocation (入隊)
+      // 2. D-Cache Writeback (出隊)
       // ------------------------------------
-      // 只有在未發生 Flush 時才允許分配，避免舊指令污染
+      // 條件：隊頭有效 + 已退休 + 地址數據都就緒 + Cache 準備好
+      if (wb_fire) begin
+
+        mem[head_ptr].valid      <= 1'b0;  // 真正釋放 SB 空間
+        mem[head_ptr].committed  <= 1'b0;
+        mem[head_ptr].addr_valid <= 1'b0;
+        mem[head_ptr].data_valid <= 1'b0;
+        mem[head_ptr].rob_tag    <= '0;
+        head_ptr                 <= head_ptr + 1;
+        
+        if (mem[head_ptr].op == decode_pkg::LSU_SW || mem[head_ptr].op == decode_pkg::LSU_SC || mem[head_ptr].op == decode_pkg::LSU_SC_FAIL) begin
+`ifndef SYNTHESIS
+          // $display("[SB] Store Writeback! addr=%x data=%x op=%d dummy=%b", mem[head_ptr].addr, mem[head_ptr].data, mem[head_ptr].op, is_dummy_store);
+`endif
+        end
+      end
+
+      // ------------------------------------
+      // 3. Allocation (入隊)
+      // ------------------------------------
+      // 先出隊再入隊，允許滿 SB 在同周期 drain 一項並分配到同一物理槽。
       if (alloc_fire_i && alloc_ready_o && alloc_count != 0) begin
         int off;
         off = 0;
@@ -237,32 +259,12 @@ module store_buffer #(
       end
 
       // ------------------------------------
-      // 3. Commit (ROB 通知退休)
+      // 4. Commit (ROB 通知退休)
       // ------------------------------------
       // 支持同周期多條 store 退休
       for (int c = 0; c < COMMIT_WIDTH; c++) begin
         if (commit_valid_i[c]) begin
           mem[commit_sb_id_i[c]].committed <= 1'b1;
-        end
-      end
-
-      // ------------------------------------
-      // 4. D-Cache Writeback (出隊)
-      // ------------------------------------
-      // 條件：隊頭有效 + 已退休 + 地址數據都就緒 + Cache 準備好
-      if (wb_fire) begin
-
-        mem[head_ptr].valid      <= 1'b0;  // 真正釋放 SB 空間
-        mem[head_ptr].committed  <= 1'b0;
-        mem[head_ptr].addr_valid <= 1'b0;
-        mem[head_ptr].data_valid <= 1'b0;
-        mem[head_ptr].rob_tag    <= '0;
-        head_ptr                 <= head_ptr + 1;
-        
-        if (mem[head_ptr].op == decode_pkg::LSU_SW || mem[head_ptr].op == decode_pkg::LSU_SC || mem[head_ptr].op == decode_pkg::LSU_SC_FAIL) begin
-`ifndef SYNTHESIS
-          // $display("[SB] Store Writeback! addr=%x data=%x op=%d dummy=%b", mem[head_ptr].addr, mem[head_ptr].data, mem[head_ptr].op, is_dummy_store);
-`endif
         end
       end
 
@@ -394,8 +396,10 @@ module store_buffer #(
         for (int i = 0; i < DISPATCH_WIDTH; i++) begin
           if (alloc_req_i[i]) begin
             logic [$clog2(SB_DEPTH)-1:0] idx;
+            logic                         drains_this_idx;
             idx = tail_ptr + $clog2(SB_DEPTH)'(off);
-            `NPC_ASSERT(!mem[idx].valid, "sb/alloc_over_valid")
+            drains_this_idx = wb_fire && (idx == head_ptr);
+            `NPC_ASSERT(!mem[idx].valid || drains_this_idx, "sb/alloc_over_valid")
             off++;
           end
         end

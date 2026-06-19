@@ -10,10 +10,10 @@ module rob #(
     parameter int unsigned WB_WIDTH = 4,
     parameter int unsigned QUERY_WIDTH = DISPATCH_WIDTH * 2,
     // [新增] Store Buffer 参数
-    parameter int unsigned SB_DEPTH = 16,
+    parameter int unsigned SB_DEPTH = 32,
     parameter int unsigned SB_IDX_WIDTH = $clog2(SB_DEPTH),
     parameter int unsigned MAX_COMMIT_BR = 1,
-    parameter int unsigned MAX_COMMIT_ST = 1,
+    parameter int unsigned MAX_COMMIT_ST = 2,
     parameter int unsigned MAX_COMMIT_LD = 2
 ) (
     input logic clk_i,

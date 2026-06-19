@@ -6,7 +6,7 @@ module rename #(
     parameter config_pkg::cfg_t Cfg           = config_pkg::EmptyCfg,
     parameter int unsigned      ROB_DEPTH     = 64,
     parameter int unsigned      ROB_IDX_WIDTH = $clog2(ROB_DEPTH),
-    parameter int unsigned      SB_DEPTH      = 16,                    // Store Buffer 深度
+    parameter int unsigned      SB_DEPTH      = 32,                    // Store Buffer 深度
     parameter int unsigned      SB_IDX_WIDTH  = $clog2(SB_DEPTH)
 ) (
     input logic clk_i,

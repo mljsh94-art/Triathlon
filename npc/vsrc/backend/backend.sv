@@ -60,7 +60,7 @@ module backend #(
   localparam int unsigned COMMIT_WIDTH = Cfg.NRET;
   localparam int unsigned ROB_DEPTH = (Cfg.ROB_DEPTH >= DISPATCH_WIDTH) ? Cfg.ROB_DEPTH : 64;
   localparam int unsigned ROB_IDX_WIDTH = $clog2(ROB_DEPTH);
-  localparam int unsigned SB_DEPTH = (Cfg.SB_DEPTH >= 4) ? Cfg.SB_DEPTH : 16;
+  localparam int unsigned SB_DEPTH = (Cfg.SB_DEPTH >= 4) ? Cfg.SB_DEPTH : 32;
   localparam int unsigned SB_IDX_WIDTH = $clog2(SB_DEPTH);
   localparam int unsigned RS_DEPTH = Cfg.RS_DEPTH;
   localparam int unsigned WB_WIDTH = 7;
@@ -78,7 +78,7 @@ module backend #(
   localparam int unsigned FETCH_EPOCH_W = decode_pkg::FETCH_EPOCH_W;
   localparam int unsigned COMMIT_SEL_W = (COMMIT_WIDTH > 1) ? $clog2(COMMIT_WIDTH) : 1;
   localparam int unsigned ROB_MAX_COMMIT_BR = (Cfg.ROB_MAX_COMMIT_BR >= 1) ? Cfg.ROB_MAX_COMMIT_BR : 1;
-  localparam int unsigned ROB_MAX_COMMIT_ST = (Cfg.ROB_MAX_COMMIT_ST >= 1) ? Cfg.ROB_MAX_COMMIT_ST : 1;
+  localparam int unsigned ROB_MAX_COMMIT_ST = (Cfg.ROB_MAX_COMMIT_ST >= 1) ? Cfg.ROB_MAX_COMMIT_ST : 2;
   localparam int unsigned ROB_MAX_COMMIT_LD = (Cfg.ROB_MAX_COMMIT_LD >= 1) ? Cfg.ROB_MAX_COMMIT_LD : 2;
   localparam int unsigned LSU_LQ_DEPTH = (Cfg.ROB_DEPTH >= 16) ? 16 : Cfg.ROB_DEPTH;
   localparam int unsigned LSU_SQ_DEPTH = (Cfg.SB_DEPTH >= 16) ? 16 : Cfg.SB_DEPTH;

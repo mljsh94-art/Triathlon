@@ -5,7 +5,7 @@ import decode_pkg::*;
 module lsu_group #(
     parameter config_pkg::cfg_t Cfg           = config_pkg::EmptyCfg,
     parameter int unsigned      ROB_IDX_WIDTH = 6,
-    parameter int unsigned      SB_DEPTH      = 16,
+    parameter int unsigned      SB_DEPTH      = 32,
     parameter int unsigned      SB_IDX_WIDTH  = $clog2(SB_DEPTH),
     parameter int unsigned      LQ_DEPTH      = 16,
     parameter int unsigned      SQ_DEPTH      = 16,
@@ -154,7 +154,7 @@ module lsu_group #(
 `endif
 
   // Keep these debug names for existing testbench hierarchical probes.
-  logic                [               1:0]                    state_q;
+  logic                [               2:0]                    state_q;
   logic                [ ROB_IDX_WIDTH-1:0]                    req_tag_q;
   logic                [      Cfg.PLEN-1:0]                    req_addr_q;
   logic                [         N_LSU-1:0]                    dbg_lane_busy;

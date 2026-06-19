@@ -95,9 +95,14 @@ def get_hol_incomplete_sum(coremark: dict) -> float | None:
     if not detail:
         return None
 
-    total = float(detail.get("lsu_wait_wb_head_lsu_incomplete") or 0.0)
+    total = 0.0
     for key, value in detail.items():
-        if re.match(r"^rob_head_.*_incomplete_nonbp$", key):
+        if (
+            key == "lsu_wait_wb_head_lsu_incomplete"
+            or key.startswith("lsu_wait_wb_head_lsu_")
+            or key == "lsu_wait_wb_other_lsu_head_lsu_incomplete"
+            or re.match(r"^rob_head_.*_incomplete.*_nonbp$", key)
+        ):
             if not isinstance(value, (int, float)):
                 return None
             total += float(value)
@@ -171,8 +176,8 @@ def main() -> int:
         make_target(
             name="HOL incomplete stall reduction",
             metric=(
-                "sum(coremark.stall_other_detail.rob_head_*_incomplete_nonbp)"
-                " + coremark.stall_other_detail.lsu_wait_wb_head_lsu_incomplete"
+                "sum(coremark.stall_other_detail.rob_head_*_incomplete*_nonbp)"
+                " + sum(coremark.stall_other_detail.lsu_wait_wb_head_lsu*)"
             ),
             comparator="<=",
             threshold=PHASE1_BASELINE.coremark_hol_incomplete_sum * 0.55,

@@ -5,7 +5,7 @@ import global_config_pkg::*;
 
 module tb_lsu #(
     parameter int unsigned TB_ROB_IDX_WIDTH = 6,
-    parameter int unsigned TB_SB_DEPTH = 16,
+    parameter int unsigned TB_SB_DEPTH = 32,
     parameter int unsigned TB_SB_IDX_WIDTH = $clog2(TB_SB_DEPTH),
     parameter int unsigned TB_LSU_GROUP_SIZE = 2,
     parameter int unsigned TB_LD_ID_WIDTH = (TB_LSU_GROUP_SIZE <= 1) ? 1 : $clog2(TB_LSU_GROUP_SIZE),
