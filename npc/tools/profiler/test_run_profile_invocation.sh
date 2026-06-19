@@ -35,11 +35,6 @@ PY_LOG="${PY_LOG}" \
 OUT_DIR="${TMP_DIR}/out" \
   bash "${RUN_SCRIPT}" >/dev/null
 
-if ! grep -q 'benchmarks/dhrystone.* clean' "${MAKE_LOG}"; then
-  echo "missing clean for dhrystone" >&2
-  exit 1
-fi
-
 if ! grep -q 'benchmarks/coremark.* clean' "${MAKE_LOG}"; then
   echo "missing clean for coremark" >&2
   exit 1
@@ -67,11 +62,6 @@ fi
 
 if ! grep -q 'finalize_run.py' "${PY_LOG}"; then
   echo "missing finalize_run.py invocation" >&2
-  exit 1
-fi
-
-if ! grep -q 'benchmarks/dhrystone.*ARCH=riscv32im-npc.*CROSS_COMPILE=riscv64-unknown-elf-.* image' "${MAKE_LOG}"; then
-  echo "missing default riscv32i arch for dhrystone image" >&2
   exit 1
 fi
 

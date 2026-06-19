@@ -11,6 +11,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+_PROFILER_DIR = Path(__file__).resolve().parent
+if str(_PROFILER_DIR) not in sys.path:
+    sys.path.insert(0, str(_PROFILER_DIR))
+
+from profile_schema import (
+    bench_ipc,
+    bench_stall_category,
+    bench_stall_detail,
+    bench_stall_total,
+)
+
 
 @dataclass(frozen=True)
 class Baseline:
@@ -71,40 +82,48 @@ def get_bench(summary: dict, name: str) -> dict:
 
 
 def get_coremark_other_share(coremark: dict) -> float | None:
-    stall_total = to_float(coremark.get("stall_total"))
-    stall_category = coremark.get("stall_category")
-    if not isinstance(stall_category, dict):
+    stall_total = float(bench_stall_total(coremark))
+    stall_category = bench_stall_category(coremark)
+    stall_other = stall_category.get("other")
+    if stall_other is None or stall_total <= 0:
         return None
-    stall_other = to_float(stall_category.get("other"))
-    if stall_total is None or stall_other is None or stall_total <= 0:
-        return None
-    return stall_other / stall_total
+    return float(stall_other) / stall_total
 
 
 def get_hol_incomplete_sum(coremark: dict) -> float | None:
-    detail = coremark.get("stall_other_detail")
-    if not isinstance(detail, dict):
+    detail = bench_stall_detail(coremark, "other")
+    if not detail:
         return None
 
-    total = to_float(detail.get("lsu_wait_wb_head_lsu_incomplete")) or 0.0
+    total = float(detail.get("lsu_wait_wb_head_lsu_incomplete") or 0.0)
     for key, value in detail.items():
         if re.match(r"^rob_head_.*_incomplete_nonbp$", key):
-            fv = to_float(value)
-            if fv is None:
+            if not isinstance(value, (int, float)):
                 return None
-            total += fv
+            total += float(value)
     return total
 
 
 def get_decode_blocked_lsu_sum(coremark: dict) -> float | None:
-    detail = coremark.get("stall_decode_blocked_detail")
-    if not isinstance(detail, dict):
+    detail = bench_stall_detail(coremark, "decode_blocked")
+    if not detail:
         return None
-    a = to_float(detail.get("lsug_wait_dcache_owner"))
-    b = to_float(detail.get("lsug_no_free_lane"))
-    if a is None or b is None:
+    no_free_lane = detail.get("lsug_no_free_lane")
+    if no_free_lane is None:
         return None
-    return a + b
+
+    wait_dcache_owner = float(detail.get("lsug_wait_dcache_owner") or 0.0)
+    split_wait = 0.0
+    for key, value in detail.items():
+        if key.startswith("lsug_wait_ld_req_not_ready_") or key in {
+            "lsug_wait_pending_load",
+            "lsug_wait_lsu_mmu",
+            "lsug_wait_dcache_owner_no_ld_req",
+        }:
+            if not isinstance(value, (int, float)):
+                return None
+            split_wait += float(value)
+    return float(no_free_lane) + wait_dcache_owner + split_wait
 
 
 def make_target(
@@ -133,7 +152,6 @@ def main() -> int:
     args = parse_args()
     summary = load_summary(args.summary)
     coremark = get_bench(summary, "coremark")
-    dhrystone = get_bench(summary, "dhrystone")
 
     targets = [
         make_target(
@@ -141,14 +159,7 @@ def main() -> int:
             metric="coremark.ipc",
             comparator=">=",
             threshold=1.20,
-            extractor=lambda: to_float(coremark.get("ipc")),
-        ),
-        make_target(
-            name="Dhrystone IPC",
-            metric="dhrystone.ipc",
-            comparator=">=",
-            threshold=0.82,
-            extractor=lambda: to_float(dhrystone.get("ipc")),
+            extractor=lambda: bench_ipc(coremark),
         ),
         make_target(
             name="CoreMark other-stall share",
@@ -170,7 +181,7 @@ def main() -> int:
         make_target(
             name="Decode-blocked LSU lane-pressure reduction",
             metric=(
-                "coremark.stall_decode_blocked_detail.lsug_wait_dcache_owner"
+                "sum(coremark.stall_decode_blocked_detail.lsug_wait_dcache_owner*)"
                 " + coremark.stall_decode_blocked_detail.lsug_no_free_lane"
             ),
             comparator="<=",

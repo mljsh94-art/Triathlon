@@ -172,6 +172,13 @@ void ProfileCollector::on_no_commit_cycle(uint64_t cycles,
               << static_cast<uint32_t>(top->dbg_dc_mshr_count_o) << "/"
               << static_cast<int>(top->dbg_dc_mshr_full_o) << "/"
               << static_cast<int>(top->dbg_dc_mshr_empty_o)
+              << " dc_state/refill(v/r)/pending_ld/line_mshr(ld/st)="
+              << static_cast<uint32_t>(top->dbg_dcache_state_o) << "/"
+              << static_cast<int>(top->dbg_dcache_refill_valid_o) << "/"
+              << static_cast<int>(top->dbg_dcache_refill_ready_o) << "/"
+              << static_cast<int>(top->dbg_dcache_pending_ld_valid_o) << "/"
+              << static_cast<int>(top->dbg_dcache_ld_line_in_mshr_o) << "/"
+              << static_cast<int>(top->dbg_dcache_st_line_in_mshr_o)
               << " dc_mshr(alloc_rdy/line_hit)="
               << static_cast<int>(top->dbg_dc_mshr_alloc_ready_o) << "/"
               << static_cast<int>(top->dbg_dc_mshr_req_line_hit_o)
@@ -310,7 +317,37 @@ const char *ProfileCollector::classify_decode_blocked_detail_cycle(const Vtb_tri
   }
 
   if (static_cast<uint32_t>(top->dbg_lsu_grp_lane_busy_o) != 0u && !top->dbg_lsu_grp_alloc_fire_o) {
-    if (static_cast<uint32_t>(top->dbg_lsu_grp_ld_owner_o) == 0u) return "lsug_wait_dcache_owner";
+    if (static_cast<uint32_t>(top->dbg_lsu_grp_ld_owner_o) == 0u) {
+      const bool ld_req_wait = top->dbg_lsu_ld_req_valid_o && !top->dbg_lsu_ld_req_ready_o;
+      if (ld_req_wait) {
+        if (top->dbg_lsu_pte_req_valid_o) return "lsug_wait_ld_req_not_ready_lsu_pte";
+        if (top->dbg_ifu_pte_req_valid_o) return "lsug_wait_ld_req_not_ready_ifu_pte";
+        if (top->dbg_dcache_refill_valid_o) return "lsug_wait_ld_req_not_ready_refill";
+        if (top->dbg_dcache_pending_ld_valid_o) return "lsug_wait_ld_req_not_ready_pending_load";
+        if (top->dbg_sb_dcache_req_valid_o && !top->dbg_sb_dcache_req_ready_o) {
+          return "lsug_wait_ld_req_not_ready_store_conflict";
+        }
+        if (top->dbg_dcache_ld_line_in_mshr_o) return "lsug_wait_ld_req_not_ready_mshr_line_hit";
+        if (top->dbg_dc_mshr_full_o || !top->dbg_dc_mshr_alloc_ready_o) {
+          return "lsug_wait_ld_req_not_ready_mshr_blocked";
+        }
+
+        switch (static_cast<uint32_t>(top->dbg_dcache_state_o)) {
+          case 0u: return "lsug_wait_ld_req_not_ready_dcache_idle";
+          case 1u: return "lsug_wait_ld_req_not_ready_dcache_lookup";
+          case 2u: return "lsug_wait_ld_req_not_ready_dcache_store_write";
+          case 3u: return "lsug_wait_ld_req_not_ready_dcache_wb_req";
+          case 4u: return "lsug_wait_ld_req_not_ready_dcache_miss_req";
+          case 5u: return "lsug_wait_ld_req_not_ready_dcache_wait_refill";
+          case 6u: return "lsug_wait_ld_req_not_ready_dcache_resp";
+          default: return "lsug_wait_ld_req_not_ready_dcache_unknown";
+        }
+      }
+
+      if (top->dbg_lsu_pend_valid_o) return "lsug_wait_pending_load";
+      if (static_cast<uint32_t>(top->dbg_lsu_mmu_state_o) != 0u) return "lsug_wait_lsu_mmu";
+      return "lsug_wait_dcache_owner_no_ld_req";
+    }
     return "lsug_no_free_lane";
   }
 

@@ -14,10 +14,25 @@ from pathlib import Path
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
-from render_summary_html import format_predict_dashboard_lines, write_summary_html_for_run
+from profile_schema import (  # noqa: E402
+    PROFILE_BENCHMARKS,
+    bench_commits,
+    bench_cpi,
+    bench_cycles,
+    bench_ipc,
+    bench_predict,
+    bench_stall_detail,
+    bench_stall_section_total,
+    bench_stall_total,
+    top_stall_categories,
+)
+from render_summary_html import (  # noqa: E402
+    format_predict_dashboard_lines,
+    fmt_part_total,
+    write_summary_html_for_run,
+)
 
-BENCHMARKS = ("dhrystone", "coremark", "microbench")
-STALL_GATE_KEYS = ("frontend_empty", "rob_backpressure", "lsu_req_blocked")
+BENCHMARKS = PROFILE_BENCHMARKS
 
 
 def load_compare_module(script_dir: Path):
@@ -79,10 +94,8 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
     runs = index.get("runs", [])
 
     labels = [r.get("display_name") or r.get("run_id", "?") for r in runs]
-    dhry_ipc = [r.get("ipc", {}).get("dhrystone", 0) for r in runs]
     core_ipc = [r.get("ipc", {}).get("coremark", 0) for r in runs]
     micro_ipc = [r.get("ipc", {}).get("microbench", 0) for r in runs]
-    dhry_cycles = [r.get("cycles", {}).get("dhrystone", 0) for r in runs]
     core_cycles = [r.get("cycles", {}).get("coremark", 0) for r in runs]
     micro_cycles = [r.get("cycles", {}).get("microbench", 0) for r in runs]
 
@@ -105,14 +118,15 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
         alert_html = "<br>".join(html.escape(a) for a in alerts) if alerts else "-"
 
         run_label = display_name if display_name == run_id else f"{display_name} ({run_id})"
+        ipc_cells = "".join(
+            f"<td>{run.get('ipc', {}).get(bench, 0):.4f}</td>" for bench in BENCHMARKS
+        )
         run_rows.append(
             f"<tr><td>{html.escape(run_label)}</td>"
             f"<td>{html.escape(str(run.get('git_sha') or '-'))}</td>"
             f"<td>{html.escape(str(run.get('created_at') or '-'))}</td>"
             f"<td class='{status_class}'>{html.escape(status)}</td>"
-            f"<td>{run.get('ipc', {}).get('dhrystone', 0):.4f}</td>"
-            f"<td>{run.get('ipc', {}).get('coremark', 0):.4f}</td>"
-            f"<td>{run.get('ipc', {}).get('microbench', 0):.4f}</td>"
+            f"{ipc_cells}"
             f"<td>{alert_html}</td></tr>"
         )
 
@@ -127,20 +141,28 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
             if bench not in summary:
                 continue
             b = summary[bench]
-            stall = b.get("stall_category", {}) or {}
-            stall_total = b.get("stall_total", 0) or 1
-            stall_lines = []
-            for key in STALL_GATE_KEYS:
-                val = stall.get(key, 0)
-                pct = 100.0 * float(val) / float(stall_total) if stall_total else 0.0
-                stall_lines.append(f"{key}: {val} ({pct:.1f}%)")
-            predict = b.get("predict", {}) or {}
+            stall_total = bench_stall_total(b) or 1
+            top_stalls = top_stall_categories(b, limit=3)
+            stall_lines = [
+                f"{key}: {fmt_part_total(int(val), stall_total)} ({pct:.1f}%)"
+                for key, val, pct in top_stalls
+            ]
+            decode_detail = bench_stall_detail(b, "decode_blocked")
+            decode_total = bench_stall_section_total(b, "decode_blocked") or sum(
+                float(v) for v in decode_detail.values()
+            ) or 1
+            decode_top = sorted(decode_detail.items(), key=lambda kv: float(kv[1]), reverse=True)[:2]
+            decode_line = ", ".join(
+                f"{k}={fmt_part_total(v, decode_total)}" for k, v in decode_top
+            ) if decode_top else "-"
+            predict = bench_predict(b)
             miss_line, acc_line = format_predict_dashboard_lines(predict)
             bench_blocks.append(
-                f"<div><h4>{html.escape(bench)}</h4>"
-                f"<p>IPC={b.get('ipc', 0):.4f} CPI={b.get('cpi', 0):.4f} "
-                f"cycles={b.get('cycles', 0)} commits={b.get('commits', 0)}</p>"
-                f"<p><b>Stall gate:</b> {html.escape(' | '.join(stall_lines))}</p>"
+                f"<div class='bench-block'><h4>{html.escape(bench)}</h4>"
+                f"<p><b>KPI:</b> IPC={bench_ipc(b):.4f} CPI={bench_cpi(b):.4f} "
+                f"cycles={bench_cycles(b)} commits={bench_commits(b)}</p>"
+                f"<p><b>Top stall:</b> {html.escape(' | '.join(stall_lines) or '-')}</p>"
+                f"<p><b>Decode blocked top:</b> {html.escape(decode_line)}</p>"
                 f"<p><b>Predict miss:</b> {html.escape(miss_line)}</p>"
                 f"<p><b>Direction acc (commit):</b> {html.escape(acc_line)}</p></div>"
             )
@@ -158,10 +180,8 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
         .replace("{{RUN_COUNT}}", str(len(runs)))
         .replace("{{BASELINE_ID}}", html.escape(baseline_id))
         .replace("{{LABELS_JSON}}", json.dumps(labels))
-        .replace("{{DHRY_IPC_JSON}}", json.dumps(dhry_ipc))
         .replace("{{CORE_IPC_JSON}}", json.dumps(core_ipc))
         .replace("{{MICRO_IPC_JSON}}", json.dumps(micro_ipc))
-        .replace("{{DHRY_CYCLES_JSON}}", json.dumps(dhry_cycles))
         .replace("{{CORE_CYCLES_JSON}}", json.dumps(core_cycles))
         .replace("{{MICRO_CYCLES_JSON}}", json.dumps(micro_cycles))
         .replace("{{RUN_TABLE_ROWS}}", "\n".join(run_rows))

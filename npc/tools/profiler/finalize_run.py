@@ -11,7 +11,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-BENCHMARKS = ("dhrystone", "coremark", "microbench")
+from profile_schema import PROFILE_BENCHMARKS
+
+BENCHMARKS = PROFILE_BENCHMARKS
 
 
 def git_value(*args: str) -> str | None:

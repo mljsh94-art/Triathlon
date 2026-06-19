@@ -148,6 +148,9 @@ module tb_triathlon #(
     output logic                               dbg_ifu_pte_rsp_valid_o,
     output logic                               dbg_ifu_pte_upd_valid_o,
     output logic                               dbg_ifu_pte_upd_ready_o,
+    output logic                               dbg_lsu_pte_req_valid_o,
+    output logic                               dbg_lsu_pte_req_ready_o,
+    output logic                               dbg_lsu_pte_rsp_valid_o,
     output logic                               dbg_mux_mmu_ld_inflight_o,
     output logic                               dbg_mux_mmu_ld_owner_o,
     output logic                               dbg_ifetch_fault_valid_o,
@@ -260,6 +263,13 @@ module tb_triathlon #(
     output logic [Cfg.PLEN-1:0]                dbg_sb_dcache_req_addr_o,
     output logic [Cfg.XLEN-1:0]                dbg_sb_dcache_req_data_o,
     output logic [$bits(decode_pkg::lsu_op_e)-1:0] dbg_sb_dcache_req_op_o,
+    // Debug (D$ load/store arbitration)
+    output logic [2:0]                         dbg_dcache_state_o,
+    output logic                               dbg_dcache_refill_valid_o,
+    output logic                               dbg_dcache_refill_ready_o,
+    output logic                               dbg_dcache_pending_ld_valid_o,
+    output logic                               dbg_dcache_ld_line_in_mshr_o,
+    output logic                               dbg_dcache_st_line_in_mshr_o,
     // Debug (D$ MSHR)
     output logic [7:0]                         dbg_dc_mshr_count_o,
     output logic                               dbg_dc_mshr_full_o,
@@ -513,6 +523,9 @@ module tb_triathlon #(
   assign dbg_ifu_pte_rsp_valid_o = dut.ifu_pte_rsp_valid;
   assign dbg_ifu_pte_upd_valid_o = dut.ifu_pte_upd_valid;
   assign dbg_ifu_pte_upd_ready_o = dut.ifu_pte_upd_ready;
+  assign dbg_lsu_pte_req_valid_o = dut.u_backend.lsu_pte_req_valid;
+  assign dbg_lsu_pte_req_ready_o = dut.u_backend.lsu_pte_req_ready;
+  assign dbg_lsu_pte_rsp_valid_o = dut.u_backend.lsu_pte_rsp_valid;
   assign dbg_mux_mmu_ld_inflight_o = dut.u_backend.u_mmu_dcache_mux.mmu_ld_inflight_q;
   assign dbg_mux_mmu_ld_owner_o = dut.u_backend.u_mmu_dcache_mux.mmu_ld_owner_q;
   assign dbg_ifetch_fault_valid_o = dut.ifetch_fault_valid;
@@ -712,6 +725,12 @@ module tb_triathlon #(
   assign dbg_sb_dcache_req_addr_o  = dut.u_backend.sb_dcache_req_addr;
   assign dbg_sb_dcache_req_data_o  = dut.u_backend.sb_dcache_req_data;
   assign dbg_sb_dcache_req_op_o    = dut.u_backend.sb_dcache_req_op;
+  assign dbg_dcache_state_o = dut.u_backend.u_dcache.state_q;
+  assign dbg_dcache_refill_valid_o = dcache_refill_valid_i;
+  assign dbg_dcache_refill_ready_o = dcache_refill_ready_o;
+  assign dbg_dcache_pending_ld_valid_o = dut.u_backend.u_dcache.pending_ld_valid_q;
+  assign dbg_dcache_ld_line_in_mshr_o = dut.u_backend.u_dcache.ld_req_line_in_mshr;
+  assign dbg_dcache_st_line_in_mshr_o = dut.u_backend.u_dcache.st_req_line_in_mshr;
   always_comb begin
     commit_store_valid_o = '0;
     commit_store_addr_o  = '0;

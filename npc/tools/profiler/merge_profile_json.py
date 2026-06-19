@@ -8,7 +8,13 @@ import json
 import sys
 from pathlib import Path
 
-BENCHMARKS = ("dhrystone", "coremark", "microbench")
+_PROFILER_DIR = Path(__file__).resolve().parent
+if str(_PROFILER_DIR) not in sys.path:
+    sys.path.insert(0, str(_PROFILER_DIR))
+
+from profile_schema import PROFILE_BENCHMARKS, SCHEMA_VERSION  # noqa: E402
+
+BENCHMARKS = PROFILE_BENCHMARKS
 
 
 def merge_run_dir(run_dir: Path) -> dict:
@@ -45,6 +51,7 @@ def main() -> int:
 
     try:
         summary = merge_run_dir(run_dir)
+        summary["schema_version"] = SCHEMA_VERSION
     except (FileNotFoundError, json.JSONDecodeError) as exc:
         print(f"[merge] {exc}", file=sys.stderr)
         return 1

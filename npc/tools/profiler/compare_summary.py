@@ -3,10 +3,24 @@
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-BENCHMARKS = ("dhrystone", "coremark", "microbench")
+_PROFILER_DIR = Path(__file__).resolve().parent
+if str(_PROFILER_DIR) not in sys.path:
+    sys.path.insert(0, str(_PROFILER_DIR))
+
+from profile_schema import (
+    PROFILE_BENCHMARKS,
+    bench_cpi,
+    bench_cycles,
+    bench_ipc,
+    bench_stall_detail,
+    stall_share_pct,
+)
+
+BENCHMARKS = PROFILE_BENCHMARKS
 STALL_KEYS = ("frontend_empty", "lsu_req_blocked", "rob_backpressure")
 
 THRESHOLDS = {
@@ -33,12 +47,7 @@ def _pct_change(base: float, current: float) -> Optional[float]:
 
 
 def _stall_share_pct(bench_data: Dict, stall_key: str) -> float:
-    stall_total = bench_data.get("stall_total", 0)
-    stall_category = bench_data.get("stall_category", {}) or {}
-    stall_value = stall_category.get(stall_key, 0)
-    if stall_total <= 0:
-        return 0.0
-    return float(stall_value) / float(stall_total) * 100.0
+    return stall_share_pct(bench_data, stall_key)
 
 
 def _compare_degradation(
@@ -74,9 +83,7 @@ def compare_summary_dicts(base: Dict, current: Dict) -> Dict:
         base_bench = base[bench]
         cur_bench = current[bench]
 
-        ipc_degrade = _pct_change(
-            float(base_bench.get("ipc", 0.0)), float(cur_bench.get("ipc", 0.0))
-        )
+        ipc_degrade = _pct_change(bench_ipc(base_bench), bench_ipc(cur_bench))
         ipc_degrade = None if ipc_degrade is None else -ipc_degrade
         _compare_degradation(
             f"{bench}.ipc",
@@ -87,9 +94,7 @@ def compare_summary_dicts(base: Dict, current: Dict) -> Dict:
             failures,
         )
 
-        cpi_degrade = _pct_change(
-            float(base_bench.get("cpi", 0.0)), float(cur_bench.get("cpi", 0.0))
-        )
+        cpi_degrade = _pct_change(bench_cpi(base_bench), bench_cpi(cur_bench))
         _compare_degradation(
             f"{bench}.cpi",
             cpi_degrade,
@@ -100,7 +105,7 @@ def compare_summary_dicts(base: Dict, current: Dict) -> Dict:
         )
 
         cycles_degrade = _pct_change(
-            float(base_bench.get("cycles", 0.0)), float(cur_bench.get("cycles", 0.0))
+            float(bench_cycles(base_bench)), float(bench_cycles(cur_bench))
         )
         _compare_degradation(
             f"{bench}.cycles",

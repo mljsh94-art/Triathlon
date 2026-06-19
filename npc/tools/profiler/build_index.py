@@ -8,16 +8,22 @@ import json
 import sys
 from pathlib import Path
 
-BENCHMARKS = ("dhrystone", "coremark", "microbench")
+_PROFILER_DIR = Path(__file__).resolve().parent
+if str(_PROFILER_DIR) not in sys.path:
+    sys.path.insert(0, str(_PROFILER_DIR))
+
+from profile_schema import (
+    PROFILE_BENCHMARKS,
+    bench_commits,
+    bench_cpi,
+    bench_cycles,
+    bench_ipc,
+    bench_predict,
+    stall_share_pct,
+)
+
+BENCHMARKS = PROFILE_BENCHMARKS
 STALL_GATE_KEYS = ("frontend_empty", "rob_backpressure", "lsu_req_blocked")
-
-
-def stall_share_pct(bench_data: dict, key: str) -> float:
-    stall_total = float(bench_data.get("stall_total", 0) or 0)
-    stall_cat = bench_data.get("stall_category", {}) or {}
-    if stall_total <= 0:
-        return 0.0
-    return float(stall_cat.get(key, 0)) / stall_total * 100.0
 
 
 def load_metadata(run_dir: Path) -> dict:
@@ -62,14 +68,14 @@ def extract_run_entry(run_dir: Path) -> dict | None:
         if bench not in summary:
             continue
         b = summary[bench]
-        entry["ipc"][bench] = b.get("ipc", 0.0)
-        entry["cpi"][bench] = b.get("cpi", 0.0)
-        entry["cycles"][bench] = b.get("cycles", 0)
-        entry["commits"][bench] = b.get("commits", 0)
+        entry["ipc"][bench] = bench_ipc(b)
+        entry["cpi"][bench] = bench_cpi(b)
+        entry["cycles"][bench] = bench_cycles(b)
+        entry["commits"][bench] = bench_commits(b)
         entry["stall_gate_share_pct"][bench] = {
             k: stall_share_pct(b, k) for k in STALL_GATE_KEYS
         }
-        predict = b.get("predict", {}) or {}
+        predict = bench_predict(b)
         entry["predict_miss_rate"][bench] = {
             "cond": predict.get("cond_miss_rate", 0.0),
             "jump": predict.get("jump_miss_rate", 0.0),
@@ -109,7 +115,6 @@ def build_index(profile_root: Path, baseline_run_id: str = "baseline") -> dict:
             continue
         append_run(runs, extract_run_entry(child))
 
-    # Flat layout fallback: only when no run subdirectories exist (mis-set OUT_DIR).
     if not runs:
         append_run(runs, extract_run_entry(profile_root))
 

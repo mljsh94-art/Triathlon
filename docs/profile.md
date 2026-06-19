@@ -49,6 +49,26 @@ make -C npc sim DIFFTEST= IMG=.../dhrystone-riscv32i-npc.bin \
 
 仿真失败时保留 `<run_id>/dhrystone.sim.log`、`<run_id>/coremark.sim.log`、`<run_id>/microbench.sim.log`。
 
+## summary.json schema v2
+
+`summary.json` 根对象含 `schema_version: 2`；每个 benchmark 按层级组织（由 `profile_collector_json.cpp` 输出，`merge_profile_json.py` 合并）：
+
+| 区块 | 内容 |
+|------|------|
+| `meta` | 采集口径、`log_path`、质量标记 |
+| `kpi` | `ipc` / `cpi` / `cycles` / `commits` |
+| `commit` | `width_hist` 提交宽度分布 |
+| `flush` | 冲刷次数、误预测分类、`redirect`、原因直方图 |
+| `stall` | `category` 八大类 + `decode_blocked` / `rob_backpressure` / `frontend_empty` / `other` 明细 |
+| `frontend` | `ifu_fq` Fetch Queue |
+| `control` | 控制流指令统计 |
+| `predict` | 分支预测（含 `ftb` / `ittage` / `cond_provider`） |
+| `hotspots` | `top_pc` / `top_inst` / BPU 热点 |
+
+旧版扁平字段（v1）仍可通过 `npc/tools/profiler/profile_schema.py` 访问器读取；看板与回归脚本自动兼容。
+
+`summary.html` 报告按 **KPI → Flush → Stall → Predict → Hotspots** 分区展示；dashboard Run Details 显示 Top stall 与 decode_blocked 前列。
+
 改名后刷新看板：
 
 ```bash

@@ -20,28 +20,22 @@ class BuildIndexDashboardTest(unittest.TestCase):
     def _write_run(self, root: Path, run_id: str, ipc: float) -> None:
         run_dir = root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
-        bench = {
-            "ipc": ipc,
-            "cpi": 1.0 / ipc if ipc else 0.0,
-            "cycles": 1000,
-            "commits": int(1000 * ipc),
-            "stall_total": 100,
-            "stall_category": {
-                "frontend_empty": 40,
-                "rob_backpressure": 30,
-                "lsu_req_blocked": 10,
-            },
-            "predict": {
-                "cond_miss_rate": 0.1,
-                "jump_miss_rate": 0.2,
-                "ret_miss_rate": 0.05,
-                "cond_selected_accuracy": 0.975,
-                "cond_local_accuracy": 0.96,
-                "cond_global_accuracy": 0.97,
-                "tage_hit_rate": 0.93,
-            },
-        }
-        summary = {"dhrystone": bench, "coremark": bench}
+        bench = json.loads(
+            (Path(__file__).resolve().parent / "fixtures" / "minimal_bench.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        bench["kpi"]["ipc"] = ipc
+        bench["kpi"]["cpi"] = 1.0 / ipc if ipc else 0.0
+        bench["kpi"]["commits"] = int(1000 * ipc)
+        bench["predict"]["cond_miss_rate"] = 0.1
+        bench["predict"]["jump_miss_rate"] = 0.2
+        bench["predict"]["ret_miss_rate"] = 0.05
+        bench["predict"]["cond_selected_accuracy"] = 0.975
+        bench["predict"]["cond_local_accuracy"] = 0.96
+        bench["predict"]["cond_global_accuracy"] = 0.97
+        bench["predict"]["tage_hit_rate"] = 0.93
+        summary = {"schema_version": 2, "coremark": bench, "microbench": bench}
         (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
         (run_dir / "metadata.json").write_text(
             json.dumps({"run_id": run_id, "created_at": f"2026-06-05T12:00:00+00:00", "git_sha": "abc123"}),
@@ -64,7 +58,8 @@ class BuildIndexDashboardTest(unittest.TestCase):
             html = dash_mod.render_dashboard(root, script_dir)
             self.assertIn("Triathlon Profile Dashboard", html)
             self.assertIn("run2", html)
-            self.assertIn("dhrystone IPC", html)
+            self.assertIn("coremark IPC", html)
+            self.assertNotIn("dhrystone IPC", html)
             self.assertIn("../baseline/summary.html", html)
             self.assertIn("查看完整报告", html)
             self.assertNotIn("file://", html)
@@ -72,10 +67,13 @@ class BuildIndexDashboardTest(unittest.TestCase):
             self.assertTrue(report.exists())
             report_text = report.read_text(encoding="utf-8")
             self.assertIn("性能分析报告 - baseline", report_text)
-            self.assertIn("Stall 分类", report_text)
-            self.assertIn("方向预测精度", report_text)
+            self.assertIn("Stall 八大类", report_text)
+            self.assertIn("KPI · 总体性能", report_text)
             self.assertIn("Direction acc (commit)", html)
-            acc = index["runs"][0]["predict_accuracy"]["dhrystone"]["cond_selected"]
+            self.assertIn("Top stall", html)
+            self.assertIn("1/10", html)
+            self.assertIn("分/总", report_text)
+            acc = index["runs"][0]["predict_accuracy"]["coremark"]["cond_selected"]
             self.assertAlmostEqual(acc, 0.975)
 
     def test_build_index_flat_layout(self):
@@ -83,29 +81,23 @@ class BuildIndexDashboardTest(unittest.TestCase):
         dash_mod = load_module("build_dashboard")
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            bench = {
-                "ipc": 0.42,
-                "cpi": 1.0 / 0.42,
-                "cycles": 1000,
-                "commits": 420,
-                "stall_total": 100,
-                "stall_category": {
-                    "frontend_empty": 40,
-                    "rob_backpressure": 30,
-                    "lsu_req_blocked": 10,
-                },
-                "predict": {
-                "cond_miss_rate": 0.1,
-                "jump_miss_rate": 0.2,
-                "ret_miss_rate": 0.05,
-                "cond_selected_accuracy": 0.975,
-                "cond_local_accuracy": 0.96,
-                "cond_global_accuracy": 0.97,
-                "tage_hit_rate": 0.93,
-            },
-            }
+            bench = json.loads(
+                (Path(__file__).resolve().parent / "fixtures" / "minimal_bench.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            bench["kpi"]["ipc"] = 0.42
+            bench["kpi"]["cpi"] = 1.0 / 0.42
+            bench["kpi"]["commits"] = 420
+            bench["predict"]["cond_miss_rate"] = 0.1
+            bench["predict"]["jump_miss_rate"] = 0.2
+            bench["predict"]["ret_miss_rate"] = 0.05
+            bench["predict"]["cond_selected_accuracy"] = 0.975
+            bench["predict"]["cond_local_accuracy"] = 0.96
+            bench["predict"]["cond_global_accuracy"] = 0.97
+            bench["predict"]["tage_hit_rate"] = 0.93
             (root / "summary.json").write_text(
-                json.dumps({"dhrystone": bench, "coremark": bench}),
+                json.dumps({"schema_version": 2, "coremark": bench, "microbench": bench}),
                 encoding="utf-8",
             )
             (root / "metadata.json").write_text(
