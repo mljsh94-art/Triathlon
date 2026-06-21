@@ -262,6 +262,10 @@ module lsu_group #(
   logic                                                        translation_active;
   logic                [      Cfg.XLEN-1:0]                   req_in_eff_addr_xlen;
   logic                [      Cfg.PLEN-1:0]                   req_in_eff_addr;
+  logic                                                        agu_is_load;
+  logic                                                        agu_is_store;
+  logic                                                        agu_misaligned;
+  logic                                                        lane_misaligned;
   decode_pkg::uop_t                                            selected_uop;
   decode_pkg::uop_t                                            lane_uop;
   logic                [      Cfg.XLEN-1:0]                   selected_rs2_data;
@@ -538,12 +542,21 @@ module lsu_group #(
     end
   end
 
-  assign req_in_eff_addr_xlen = rs1_data_i + uop_i.imm;
-  assign req_in_eff_addr = req_in_eff_addr_xlen[Cfg.PLEN-1:0];
+  lsu_agu #(
+      .Cfg(Cfg)
+  ) u_agu (
+      .uop_i(uop_i),
+      .rs1_data_i(rs1_data_i),
+      .eff_addr_xlen_o(req_in_eff_addr_xlen),
+      .eff_addr_o(req_in_eff_addr),
+      .is_load_o(agu_is_load),
+      .is_store_o(agu_is_store),
+      .is_amo_o(),
+      .misaligned_o(agu_misaligned)
+  );
   assign translation_active = mmu_satp_i[31] && (mmu_priv_i != 2'b11);
-  assign req_need_mmu_walk = translation_active && (uop_i.is_load || uop_i.is_store) &&
-                             !is_store_misaligned(uop_i.lsu_op, req_in_eff_addr) &&
-                             !is_load_misaligned(uop_i.lsu_op, req_in_eff_addr);
+  assign req_need_mmu_walk = translation_active && (agu_is_load || agu_is_store) &&
+                             !agu_misaligned;
   assign req_accept_ready = !pend_valid_q && (mmu_state_q == MMU_ST_IDLE);
   assign req_accept_fire = req_valid_i && req_accept_ready && req_need_mmu_walk;
 `ifndef SYNTHESIS
@@ -605,10 +618,9 @@ module lsu_group #(
           .req_valid_i(lane_req_valid[gi]),
           .req_ready_o(lane_req_ready[gi]),
           .uop_i(lane_uop),
-          .rs1_data_i('0),
           .rs2_data_i(pend_valid_q ? pend_rs2_data_q : rs2_data_i),
-          .addr_override_valid_i(1'b1),
-          .addr_override_i(req_eff_addr),
+          .eff_addr_i(req_eff_addr),
+          .misaligned_i(lane_misaligned),
           .force_exception_i(req_has_force_fault),
           .force_ecause_i(req_force_ecause),
           .rob_tag_i(pend_valid_q ? pend_rob_tag_q : rob_tag_i),
@@ -684,6 +696,10 @@ module lsu_group #(
   assign req_addr_q = g_lanes[0].u_lane.req_addr_q;
   assign req_eff_addr_xlen = pend_valid_q ? {{(Cfg.XLEN-Cfg.PLEN){1'b0}}, pend_addr_q} : req_in_eff_addr_xlen;
   assign req_eff_addr = pend_valid_q ? pend_addr_q : req_in_eff_addr;
+  // Alignment for the address actually handed to the lane (selected/pend path).
+  // Equivalent to the lane's former internal is_misaligned(lane_uop, eff_addr).
+  assign lane_misaligned = is_store_misaligned(lane_uop.lsu_op, req_eff_addr) |
+                           is_load_misaligned(lane_uop.lsu_op, req_eff_addr);
   assign req_is_amo = selected_uop.lsu_op == decode_pkg::LSU_AMO;
   assign req_is_load = pend_valid_q ? selected_uop.is_load :
                        (!req_need_mmu_walk && req_valid_i && uop_i.is_load);

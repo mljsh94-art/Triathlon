@@ -24,10 +24,11 @@ module lsu_lane #(
     input  logic                                 req_valid_i,
     output logic                                 req_ready_o,
     input  decode_pkg::uop_t                     uop_i,
-    input  logic             [     Cfg.XLEN-1:0] rs1_data_i,
     input  logic             [     Cfg.XLEN-1:0] rs2_data_i,
-    input  logic                                 addr_override_valid_i,
-    input  logic             [     Cfg.PLEN-1:0] addr_override_i,
+    // Effective address + alignment are produced by lsu_agu and supplied by the
+    // group; the lane no longer computes rs1+imm or checks alignment itself.
+    input  logic             [     Cfg.PLEN-1:0] eff_addr_i,
+    input  logic                                 misaligned_i,
     input  logic                                 force_exception_i,
     input  logic             [ ECAUSE_WIDTH-1:0] force_ecause_i,
     input  logic             [ROB_IDX_WIDTH-1:0] rob_tag_i,
@@ -98,17 +99,6 @@ module lsu_lane #(
   // ---------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------
-  function automatic logic is_misaligned(input decode_pkg::lsu_op_e op,
-                                         input logic [Cfg.PLEN-1:0] addr);
-    unique case (op)
-      LSU_LB, LSU_LBU, LSU_SB: is_misaligned = 1'b0;
-      LSU_LH, LSU_LHU, LSU_SH: is_misaligned = addr[0];
-      LSU_LW, LSU_LWU, LSU_SW, LSU_LR, LSU_SC, LSU_AMO: is_misaligned = |addr[1:0];
-      LSU_LD, LSU_SD:          is_misaligned = |addr[2:0];
-      default:                 is_misaligned = 1'b0;
-    endcase
-  endfunction
-
   // Forwarded data extraction (assumes store data aligns to byte_off=0)
   function automatic logic [Cfg.XLEN-1:0] extract_fwd(input logic [Cfg.XLEN-1:0] data,
                                                       input decode_pkg::lsu_op_e op);
@@ -158,7 +148,6 @@ module lsu_lane #(
   // ---------------------------------------------------------
   logic is_load;
   logic is_store;
-  logic [Cfg.XLEN-1:0] eff_addr_xlen;
   logic [Cfg.PLEN-1:0] eff_addr;
   logic misaligned;
   logic [Cfg.XLEN-1:0] fwd_data;
@@ -175,9 +164,8 @@ module lsu_lane #(
   assign is_store      = uop_i.is_store;
   assign is_amo        = (uop_i.lsu_op == decode_pkg::LSU_AMO);
 
-  assign eff_addr_xlen = rs1_data_i + uop_i.imm;
-  assign eff_addr      = addr_override_valid_i ? addr_override_i : eff_addr_xlen[Cfg.PLEN-1:0];
-  assign misaligned    = is_misaligned(uop_i.lsu_op, eff_addr);
+  assign eff_addr      = eff_addr_i;
+  assign misaligned    = misaligned_i;
   assign is_mmio       = config_pkg::is_mmio_addr({{(32-Cfg.PLEN){1'b0}}, eff_addr});
 
   assign fwd_data      = extract_fwd(sb_load_data_i, uop_i.lsu_op);
