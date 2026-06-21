@@ -118,23 +118,14 @@ module lsu_group #(
   localparam int unsigned SQ_BYTE_OFF_W = (SQ_BE_WIDTH <= 1) ? 1 : $clog2(SQ_BE_WIDTH);
   localparam int unsigned STORE_WB_Q_DEPTH = (N_LSU < 2) ? 2 : N_LSU;
   localparam int unsigned STORE_WB_Q_IDX_W = (STORE_WB_Q_DEPTH <= 1) ? 1 : $clog2(STORE_WB_Q_DEPTH);
-  localparam logic [ECAUSE_WIDTH-1:0] EXC_LD_ADDR_MISALIGNED = ECAUSE_WIDTH'(4);
   localparam logic [ECAUSE_WIDTH-1:0] EXC_ST_ADDR_MISALIGNED = ECAUSE_WIDTH'(6);
   localparam logic [ECAUSE_WIDTH-1:0] EXC_LD_PAGE_FAULT = ECAUSE_WIDTH'(13);
   localparam logic [ECAUSE_WIDTH-1:0] EXC_ST_PAGE_FAULT = ECAUSE_WIDTH'(15);
-  localparam logic [1:0] MMU_ACCESS_LOAD  = 2'd1;
-  localparam logic [1:0] MMU_ACCESS_STORE = 2'd2;
   localparam logic [1:0] MMU_ST_IDLE = 2'd0;
-  localparam logic [1:0] MMU_ST_REQ = 2'd1;
-  localparam logic [1:0] MMU_ST_WAIT = 2'd2;
 `ifndef SYNTHESIS
   localparam int unsigned LSU_PF_LOG_BUDGET = 128;
   int unsigned lsu_pf_log_cnt_q;
-  localparam int unsigned LSU_REQ_TRACE_LOG_BUDGET = 128;
-  localparam int unsigned LSU_MMU_TRACE_LOG_BUDGET = 128;
   localparam int unsigned LSU_STALL_TRACE_LOG_BUDGET = 256;
-  int unsigned lsu_req_trace_log_cnt_q;
-  int unsigned lsu_mmu_trace_log_cnt_q;
   int unsigned lsu_stall_trace_log_cnt_q;
   logic [15:0] lsu_stall_streak_q;
   logic lsu_trace_en_q;
@@ -253,13 +244,10 @@ module lsu_group #(
   logic                                                        load_req_ready;
   logic                                                        req_has_force_fault;
   logic                [ECAUSE_WIDTH-1:0]                    req_force_ecause;
-  logic                                                        req_accept_fire;
-  logic                                                        req_accept_ready;
   logic                                                        req_need_mmu_walk;
   logic                                                        amo_inflight;
   logic                                                        amo_order_clear;
   logic                                                        req_ordered_load;
-  logic                                                        translation_active;
   logic                [      Cfg.XLEN-1:0]                   req_in_eff_addr_xlen;
   logic                [      Cfg.PLEN-1:0]                   req_in_eff_addr;
   logic                                                        agu_is_load;
@@ -280,21 +268,6 @@ module lsu_group #(
   logic                [ECAUSE_WIDTH-1:0]                    pend_force_ecause_q;
 
   logic                [             1:0]                     mmu_state_q;
-  decode_pkg::uop_t                                            mmu_uop_q;
-  logic                [      Cfg.XLEN-1:0]                   mmu_rs1_data_q;
-  logic                [      Cfg.XLEN-1:0]                   mmu_rs2_data_q;
-  logic                [ ROB_IDX_WIDTH-1:0]                   mmu_rob_tag_q;
-  logic                [  SB_IDX_WIDTH-1:0]                   mmu_sb_id_q;
-  logic                [      Cfg.PLEN-1:0]                   mmu_vaddr_q;
-  logic                                                        mmu_req_ready;
-  logic                                                        mmu_resp_valid;
-  logic                [             31:0]                    mmu_resp_paddr;
-  logic                                                        mmu_resp_page_fault;
-  logic                                                        mmu_pte_req_valid;
-  logic                [             31:0]                    mmu_pte_req_paddr;
-  logic                                                        mmu_pte_upd_valid;
-  logic                [             31:0]                    mmu_pte_upd_paddr;
-  logic                [             31:0]                    mmu_pte_upd_data;
 `ifndef SYNTHESIS
   logic                [             31:0]                    lsu_diag_pc_w;
   logic                                                        lsu_diag_stall_watch_w;
@@ -554,11 +527,6 @@ module lsu_group #(
       .is_amo_o(),
       .misaligned_o(agu_misaligned)
   );
-  assign translation_active = mmu_satp_i[31] && (mmu_priv_i != 2'b11);
-  assign req_need_mmu_walk = translation_active && (agu_is_load || agu_is_store) &&
-                             !agu_misaligned;
-  assign req_accept_ready = !pend_valid_q && (mmu_state_q == MMU_ST_IDLE);
-  assign req_accept_fire = req_valid_i && req_accept_ready && req_need_mmu_walk;
 `ifndef SYNTHESIS
   assign lsu_diag_pc_w = pend_valid_q ? pend_uop_q.pc : uop_i.pc;
   assign lsu_diag_stall_watch_w = lsu_diag_watch_pc(lsu_diag_pc_w);
@@ -568,38 +536,60 @@ module lsu_group #(
                                   (req_valid_i && (uop_i.is_load || uop_i.is_store) && !req_ready_o));
 `endif
 
-  assign pte_req_valid_o = mmu_pte_req_valid;
-  assign pte_req_paddr_o = mmu_pte_req_paddr;
-  assign pte_upd_valid_o = mmu_pte_upd_valid;
-  assign pte_upd_paddr_o = mmu_pte_upd_paddr;
-  assign pte_upd_data_o = mmu_pte_upd_data;
-
-  sv32_mmu #(
-      .TLB_ENTRIES(Cfg.DTLB_ENTRIES)
-  ) u_lsu_mmu (
+  // Unique address-translation entry point: owns the sv32 MMU and the MMU
+  // wrapper FSM + pend buffering that used to be inlined here. A walk-needing
+  // request is latched and resolved through req -> pend handshake; non-walk
+  // requests are reported via need_walk=0 and handled on the dispatch bypass.
+  lsu_translate #(
+      .Cfg(Cfg),
+      .ROB_IDX_WIDTH(ROB_IDX_WIDTH),
+      .SB_IDX_WIDTH(SB_IDX_WIDTH),
+      .ECAUSE_WIDTH(ECAUSE_WIDTH)
+  ) u_translate (
       .clk_i,
       .rst_ni,
-      .req_valid_i(mmu_state_q == MMU_ST_REQ),
-      .req_vaddr_i({{(32-Cfg.PLEN){1'b0}}, mmu_vaddr_q}),
-      .req_access_i(mmu_uop_q.is_store ? MMU_ACCESS_STORE : MMU_ACCESS_LOAD),
-      .req_priv_i(mmu_priv_i),
-      .req_sum_i(mmu_sum_i),
-      .req_mxr_i(mmu_mxr_i),
-      .satp_i(mmu_satp_i),
-      .sfence_vma_i(mmu_sfence_vma_i),
-      .req_ready_o(mmu_req_ready),
-      .resp_valid_o(mmu_resp_valid),
-      .resp_paddr_o(mmu_resp_paddr),
-      .resp_page_fault_o(mmu_resp_page_fault),
-      .pte_req_valid_o(mmu_pte_req_valid),
+      .flush_i,
+
+      .req_valid_i(req_valid_i),
+      .uop_i(uop_i),
+      .rs1_data_i(rs1_data_i),
+      .rs2_data_i(rs2_data_i),
+      .rob_tag_i(rob_tag_i),
+      .sb_id_i(sb_id_i),
+      .req_vaddr_i(req_in_eff_addr),
+      .req_is_load_i(agu_is_load),
+      .req_is_store_i(agu_is_store),
+      .req_misaligned_i(agu_misaligned),
+
+      .mmu_satp_i(mmu_satp_i),
+      .mmu_priv_i(mmu_priv_i),
+      .mmu_sum_i(mmu_sum_i),
+      .mmu_mxr_i(mmu_mxr_i),
+      .mmu_sfence_vma_i(mmu_sfence_vma_i),
+
+      .pte_req_valid_o(pte_req_valid_o),
       .pte_req_ready_i(pte_req_ready_i),
-      .pte_req_paddr_o(mmu_pte_req_paddr),
+      .pte_req_paddr_o(pte_req_paddr_o),
       .pte_rsp_valid_i(pte_rsp_valid_i),
       .pte_rsp_data_i(pte_rsp_data_i),
-      .pte_upd_valid_o(mmu_pte_upd_valid),
+      .pte_upd_valid_o(pte_upd_valid_o),
       .pte_upd_ready_i(pte_upd_ready_i),
-      .pte_upd_paddr_o(mmu_pte_upd_paddr),
-      .pte_upd_data_o(mmu_pte_upd_data)
+      .pte_upd_paddr_o(pte_upd_paddr_o),
+      .pte_upd_data_o(pte_upd_data_o),
+
+      .need_walk_o(req_need_mmu_walk),
+      .accept_ready_o(),
+      .mmu_state_o(mmu_state_q),
+
+      .pend_consume_i(load_alloc_fire || store_req_fire),
+      .pend_valid_o(pend_valid_q),
+      .pend_uop_o(pend_uop_q),
+      .pend_rs2_data_o(pend_rs2_data_q),
+      .pend_rob_tag_o(pend_rob_tag_q),
+      .pend_sb_id_o(pend_sb_id_q),
+      .pend_addr_o(pend_addr_q),
+      .pend_force_fault_o(pend_force_fault_q),
+      .pend_force_ecause_o(pend_force_ecause_q)
   );
 
   generate
@@ -941,21 +931,6 @@ module lsu_group #(
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      pend_valid_q <= 1'b0;
-      pend_uop_q <= '0;
-      pend_rs2_data_q <= '0;
-      pend_rob_tag_q <= '0;
-      pend_sb_id_q <= '0;
-      pend_addr_q <= '0;
-      pend_force_fault_q <= 1'b0;
-      pend_force_ecause_q <= '0;
-      mmu_state_q <= MMU_ST_IDLE;
-      mmu_uop_q <= '0;
-      mmu_rs1_data_q <= '0;
-      mmu_rs2_data_q <= '0;
-      mmu_rob_tag_q <= '0;
-      mmu_sb_id_q <= '0;
-      mmu_vaddr_q <= '0;
       store_wb_valid_q <= '0;
       store_wb_rob_idx_q <= '0;
       store_wb_data_q <= '0;
@@ -979,27 +954,10 @@ module lsu_group #(
       end
 `ifndef SYNTHESIS
       lsu_pf_log_cnt_q <= '0;
-      lsu_req_trace_log_cnt_q <= '0;
-      lsu_mmu_trace_log_cnt_q <= '0;
       lsu_stall_trace_log_cnt_q <= '0;
       lsu_stall_streak_q <= '0;
 `endif
     end else if (flush_i) begin
-      pend_valid_q <= 1'b0;
-      pend_uop_q <= '0;
-      pend_rs2_data_q <= '0;
-      pend_rob_tag_q <= '0;
-      pend_sb_id_q <= '0;
-      pend_addr_q <= '0;
-      pend_force_fault_q <= 1'b0;
-      pend_force_ecause_q <= '0;
-      mmu_state_q <= MMU_ST_IDLE;
-      mmu_uop_q <= '0;
-      mmu_rs1_data_q <= '0;
-      mmu_rs2_data_q <= '0;
-      mmu_rob_tag_q <= '0;
-      mmu_sb_id_q <= '0;
-      mmu_vaddr_q <= '0;
       store_wb_valid_q <= '0;
       store_wb_rob_idx_q <= '0;
       store_wb_data_q <= '0;
@@ -1046,95 +1004,8 @@ module lsu_group #(
         lane_amo_valid_q[wb_lane_idx] <= 1'b0;
       end
 
-      if (req_accept_fire) begin
 `ifndef SYNTHESIS
-        if (lsu_trace_en_q &&
-            (lsu_req_trace_log_cnt_q < LSU_REQ_TRACE_LOG_BUDGET) &&
-            lsu_diag_watch_pc(uop_i.pc)) begin
-          $display("[lsu-req] pc=%h rs1=%h rs2=%h imm=%h eff=%h need_mmu=%0d is_ld=%0d is_st=%0d rob=%0d sb=%0d ftq=%0d epoch=%0d",
-                   uop_i.pc, rs1_data_i, rs2_data_i, uop_i.imm, req_in_eff_addr, req_need_mmu_walk,
-                   uop_i.is_load, uop_i.is_store, rob_tag_i, sb_id_i, uop_i.ftq_id, uop_i.fetch_epoch);
-          lsu_req_trace_log_cnt_q <= lsu_req_trace_log_cnt_q + 1'b1;
-        end
-`endif
-        if ((uop_i.is_load || uop_i.is_store) && !req_need_mmu_walk) begin
-          pend_valid_q <= 1'b1;
-          pend_uop_q <= uop_i;
-          pend_rs2_data_q <= rs2_data_i;
-          pend_rob_tag_q <= rob_tag_i;
-          pend_sb_id_q <= sb_id_i;
-          pend_addr_q <= req_in_eff_addr;
-          pend_force_fault_q <= 1'b1;
-          if (uop_i.is_load) begin
-            pend_force_ecause_q <= EXC_LD_ADDR_MISALIGNED;
-          end else begin
-            pend_force_ecause_q <= EXC_ST_ADDR_MISALIGNED;
-          end
-        end else if (req_need_mmu_walk) begin
-          mmu_state_q <= MMU_ST_REQ;
-          mmu_uop_q <= uop_i;
-          mmu_rs1_data_q <= rs1_data_i;
-          mmu_rs2_data_q <= rs2_data_i;
-          mmu_rob_tag_q <= rob_tag_i;
-          mmu_sb_id_q <= sb_id_i;
-          mmu_vaddr_q <= req_in_eff_addr;
-        end else begin
-          pend_valid_q <= 1'b1;
-          pend_uop_q <= uop_i;
-          pend_rs2_data_q <= rs2_data_i;
-          pend_rob_tag_q <= rob_tag_i;
-          pend_sb_id_q <= sb_id_i;
-          pend_addr_q <= req_in_eff_addr;
-          pend_force_fault_q <= 1'b0;
-          pend_force_ecause_q <= '0;
-        end
-      end
-
-      if (mmu_state_q == MMU_ST_REQ && mmu_req_ready) begin
-        mmu_state_q <= MMU_ST_WAIT;
-      end
-
-      if (mmu_state_q == MMU_ST_WAIT && mmu_resp_valid) begin
-        mmu_state_q <= MMU_ST_IDLE;
-        pend_valid_q <= 1'b1;
-        pend_uop_q <= mmu_uop_q;
-        pend_rs2_data_q <= mmu_rs2_data_q;
-        pend_rob_tag_q <= mmu_rob_tag_q;
-        pend_sb_id_q <= mmu_sb_id_q;
-        pend_addr_q <= mmu_resp_page_fault ? mmu_vaddr_q[Cfg.PLEN-1:0] :
-                                            mmu_resp_paddr[Cfg.PLEN-1:0];
-        pend_force_fault_q <= mmu_resp_page_fault;
-        if (mmu_resp_page_fault && mmu_uop_q.is_store) begin
-          pend_force_ecause_q <= EXC_ST_PAGE_FAULT;
-        end else if (mmu_resp_page_fault && mmu_uop_q.is_load) begin
-          pend_force_ecause_q <= EXC_LD_PAGE_FAULT;
-        end else begin
-          pend_force_ecause_q <= '0;
-        end
-`ifndef SYNTHESIS
-        if (lsu_trace_en_q &&
-            (lsu_mmu_trace_log_cnt_q < LSU_MMU_TRACE_LOG_BUDGET) &&
-            lsu_diag_watch_pc(mmu_uop_q.pc)) begin
-          $display("[lsu-mmu-rsp] pc=%h vaddr=%h paddr=%h pf=%0d satp=%h priv=%0d rob=%0d sb=%0d epoch=%0d flush=%0d",
-                   mmu_uop_q.pc, mmu_vaddr_q, mmu_resp_paddr, mmu_resp_page_fault, mmu_satp_i, mmu_priv_i,
-                   mmu_rob_tag_q, mmu_sb_id_q, mmu_uop_q.fetch_epoch, flush_i);
-          lsu_mmu_trace_log_cnt_q <= lsu_mmu_trace_log_cnt_q + 1'b1;
-        end
-        if (lsu_trace_en_q && mmu_resp_page_fault) begin
-          if (lsu_pf_log_cnt_q < LSU_PF_LOG_BUDGET) begin
-            $display("[lsu-mmu-pf] pc=%h vaddr=%h satp=%h priv=%0d access=%0d sum=%0d mxr=%0d rob=%0d sb=%0d epoch=%0d flush=%0d",
-                     mmu_uop_q.pc, mmu_vaddr_q, mmu_satp_i, mmu_priv_i,
-                     mmu_uop_q.is_store ? MMU_ACCESS_STORE : MMU_ACCESS_LOAD,
-                     mmu_sum_i, mmu_mxr_i, mmu_rob_tag_q, mmu_sb_id_q, mmu_uop_q.fetch_epoch, flush_i);
-            lsu_pf_log_cnt_q <= lsu_pf_log_cnt_q + 1'b1;
-          end
-        end
-
-`endif
-      end
-
       if (load_alloc_fire || store_req_fire) begin
-`ifndef SYNTHESIS
         if (lsu_trace_en_q && req_has_force_fault) begin
           if (lsu_pf_log_cnt_q < LSU_PF_LOG_BUDGET) begin
             $display("[lsu-force-fault] pc=%h addr=%h is_ld=%0d is_st=%0d ecause=%0d rob=%0d pend=%0d epoch=%0d flush=%0d",
@@ -1146,9 +1017,8 @@ module lsu_group #(
             lsu_pf_log_cnt_q <= lsu_pf_log_cnt_q + 1'b1;
           end
         end
-`endif
-        pend_valid_q <= 1'b0;
       end
+`endif
 
       if (store_req_fire) begin
         store_wb_valid_q[store_wb_tail_q] <= 1'b1;

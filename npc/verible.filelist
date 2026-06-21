@@ -3,8 +3,10 @@
 ./vsrc/backend/decode/decoder.sv
 ./vsrc/backend/execute/alu.sv
 ./vsrc/backend/execute/csr.sv
+./vsrc/backend/execute/lsu_agu.sv
 ./vsrc/backend/execute/lsu_group.sv
 ./vsrc/backend/execute/lsu_lane.sv
+./vsrc/backend/execute/lsu_translate.sv
 ./vsrc/backend/issue/issue_lsu.sv
 ./vsrc/backend/issue/issue_select.sv
 ./vsrc/backend/issue/issue_single.sv
