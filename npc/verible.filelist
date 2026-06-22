@@ -4,6 +4,7 @@
 ./vsrc/backend/execute/alu.sv
 ./vsrc/backend/execute/csr.sv
 ./vsrc/backend/execute/lsu_agu.sv
+./vsrc/backend/execute/lsu_arbiter.sv
 ./vsrc/backend/execute/lsu_group.sv
 ./vsrc/backend/execute/lsu_lane.sv
 ./vsrc/backend/execute/lsu_translate.sv

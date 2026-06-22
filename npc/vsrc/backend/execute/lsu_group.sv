@@ -113,7 +113,6 @@ module lsu_group #(
 );
 
   localparam int unsigned LANE_SEL_WIDTH = (N_LSU <= 1) ? 1 : $clog2(N_LSU);
-  localparam int unsigned LD_ID_WIDTH = (N_LSU <= 1) ? 1 : $clog2(N_LSU);
   localparam int unsigned DBG_SEL_WIDTH = (N_LSU <= 1) ? 1 : $clog2(N_LSU + 1);
   localparam int unsigned SQ_BE_WIDTH = Cfg.XLEN / 8;
   localparam int unsigned SQ_BYTE_OFF_W = (SQ_BE_WIDTH <= 1) ? 1 : $clog2(SQ_BE_WIDTH);
@@ -196,18 +195,14 @@ module lsu_group #(
   logic                                                        load_alloc_fire;
   logic                                                        store_req_fire;
 
-  logic                [         N_LSU-1:0]                    ld_req_grant;
-  logic                [LANE_SEL_WIDTH-1:0]                    ld_req_lane_idx;
-  logic                                                        ld_req_grant_valid;
-  logic                                                        ld_req_fire;
-  logic                [LANE_SEL_WIDTH-1:0]                    ld_req_rr_q;
-
-  logic                [         N_LSU-1:0]                    wb_grant;
+  // DCache load request / writeback lane selection now live in lsu_arbiter;
+  // the group only consumes the granted writeback lane (final mux vs. the
+  // store-writeback path stays here as part of the store path).
   logic                [LANE_SEL_WIDTH-1:0]                    wb_lane_idx;
   logic                                                        wb_grant_valid;
   logic                                                        wb_fire;
   logic                                                        wb_sel_store;
-  logic                [LANE_SEL_WIDTH-1:0]                    wb_rr_q;
+  logic                                                        wb_pop_w;
 
   logic                                                        lq_alloc_valid;
   logic                                                        lq_alloc_ready;
@@ -287,8 +282,7 @@ module lsu_group #(
   logic store_wb_head_has_sq;
   logic [Cfg.PLEN-1:0] store_wb_head_pc;
 
-  logic rsp_id_in_range;
-  logic [LANE_SEL_WIDTH-1:0] rsp_lane_idx;
+  logic rsp_id_in_range;  // dbg-only: load response id within lane range
   logic [N_LSU-1:0] lane_amo_valid_q;
   decode_pkg::amo_op_e lane_amo_op_q[N_LSU];
   logic [N_LSU-1:0][Cfg.XLEN-1:0] lane_amo_rs2_q;
@@ -296,19 +290,6 @@ module lsu_group #(
   logic [N_LSU-1:0][Cfg.PLEN-1:0] lane_amo_addr_q;
   logic amo_wb_fire;
   logic [Cfg.XLEN-1:0] amo_wb_new_data;
-  function automatic logic [LANE_SEL_WIDTH-1:0] rr_next_idx(
-      input logic [LANE_SEL_WIDTH-1:0] idx
-  );
-    begin
-      if (N_LSU <= 1) begin
-        rr_next_idx = '0;
-      end else if (idx == LANE_SEL_WIDTH'(N_LSU - 1)) begin
-        rr_next_idx = '0;
-      end else begin
-        rr_next_idx = idx + LANE_SEL_WIDTH'(1);
-      end
-    end
-  endfunction
 
   function automatic logic [STORE_WB_Q_IDX_W-1:0] store_wbq_next_idx(
       input logic [STORE_WB_Q_IDX_W-1:0] idx
@@ -579,24 +560,48 @@ module lsu_group #(
   endgenerate
 
   // ---------------------------------------------------------
-  // MMIO request arbitration (priority: lowest lane index)
+  // Shared-resource arbitration (DCache req RR / MMIO / WB lane RR)
   // ---------------------------------------------------------
-  always_comb begin
-    mmio_req_valid_o  = 1'b0;
-    mmio_req_addr_o   = '0;
-    mmio_req_op_o     = decode_pkg::LSU_LW;
-    lane_mmio_req_ready = '0;
-    lane_mmio_rsp_valid = '0;
-    for (int i = 0; i < N_LSU; i++) begin
-      if (!mmio_req_valid_o && lane_mmio_req_valid[i]) begin
-        mmio_req_valid_o       = 1'b1;
-        mmio_req_addr_o        = lane_mmio_req_addr[i];
-        mmio_req_op_o          = lane_mmio_req_op[i];
-        lane_mmio_req_ready[i] = mmio_req_ready_i;
-        lane_mmio_rsp_valid[i] = mmio_rsp_valid_i;
-      end
-    end
-  end
+  lsu_arbiter #(
+      .Cfg(Cfg),
+      .N_LSU(N_LSU)
+  ) u_arbiter (
+      .clk_i,
+      .rst_ni,
+      .flush_i,
+
+      .lane_ld_req_valid_i(lane_ld_req_valid),
+      .lane_ld_req_addr_i(lane_ld_req_addr),
+      .lane_ld_req_op_i(lane_ld_req_op),
+      .lane_ld_req_ready_o(lane_ld_req_ready),
+      .ld_req_valid_o(ld_req_valid_o),
+      .ld_req_ready_i(ld_req_ready_i),
+      .ld_req_addr_o(ld_req_addr_o),
+      .ld_req_op_o(ld_req_op_o),
+      .ld_req_id_o(ld_req_id_o),
+
+      .ld_rsp_valid_i(ld_rsp_valid_i),
+      .ld_rsp_id_i(ld_rsp_id_i),
+      .ld_rsp_ready_o(ld_rsp_ready_o),
+      .lane_ld_rsp_ready_i(lane_ld_rsp_ready),
+      .lane_ld_rsp_valid_o(lane_ld_rsp_valid),
+
+      .lane_mmio_req_valid_i(lane_mmio_req_valid),
+      .lane_mmio_req_addr_i(lane_mmio_req_addr),
+      .lane_mmio_req_op_i(lane_mmio_req_op),
+      .lane_mmio_req_ready_o(lane_mmio_req_ready),
+      .lane_mmio_rsp_valid_o(lane_mmio_rsp_valid),
+      .mmio_req_valid_o(mmio_req_valid_o),
+      .mmio_req_ready_i(mmio_req_ready_i),
+      .mmio_req_addr_o(mmio_req_addr_o),
+      .mmio_req_op_o(mmio_req_op_o),
+      .mmio_rsp_valid_i(mmio_rsp_valid_i),
+
+      .lane_wb_valid_i(lane_wb_valid),
+      .wb_pop_i(wb_pop_w),
+      .wb_grant_valid_o(wb_grant_valid),
+      .wb_lane_idx_o(wb_lane_idx)
+  );
 
   assign state_q    = g_lanes[0].u_lane.state_q;
   assign req_tag_q  = g_lanes[0].u_lane.req_tag_q;
@@ -739,68 +744,9 @@ module lsu_group #(
     end
   end
 
-  always_comb begin
-    ld_req_grant = '0;
-    ld_req_lane_idx = '0;
-    ld_req_grant_valid = 1'b0;
-    for (int off = 0; off < N_LSU; off++) begin
-      int unsigned idx;
-      idx = $unsigned(ld_req_rr_q) + off;
-      if (idx >= N_LSU) begin
-        idx -= N_LSU;
-      end
-      if (!ld_req_grant_valid && lane_ld_req_valid[idx]) begin
-        ld_req_grant_valid = 1'b1;
-        ld_req_grant[idx] = 1'b1;
-        ld_req_lane_idx = LANE_SEL_WIDTH'(idx);
-      end
-    end
-  end
-
-  assign ld_req_valid_o = ld_req_grant_valid;
-  assign ld_req_id_o = LD_ID_WIDTH'(ld_req_lane_idx);
-  assign rsp_lane_idx = LANE_SEL_WIDTH'(ld_rsp_id_i);
-  assign rsp_id_in_range = ($unsigned(ld_rsp_id_i) < N_LSU);
-
-  always_comb begin
-    ld_req_addr_o = '0;
-    ld_req_op_o = decode_pkg::LSU_LW;
-    lane_ld_req_ready = '0;
-
-    if (ld_req_grant_valid) begin
-      ld_req_addr_o = lane_ld_req_addr[ld_req_lane_idx];
-      ld_req_op_o = lane_ld_req_op[ld_req_lane_idx];
-      lane_ld_req_ready[ld_req_lane_idx] = ld_req_ready_i;
-    end
-  end
-
-  always_comb begin
-    lane_ld_rsp_valid = '0;
-    ld_rsp_ready_o = 1'b0;
-    if (ld_rsp_valid_i && rsp_id_in_range) begin
-      lane_ld_rsp_valid[rsp_lane_idx] = 1'b1;
-      ld_rsp_ready_o = lane_ld_rsp_ready[rsp_lane_idx];
-    end
-  end
-
-  always_comb begin
-    wb_grant = '0;
-    wb_lane_idx = '0;
-    wb_grant_valid = 1'b0;
-    for (int off = 0; off < N_LSU; off++) begin
-      int unsigned idx;
-      idx = $unsigned(wb_rr_q) + off;
-      if (idx >= N_LSU) begin
-        idx -= N_LSU;
-      end
-      if (!wb_grant_valid && lane_wb_valid[idx]) begin
-        wb_grant_valid = 1'b1;
-        wb_grant[idx] = 1'b1;
-        wb_lane_idx = LANE_SEL_WIDTH'(idx);
-      end
-    end
-  end
-
+  // DCache load request RR, load response routing and writeback lane RR are
+  // owned by u_arbiter above; the group only performs the final writeback mux
+  // (store path vs. the arbiter-granted lane).
   always_comb begin
     wb_sel_store = store_wb_head_valid;
     wb_valid_o = store_wb_head_valid || wb_grant_valid;
@@ -837,7 +783,9 @@ module lsu_group #(
   assign amo_wb_new_data = amo_result(lane_amo_op_q[wb_lane_idx],
                                       lane_wb_data[wb_lane_idx],
                                       lane_amo_rs2_q[wb_lane_idx]);
-  assign ld_req_fire = ld_req_grant_valid && ld_req_ready_i;
+  // Advance the arbiter writeback round-robin pointer when the granted lane
+  // (not the store-writeback path) is actually consumed this cycle.
+  assign wb_pop_w = wb_fire && !wb_sel_store && wb_grant_valid;
   assign lq_pop_valid = wb_fire && !wb_sel_store;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -854,8 +802,6 @@ module lsu_group #(
       store_wb_head_q <= '0;
       store_wb_tail_q <= '0;
       store_wb_count_q <= '0;
-      wb_rr_q <= '0;
-      ld_req_rr_q <= '0;
       lane_amo_valid_q <= '0;
       for (int i = 0; i < N_LSU; i++) begin
         lane_amo_op_q[i] <= decode_pkg::AMO_NONE;
@@ -881,8 +827,6 @@ module lsu_group #(
       store_wb_head_q <= '0;
       store_wb_tail_q <= '0;
       store_wb_count_q <= '0;
-      wb_rr_q <= '0;
-      ld_req_rr_q <= '0;
       res_valid_q <= 1'b0;
       res_addr_q <= '0;
       lane_amo_valid_q <= '0;
@@ -955,9 +899,6 @@ module lsu_group #(
       end else if (!store_req_fire && (wb_fire && wb_sel_store)) begin
         store_wb_count_q <= store_wb_count_q - 1'b1;
       end
-      if (wb_fire && !wb_sel_store && wb_grant_valid) begin
-        wb_rr_q <= rr_next_idx(wb_lane_idx);
-      end
 `ifndef SYNTHESIS
       if (lsu_trace_en_q && wb_fire && wb_exception_o &&
           ((wb_ecause_o == EXC_LD_PAGE_FAULT) || (wb_ecause_o == EXC_ST_PAGE_FAULT))) begin
@@ -968,9 +909,6 @@ module lsu_group #(
         end
       end
 `endif
-      if (ld_req_fire) begin
-        ld_req_rr_q <= rr_next_idx(ld_req_lane_idx);
-      end
     end
   end
 
@@ -1029,6 +967,8 @@ module lsu_group #(
   assign dbg_sq_count_o = ($clog2(SQ_DEPTH + 1))'(store_wb_count_q);
   assign dbg_sq_head_valid_o = store_wb_head_valid;
   assign dbg_sq_head_rob_tag_o = store_wb_head_rob_idx;
+
+  assign rsp_id_in_range = ($unsigned(ld_rsp_id_i) < N_LSU);
 
   always_comb begin
     dbg_alloc_lane = load_alloc_fire ? DBG_SEL_WIDTH'(alloc_lane_idx + 1'b1) : '0;
