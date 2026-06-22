@@ -24,6 +24,7 @@ from profile_schema import (
     bench_hotspots,
     bench_ifu_fq,
     bench_ipc,
+    bench_mispredict_diag,
     bench_predict,
     bench_stall_category,
     bench_stall_detail,
@@ -195,6 +196,18 @@ TRANSLATIONS = {
     "jump_direct": "直接跳转误预测",
     "jump_indirect": "间接跳转误预测",
     "ret": "返回误预测",
+    "dir_wrong": "方向错 (BHT)",
+    "dir_ok_target_wrong": "方向对 target 错",
+    "slot_offset_bind": "半字 offset 绑定",
+    "ftb_no_entry_tag_miss": "FTB 无条目/tag miss",
+    "ftb_hit_cond_nt": "FTB 命中 BHT 判 NT",
+    "ftb_hit_out_of_range": "FTB 命中窗口外",
+    "ftb_hit_shadowed": "FTB 命中被遮蔽",
+    "ftb_unclassified": "FTB 未分类",
+    "bht_direction": "BHT 方向 (rollup)",
+    "ftb_structural": "FTB 结构 (rollup)",
+    "target_wrong": "Target 错 (rollup)",
+    "unclassified": "未分类 (rollup)",
 }
 
 SHARED_CSS = """
@@ -472,6 +485,15 @@ def render_benchmark_section(bench_name: str, raw: dict) -> str:
     mispredict_total = float(
         sum(v for k, v in mispredict.items() if k != "flush_count" and v) or 1.0
     )
+    mispredict_diag = bench_mispredict_diag(raw)
+    diag_detail = {
+        tr(k): v
+        for k, v in mispredict_diag.items()
+        if k not in ("rollup", "classified_total") and v
+    }
+    rollup = mispredict_diag.get("rollup") or {}
+    diag_rollup = {tr(k): v for k, v in rollup.items() if not k.endswith("_ratio") and v}
+    diag_total = float(mispredict_diag.get("classified_total", 0) or mispredict.get("flush_count", 0) or 1.0)
     flush_count_total = float(flush.get("count", 0) or 1.0)
     commits_total = float(bench_commits(raw) or 1)
 
@@ -482,6 +504,8 @@ def render_benchmark_section(bench_name: str, raw: dict) -> str:
         f"<div class='section'><div class='section-title'>Flush · 分支误预测代价</div>"
         f"<div class='metric-grid'>{flush_metrics}</div>"
         f"{bar_table('误预测分类', {tr(k): v for k, v in mispredict.items() if k != 'flush_count' and v}, mispredict_total)}"
+        f"{bar_table('误预测根因细分', diag_detail, diag_total) if diag_detail else ''}"
+        f"{bar_table('误预测根因汇总 (FTB vs BHT)', diag_rollup, diag_total) if diag_rollup else ''}"
         f"{bar_table('Flush 原因', flush.get('reason_histogram') or {}, flush_count_total)}"
         f"{bar_table('Commit 宽度分布', {str(k): v for k, v in commit_hist.items()}, float(cycles))}"
         f"</div>"

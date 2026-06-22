@@ -252,6 +252,57 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
      << ",\"jump_indirect\":" << pred_jump_indirect_miss_
      << ",\"ret\":" << pred_ret_miss_;
   os << "},";
+  const uint64_t md_dir_wrong = mispredict_diag_dir_wrong_;
+  const uint64_t md_dir_ok_target_wrong = mispredict_diag_dir_ok_target_wrong_;
+  const uint64_t md_slot_offset_bind = mispredict_diag_slot_offset_bind_;
+  const uint64_t md_ftb_no_entry = mispredict_diag_ftb_no_entry_tag_miss_;
+  const uint64_t md_ftb_hit_cond_nt = mispredict_diag_ftb_hit_cond_nt_;
+  const uint64_t md_ftb_hit_oor = mispredict_diag_ftb_hit_out_of_range_;
+  const uint64_t md_ftb_hit_shadowed = mispredict_diag_ftb_hit_shadowed_;
+  const uint64_t md_ftb_snap_epoch_mismatch = mispredict_diag_ftb_snap_epoch_mismatch_;
+  const uint64_t md_ftb_hit_oor_epoch_ok = mispredict_diag_ftb_hit_out_of_range_epoch_ok_;
+  const uint64_t md_ftb_hit_shadowed_epoch_ok = mispredict_diag_ftb_hit_shadowed_epoch_ok_;
+  const uint64_t md_ftb_unclassified = mispredict_diag_ftb_unclassified_;
+  const uint64_t md_other = mispredict_diag_other_;
+  const uint64_t md_no_commit_slot = mispredict_diag_no_commit_slot_;
+  const uint64_t md_bht_direction = md_dir_wrong + md_ftb_hit_cond_nt;
+  const uint64_t md_ftb_structural =
+      md_ftb_no_entry + md_ftb_hit_oor + md_ftb_hit_shadowed + md_slot_offset_bind;
+  const uint64_t md_target_wrong = md_dir_ok_target_wrong;
+  const uint64_t md_unclassified =
+      md_ftb_unclassified + md_other + md_no_commit_slot + md_ftb_snap_epoch_mismatch;
+  const uint64_t md_classified_total =
+      md_bht_direction + md_ftb_structural + md_target_wrong + md_unclassified;
+  os << "\"mispredict_diag\":{";
+  os << "\"dir_wrong\":" << md_dir_wrong
+     << ",\"dir_ok_target_wrong\":" << md_dir_ok_target_wrong
+     << ",\"slot_offset_bind\":" << md_slot_offset_bind
+     << ",\"ftb_no_entry_tag_miss\":" << md_ftb_no_entry
+     << ",\"ftb_hit_cond_nt\":" << md_ftb_hit_cond_nt
+     << ",\"ftb_hit_out_of_range\":" << md_ftb_hit_oor
+     << ",\"ftb_hit_shadowed\":" << md_ftb_hit_shadowed
+     << ",\"ftb_snap_epoch_mismatch\":" << md_ftb_snap_epoch_mismatch
+     << ",\"ftb_hit_out_of_range_epoch_ok\":" << md_ftb_hit_oor_epoch_ok
+     << ",\"ftb_hit_shadowed_epoch_ok\":" << md_ftb_hit_shadowed_epoch_ok
+     << ",\"ftb_unclassified\":" << md_ftb_unclassified
+     << ",\"other\":" << md_other
+     << ",\"no_commit_slot\":" << md_no_commit_slot
+     << ",\"classified_total\":" << md_classified_total
+     << ",\"rollup\":{"
+     << "\"bht_direction\":" << md_bht_direction
+     << ",\"bht_direction_ratio\":"
+     << safe_div(static_cast<double>(md_bht_direction), static_cast<double>(mispredict_flush_count_))
+     << ",\"ftb_structural\":" << md_ftb_structural
+     << ",\"ftb_structural_ratio\":"
+     << safe_div(static_cast<double>(md_ftb_structural), static_cast<double>(mispredict_flush_count_))
+     << ",\"target_wrong\":" << md_target_wrong
+     << ",\"target_wrong_ratio\":"
+     << safe_div(static_cast<double>(md_target_wrong), static_cast<double>(mispredict_flush_count_))
+     << ",\"unclassified\":" << md_unclassified
+     << ",\"unclassified_ratio\":"
+     << safe_div(static_cast<double>(md_unclassified), static_cast<double>(mispredict_flush_count_))
+     << "}";
+  os << "},";
   os << "\"redirect\":{";
   os << "\"distance_sum\":" << redirect_distance_sum_
      << ",\"distance_samples\":" << redirect_distance_samples_

@@ -181,6 +181,18 @@ def bench_flush(bench: dict) -> dict:
     }
 
 
+def bench_mispredict_diag(bench: dict) -> dict:
+    flush = bench_flush(bench)
+    diag = flush.get("mispredict_diag")
+    return diag if isinstance(diag, dict) else {}
+
+
+def bench_mispredict_diag_rollup(bench: dict) -> dict:
+    diag = bench_mispredict_diag(bench)
+    rollup = diag.get("rollup")
+    return rollup if isinstance(rollup, dict) else {}
+
+
 def bench_meta(bench: dict) -> dict:
     meta = bench.get("meta")
     if isinstance(meta, dict):
