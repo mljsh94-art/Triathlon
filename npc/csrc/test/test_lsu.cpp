@@ -66,10 +66,6 @@ static void set_defaults(Vtb_lsu *top) {
   top->lq_test_alloc_rob_tag_i = 0;
   top->lq_test_pop_valid_i = 0;
 
-  top->sq_test_alloc_valid_i = 0;
-  top->sq_test_alloc_rob_tag_i = 0;
-  top->sq_test_pop_valid_i = 0;
-
   // Keep each test deterministic even when LSU arbiters use round-robin state.
   top->flush_i = 1;
   tick(top);
@@ -120,6 +116,10 @@ enum {
 static constexpr uint32_t kPrivU = 0;
 static constexpr uint32_t kPrivS = 1;
 static constexpr uint32_t kSatpSv32Root = 0x80000000u | ((0x00100000u >> 12) & 0x003fffffu);
+// Cacheable DRAM base (config_pkg::PMEM_BASE). Load/AMO D$ tests must use
+// addresses here; below this range is MMIO and routes to uncached path.
+static constexpr uint32_t kPmemBase = 0x80000000u;
+static constexpr uint32_t pmem_addr(uint32_t off) { return kPmemBase + off; }
 
 static constexpr uint32_t kPteV = 1u << 0;
 static constexpr uint32_t kPteR = 1u << 1;
@@ -213,7 +213,7 @@ static void test_load_forward_lb(Vtb_lsu *top) {
   set_defaults(top);
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LB;
-  top->rs1_data_i = 0x2000;
+  top->rs1_data_i = pmem_addr(0x2000);
   top->imm_i = 0;
   top->rob_tag_i = 0x7;
   top->sb_load_hit_i = 1;
@@ -222,7 +222,7 @@ static void test_load_forward_lb(Vtb_lsu *top) {
 
   eval_comb(top);
   expect(top->req_ready_o == 1, "Load fwd LB: req_ready");
-  expect(top->sb_load_addr_o == 0x2000, "Load fwd LB: sb_load_addr");
+  expect(top->sb_load_addr_o == pmem_addr(0x2000), "Load fwd LB: sb_load_addr");
 
   tick(top);
   top->req_valid_i = 0;
@@ -239,7 +239,7 @@ static void test_load_dcache_ok(Vtb_lsu *top) {
   set_defaults(top);
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x3000;
+  top->rs1_data_i = pmem_addr(0x3000);
   top->imm_i = 4;
   top->rob_tag_i = 0x9;
   top->req_valid_i = 1;
@@ -253,7 +253,7 @@ static void test_load_dcache_ok(Vtb_lsu *top) {
   top->ld_req_ready_i = 1;
   eval_comb(top);
   expect(top->ld_req_valid_o == 1, "Load D$ ok: ld_req_valid");
-  expect(top->ld_req_addr_o == 0x3004, "Load D$ ok: ld_req_addr");
+  expect(top->ld_req_addr_o == pmem_addr(0x3004), "Load D$ ok: ld_req_addr");
   expect(top->ld_req_op_o == LSU_LW, "Load D$ ok: ld_req_op");
 
   tick(top); // move to S_LD_RSP
@@ -276,7 +276,7 @@ static void test_load_misaligned(Vtb_lsu *top) {
   set_defaults(top);
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x3000;
+  top->rs1_data_i = pmem_addr(0x3000);
   top->imm_i = 2; // misaligned for LW
   top->rob_tag_i = 0xA;
   top->req_valid_i = 1;
@@ -300,7 +300,7 @@ static void test_load_access_fault(Vtb_lsu *top) {
   set_defaults(top);
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x4000;
+  top->rs1_data_i = pmem_addr(0x4000);
   top->imm_i = 0;
   top->rob_tag_i = 0xB;
   top->req_valid_i = 1;
@@ -326,7 +326,7 @@ static void test_load_access_fault(Vtb_lsu *top) {
   expect(top->wb_valid_o == 1, "Load access fault: wb_valid");
   expect(top->wb_exception_o == 1, "Load access fault: wb_exception");
   expect(top->wb_ecause_o == 5, "Load access fault: ecause=5");
-  expect(top->wb_data_o == 0x4000, "Load access fault: wb_data carries fault address");
+  expect(top->wb_data_o == pmem_addr(0x4000), "Load access fault: wb_data carries fault address");
 
   tick(top); // response consumed
   top->ld_rsp_valid_i = 0;
@@ -492,7 +492,7 @@ static void test_group_accepts_second_req_when_first_waits_dcache(Vtb_lsu *top) 
   set_defaults(top);
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x5000;
+  top->rs1_data_i = pmem_addr(0x5000);
   top->imm_i = 0;
   top->rob_tag_i = 0xC;
   top->req_valid_i = 1;
@@ -508,14 +508,14 @@ static void test_group_accepts_second_req_when_first_waits_dcache(Vtb_lsu *top) 
   top->is_load_i = 1;
   top->is_store_i = 0;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x6000;
+  top->rs1_data_i = pmem_addr(0x6000);
   top->imm_i = 4;
   top->rob_tag_i = 0xD;
 
   eval_comb(top);
   expect(top->req_ready_o == 1, "LSU group: second load accepted on free lane");
   expect(top->ld_req_valid_o == 1, "LSU group: D$ request stays valid for first load");
-  expect(top->ld_req_addr_o == 0x5000, "LSU group: D$ request address remains first load");
+  expect(top->ld_req_addr_o == pmem_addr(0x5000), "LSU group: D$ request address remains first load");
 
   tick(top); // lane1 -> S_LD_REQ
 
@@ -524,7 +524,7 @@ static void test_group_accepts_second_req_when_first_waits_dcache(Vtb_lsu *top) 
   top->is_load_i = 1;
   top->is_store_i = 0;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x7000;
+  top->rs1_data_i = pmem_addr(0x7000);
   top->imm_i = 8;
   top->rob_tag_i = 0xE;
   eval_comb(top);
@@ -568,7 +568,7 @@ static void test_group_allows_store_when_load_lanes_wait_dcache(Vtb_lsu *top) {
   top->is_load_i = 1;
   top->is_store_i = 0;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x5200;
+  top->rs1_data_i = pmem_addr(0x5200);
   top->imm_i = 0;
   top->rob_tag_i = 0x1A;
   eval_comb(top);
@@ -581,7 +581,7 @@ static void test_group_allows_store_when_load_lanes_wait_dcache(Vtb_lsu *top) {
   top->is_load_i = 1;
   top->is_store_i = 0;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x5300;
+  top->rs1_data_i = pmem_addr(0x5300);
   top->imm_i = 0;
   top->rob_tag_i = 0x1B;
   eval_comb(top);
@@ -660,7 +660,7 @@ static void test_group_allows_new_req_when_older_lane_waits(Vtb_lsu *top) {
   // 1) First load -> lane0 (hold D$ req not ready)
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x8000;
+  top->rs1_data_i = pmem_addr(0x8000);
   top->imm_i = 0;
   top->rob_tag_i = 0x10;
   top->req_valid_i = 1;
@@ -672,7 +672,7 @@ static void test_group_allows_new_req_when_older_lane_waits(Vtb_lsu *top) {
   top->ld_req_ready_i = 0;
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x8100;
+  top->rs1_data_i = pmem_addr(0x8100);
   top->imm_i = 0;
   top->rob_tag_i = 0x11;
   top->req_valid_i = 1;
@@ -701,7 +701,7 @@ static void test_group_allows_new_req_when_older_lane_waits(Vtb_lsu *top) {
   top->req_valid_i = 1;
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x8200;
+  top->rs1_data_i = pmem_addr(0x8200);
   top->imm_i = 0;
   top->rob_tag_i = 0x12;
   eval_comb(top);
@@ -744,7 +744,7 @@ static void test_group_allows_req_on_rsp_handoff_cycle(Vtb_lsu *top) {
   // 1) First load -> lane0
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x9000;
+  top->rs1_data_i = pmem_addr(0x9000);
   top->imm_i = 0;
   top->rob_tag_i = 0x13;
   top->req_valid_i = 1;
@@ -756,7 +756,7 @@ static void test_group_allows_req_on_rsp_handoff_cycle(Vtb_lsu *top) {
   top->ld_req_ready_i = 0;
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x9100;
+  top->rs1_data_i = pmem_addr(0x9100);
   top->imm_i = 4;
   top->rob_tag_i = 0x14;
   top->req_valid_i = 1;
@@ -769,7 +769,7 @@ static void test_group_allows_req_on_rsp_handoff_cycle(Vtb_lsu *top) {
   top->ld_req_ready_i = 1;
   eval_comb(top);
   expect(top->ld_req_valid_o == 1, "LSU handoff: lane0 request issues");
-  expect(top->ld_req_addr_o == 0x9000, "LSU handoff: lane0 request addr");
+  expect(top->ld_req_addr_o == pmem_addr(0x9000), "LSU handoff: lane0 request addr");
   tick(top); // lane0 -> S_LD_RSP, owner=lane0
 
   // 4) In rsp-fire cycle, lane1 is still waiting req.
@@ -782,7 +782,7 @@ static void test_group_allows_req_on_rsp_handoff_cycle(Vtb_lsu *top) {
   eval_comb(top);
   expect(top->ld_rsp_ready_o == 1, "LSU handoff: lane0 response ready");
   expect(top->ld_req_valid_o == 1, "LSU handoff: lane1 request should issue on rsp-fire cycle");
-  expect(top->ld_req_addr_o == 0x9104, "LSU handoff: lane1 request addr on rsp-fire cycle");
+  expect(top->ld_req_addr_o == pmem_addr(0x9104), "LSU handoff: lane1 request addr on rsp-fire cycle");
   expect(top->ld_req_id_o == 1, "LSU handoff: lane1 request id on rsp-fire cycle");
   expect(top->wb_valid_o == 1, "LSU handoff: lane0 writeback on rsp cycle");
   expect(top->wb_rob_idx_o == 0x13, "LSU handoff: lane0 wb tag on rsp cycle");
@@ -810,7 +810,7 @@ static void test_group_writes_back_on_load_rsp_cycle(Vtb_lsu *top) {
   // 1) Issue one load.
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0x9300;
+  top->rs1_data_i = pmem_addr(0x9300);
   top->imm_i = 0;
   top->rob_tag_i = 0x17;
   top->req_valid_i = 1;
@@ -906,7 +906,7 @@ static void test_group_supports_two_outstanding_with_rsp_id(Vtb_lsu *top) {
   // 1) First load -> lane0
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0xA000;
+  top->rs1_data_i = pmem_addr(0xA000);
   top->imm_i = 0;
   top->rob_tag_i = 0x20;
   top->req_valid_i = 1;
@@ -918,7 +918,7 @@ static void test_group_supports_two_outstanding_with_rsp_id(Vtb_lsu *top) {
   top->ld_req_ready_i = 0;
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0xA100;
+  top->rs1_data_i = pmem_addr(0xA100);
   top->imm_i = 4;
   top->rob_tag_i = 0x21;
   top->req_valid_i = 1;
@@ -931,14 +931,14 @@ static void test_group_supports_two_outstanding_with_rsp_id(Vtb_lsu *top) {
   top->ld_req_ready_i = 1;
   eval_comb(top);
   expect(top->ld_req_valid_o == 1, "LSU ooorsp: lane0 request valid");
-  expect(top->ld_req_addr_o == 0xA000, "LSU ooorsp: lane0 request addr");
+  expect(top->ld_req_addr_o == pmem_addr(0xA000), "LSU ooorsp: lane0 request addr");
   expect(top->ld_req_id_o == 0, "LSU ooorsp: lane0 request id");
   tick(top); // lane0 -> S_LD_RSP
 
   // 4) Without waiting for lane0 response, lane1 request should also fire.
   eval_comb(top);
   expect(top->ld_req_valid_o == 1, "LSU ooorsp: lane1 request valid before lane0 response");
-  expect(top->ld_req_addr_o == 0xA104, "LSU ooorsp: lane1 request addr");
+  expect(top->ld_req_addr_o == pmem_addr(0xA104), "LSU ooorsp: lane1 request addr");
   expect(top->ld_req_id_o == 1, "LSU ooorsp: lane1 request id");
   tick(top); // lane1 -> S_LD_RSP
   top->ld_req_ready_i = 0;
@@ -970,164 +970,10 @@ static void test_group_supports_two_outstanding_with_rsp_id(Vtb_lsu *top) {
   top->ld_rsp_valid_i = 0;
 }
 
-static void test_sq_forwarding_store_to_younger_load_without_dcache_rsp(Vtb_lsu *top) {
-  set_defaults(top);
-
-  // 1) Hold writeback so the store stays resident while younger load issues.
-  top->wb_ready_i = 0;
-
-  // 2) Older store enters LSU/SQ.
-  top->req_valid_i = 1;
-  top->is_store_i = 1;
-  top->is_load_i = 0;
-  top->lsu_op_i = LSU_SW;
-  top->rs1_data_i = 0xB000;
-  top->imm_i = 0;
-  top->rs2_data_i = 0xDEADBEEF;
-  top->rob_tag_i = 0x22;
-  eval_comb(top);
-  expect(top->req_ready_o == 1, "SQ fwd: older store accepted");
-  tick(top); // lane0 store -> S_RESP (blocked by wb_ready=0)
-
-  // 3) Younger load to same address should forward from SQ path.
-  top->req_valid_i = 1;
-  top->is_store_i = 0;
-  top->is_load_i = 1;
-  top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0xB000;
-  top->imm_i = 0;
-  top->rob_tag_i = 0x23;
-  eval_comb(top);
-  expect(top->req_ready_o == 1, "SQ fwd: younger load accepted");
-  expect(top->ld_req_valid_o == 0, "SQ fwd: load should bypass dcache request");
-  tick(top); // lane1 load should become S_RESP directly
-
-  top->req_valid_i = 0;
-  eval_comb(top);
-  expect(top->ld_req_valid_o == 0, "SQ fwd: still no dcache request");
-
-  // 4) Release writeback: store retires first, then load returns forwarded data.
-  top->wb_ready_i = 1;
-  eval_comb(top);
-  expect(top->wb_valid_o == 1, "SQ fwd: store writeback appears first");
-  expect(top->wb_rob_idx_o == 0x22, "SQ fwd: first wb tag is store");
-  tick(top);
-
-  eval_comb(top);
-  expect(top->wb_valid_o == 1, "SQ fwd: forwarded load writeback appears");
-  expect(top->wb_rob_idx_o == 0x23, "SQ fwd: second wb tag is load");
-  expect(top->wb_data_o == 0xDEADBEEF, "SQ fwd: load gets forwarded store data");
-  tick(top);
-}
-
-static void test_sq_forwarding_lbu_with_byte_offset(Vtb_lsu *top) {
-  set_defaults(top);
-
-  // Keep older store resident so younger load must forward from SQ.
-  top->wb_ready_i = 0;
-
-  top->req_valid_i = 1;
-  top->is_store_i = 1;
-  top->is_load_i = 0;
-  top->lsu_op_i = LSU_SW;
-  top->rs1_data_i = 0xB100;
-  top->imm_i = 0;
-  top->rs2_data_i = 0x00005500;  // byte@+1 = 0x55, byte@+0 = 0x00
-  top->rob_tag_i = 0x24;
-  eval_comb(top);
-  expect(top->req_ready_o == 1, "SQ fwd LBU+1: older store accepted");
-  tick(top);
-
-  top->req_valid_i = 1;
-  top->is_store_i = 0;
-  top->is_load_i = 1;
-  top->lsu_op_i = LSU_LBU;
-  top->rs1_data_i = 0xB100;
-  top->imm_i = 1;
-  top->rob_tag_i = 0x25;
-  eval_comb(top);
-  expect(top->req_ready_o == 1, "SQ fwd LBU+1: younger load accepted");
-  expect(top->ld_req_valid_o == 0, "SQ fwd LBU+1: load bypasses dcache");
-  tick(top);
-
-  top->req_valid_i = 0;
-  top->wb_ready_i = 1;
-  eval_comb(top);
-  expect(top->wb_valid_o == 1, "SQ fwd LBU+1: store writeback first");
-  expect(top->wb_rob_idx_o == 0x24, "SQ fwd LBU+1: first wb tag is store");
-  tick(top);
-
-  eval_comb(top);
-  expect(top->wb_valid_o == 1, "SQ fwd LBU+1: forwarded load writeback appears");
-  expect(top->wb_rob_idx_o == 0x25, "SQ fwd LBU+1: second wb tag is load");
-  expect(top->wb_data_o == 0x00000055, "SQ fwd LBU+1: load gets forwarded byte at +1");
-  tick(top);
-}
-
-static void test_sq_does_not_forward_from_younger_store(Vtb_lsu *top) {
-  set_defaults(top);
-
-  // Keep younger store resident in SQ while issuing an older load.
-  top->wb_ready_i = 0;
-
-  // Younger store (larger ROB tag) issues first.
-  top->req_valid_i = 1;
-  top->is_store_i = 1;
-  top->is_load_i = 0;
-  top->lsu_op_i = LSU_SW;
-  top->rs1_data_i = 0xB200;
-  top->imm_i = 0;
-  top->rs2_data_i = 0x55667788;
-  top->rob_tag_i = 0x25;
-  eval_comb(top);
-  expect(top->req_ready_o == 1, "SQ age: younger store accepted");
-  tick(top);
-
-  // Older load to same address must not forward from that younger store.
-  top->req_valid_i = 1;
-  top->is_store_i = 0;
-  top->is_load_i = 1;
-  top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0xB200;
-  top->imm_i = 0;
-  top->rob_tag_i = 0x22;
-  eval_comb(top);
-  expect(top->req_ready_o == 1, "SQ age: older load accepted");
-  tick(top);
-
-  top->req_valid_i = 0;
-  eval_comb(top);
-  expect(top->ld_req_valid_o == 1, "SQ age: older load must go to dcache");
-  expect(top->ld_req_addr_o == 0xB200, "SQ age: dcache addr matches load");
-  uint32_t older_load_rsp_id = top->ld_req_id_o;
-  expect(older_load_rsp_id < 2, "SQ age: older load issued with valid lane id");
-
-  top->ld_req_ready_i = 1;
-  tick(top);
-  top->ld_req_ready_i = 0;
-
-  top->ld_rsp_valid_i = 1;
-  top->ld_rsp_id_i = older_load_rsp_id;
-  top->ld_rsp_data_i = 0x11223344;
-  top->ld_rsp_err_i = 0;
-  eval_comb(top);
-  expect(top->ld_rsp_ready_o == 1, "SQ age: load response accepted");
-  tick(top);
-  top->ld_rsp_valid_i = 0;
-
-  // Release writeback: store may retire first, then load with dcache data.
-  top->wb_ready_i = 1;
-  eval_comb(top);
-  expect(top->wb_valid_o == 1, "SQ age: first writeback appears");
-  expect(top->wb_rob_idx_o == 0x25, "SQ age: younger store writes first");
-  tick(top);
-
-  eval_comb(top);
-  expect(top->wb_valid_o == 1, "SQ age: second writeback appears");
-  expect(top->wb_rob_idx_o == 0x22, "SQ age: older load writes second");
-  expect(top->wb_data_o == 0x11223344, "SQ age: load uses dcache data, not younger store");
-  tick(top);
-}
+// NOTE: Store-to-load forwarding (incl. byte-merge / age ordering) moved out of
+// lsu_group into store_buffer (A3). tb_lsu instantiates lsu_group in isolation
+// (no store_buffer), so the former internal-forwarding "SQ fwd" tests were
+// removed; that behavior is now covered end-to-end by difftest.
 
 static void test_group_wb_round_robin_prevents_lane_starvation(Vtb_lsu *top) {
   set_defaults(top);
@@ -1198,7 +1044,7 @@ static void test_group_ldreq_round_robin_prefers_waiting_lane(Vtb_lsu *top) {
   top->is_load_i = 1;
   top->is_store_i = 0;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0xE000;
+  top->rs1_data_i = pmem_addr(0xE000);
   top->imm_i = 0;
   top->rob_tag_i = 0x30;
   eval_comb(top);
@@ -1218,7 +1064,7 @@ static void test_group_ldreq_round_robin_prefers_waiting_lane(Vtb_lsu *top) {
   top->is_load_i = 1;
   top->is_store_i = 0;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0xE100;
+  top->rs1_data_i = pmem_addr(0xE100);
   top->imm_i = 0;
   top->rob_tag_i = 0x31;
   eval_comb(top);
@@ -1237,7 +1083,7 @@ static void test_group_ldreq_round_robin_prefers_waiting_lane(Vtb_lsu *top) {
   top->is_load_i = 1;
   top->is_store_i = 0;
   top->lsu_op_i = LSU_LW;
-  top->rs1_data_i = 0xE200;
+  top->rs1_data_i = pmem_addr(0xE200);
   top->imm_i = 0;
   top->rob_tag_i = 0x32;
   top->ld_req_ready_i = 0;
@@ -1253,7 +1099,7 @@ static void test_group_ldreq_round_robin_prefers_waiting_lane(Vtb_lsu *top) {
   eval_comb(top);
   expect(top->ld_req_valid_o == 1, "LSU ldreq-rr: request valid when both lanes pending");
   expect(top->ld_req_id_o == 1, "LSU ldreq-rr: waiting lane1 should win over lane0");
-  expect(top->ld_req_addr_o == 0xE100, "LSU ldreq-rr: granted address should be lane1");
+  expect(top->ld_req_addr_o == pmem_addr(0xE100), "LSU ldreq-rr: granted address should be lane1");
   tick(top);
   top->ld_req_ready_i = 0;
 }
@@ -1287,37 +1133,6 @@ static void test_lq_queue_occupancy_four_entries(Vtb_lsu *top) {
   eval_comb(top);
   expect(top->lq_test_count_o == 0, "LQ queue: occupancy returns to zero");
   expect(top->lq_test_head_valid_o == 0, "LQ queue: head invalid when empty");
-}
-
-static void test_sq_queue_ordered_dequeue_contract(Vtb_lsu *top) {
-  set_defaults(top);
-
-  for (uint32_t i = 0; i < 3; i++) {
-    top->sq_test_alloc_valid_i = 1;
-    top->sq_test_alloc_rob_tag_i = 0x30 + i;
-    eval_comb(top);
-    expect(top->sq_test_alloc_ready_o == 1, "SQ queue: alloc ready for ordered fill");
-    tick(top);
-  }
-
-  top->sq_test_alloc_valid_i = 0;
-  eval_comb(top);
-  expect(top->sq_test_count_o == 3, "SQ queue: occupancy reaches 3");
-  expect(top->sq_test_head_valid_o == 1, "SQ queue: head valid after fill");
-  expect(top->sq_test_head_rob_tag_o == 0x30, "SQ queue: oldest store at head");
-
-  top->sq_test_pop_valid_i = 1;
-  for (uint32_t i = 0; i < 3; i++) {
-    eval_comb(top);
-    expect(top->sq_test_pop_ready_o == 1, "SQ queue: pop ready while entries exist");
-    expect(top->sq_test_head_rob_tag_o == (0x30 + i), "SQ queue: ordered dequeue");
-    tick(top);
-  }
-  top->sq_test_pop_valid_i = 0;
-
-  eval_comb(top);
-  expect(top->sq_test_count_o == 0, "SQ queue: occupancy returns to zero");
-  expect(top->sq_test_head_valid_o == 0, "SQ queue: head invalid when empty");
 }
 
 static uint32_t amo_expected(uint32_t op, uint32_t old_val, uint32_t operand) {
@@ -1356,7 +1171,7 @@ static void run_amo_forward_case(Vtb_lsu *top, uint32_t amo_op, uint32_t old_val
   top->is_store_i = 1;
   top->lsu_op_i = LSU_AMO;
   top->amo_op_i = amo_op;
-  top->rs1_data_i = 0xF000;
+  top->rs1_data_i = pmem_addr(0xF000);
   top->imm_i = 0;
   top->rs2_data_i = operand;
   top->rob_tag_i = 0x2A;
@@ -1366,7 +1181,7 @@ static void run_amo_forward_case(Vtb_lsu *top, uint32_t amo_op, uint32_t old_val
 
   eval_comb(top);
   expect(top->req_ready_o == 1, msg);
-  expect(top->sb_load_addr_o == 0xF000, "AMO fwd: queries forwarding at AMO address");
+  expect(top->sb_load_addr_o == pmem_addr(0xF000), "AMO fwd: queries forwarding at AMO address");
   tick(top);
   top->req_valid_i = 0;
 
@@ -1402,7 +1217,7 @@ static void test_amo_dcache_rmw_path(Vtb_lsu *top) {
   top->is_store_i = 1;
   top->lsu_op_i = LSU_AMO;
   top->amo_op_i = AMO_ADD;
-  top->rs1_data_i = 0xF100;
+  top->rs1_data_i = pmem_addr(0xF100);
   top->imm_i = 4;
   top->rs2_data_i = 0x00000007;
   top->rob_tag_i = 0x2B;
@@ -1416,7 +1231,7 @@ static void test_amo_dcache_rmw_path(Vtb_lsu *top) {
   top->ld_req_ready_i = 1;
   eval_comb(top);
   expect(top->ld_req_valid_o == 1, "AMO dcache: load request valid");
-  expect(top->ld_req_addr_o == 0xF104, "AMO dcache: load request addr");
+  expect(top->ld_req_addr_o == pmem_addr(0xF104), "AMO dcache: load request addr");
   expect(top->ld_req_op_o == LSU_AMO, "AMO dcache: load op tags AMO");
   tick(top);
   top->ld_req_ready_i = 0;
@@ -1430,7 +1245,7 @@ static void test_amo_dcache_rmw_path(Vtb_lsu *top) {
   expect(top->wb_rob_idx_o == 0x2B, "AMO dcache: writeback tag");
   expect(top->wb_data_o == 0x00000020, "AMO dcache: writeback old value");
   expect(top->sb_ex_valid_o == 1, "AMO dcache: store buffer write valid");
-  expect(top->sb_ex_addr_o == 0xF104, "AMO dcache: store address");
+  expect(top->sb_ex_addr_o == pmem_addr(0xF104), "AMO dcache: store address");
   expect(top->sb_ex_data_o == 0x00000027, "AMO dcache: store new value");
   expect(top->sb_ex_op_o == LSU_SW, "AMO dcache: store op is SW");
   tick(top);
@@ -1445,7 +1260,7 @@ static void test_amo_misaligned_reports_store_exception(Vtb_lsu *top) {
   top->is_store_i = 1;
   top->lsu_op_i = LSU_AMO;
   top->amo_op_i = AMO_ADD;
-  top->rs1_data_i = 0xF200;
+  top->rs1_data_i = pmem_addr(0xF200);
   top->imm_i = 2;
   top->rs2_data_i = 1;
   top->rob_tag_i = 0x2C;
@@ -1471,7 +1286,7 @@ static void test_amo_blocks_younger_lsu_until_rmw_finishes(Vtb_lsu *top) {
   top->is_store_i = 1;
   top->lsu_op_i = LSU_AMO;
   top->amo_op_i = AMO_OR;
-  top->rs1_data_i = 0xF300;
+  top->rs1_data_i = pmem_addr(0xF300);
   top->imm_i = 0;
   top->rs2_data_i = 0x10;
   top->rob_tag_i = 0x2D;
@@ -1484,7 +1299,7 @@ static void test_amo_blocks_younger_lsu_until_rmw_finishes(Vtb_lsu *top) {
   top->is_load_i = 1;
   top->lsu_op_i = LSU_LW;
   top->amo_op_i = AMO_NONE;
-  top->rs1_data_i = 0xF304;
+  top->rs1_data_i = pmem_addr(0xF304);
   top->rob_tag_i = 0x2E;
   eval_comb(top);
   expect(top->req_ready_o == 0, "AMO ordering: younger LSU blocked while AMO waits");
@@ -1526,13 +1341,9 @@ int main(int argc, char **argv) {
   test_group_writes_back_on_load_rsp_cycle(top);
   test_group_accepts_req_on_wb_handoff_cycle(top);
   test_group_supports_two_outstanding_with_rsp_id(top);
-  test_sq_forwarding_store_to_younger_load_without_dcache_rsp(top);
-  test_sq_forwarding_lbu_with_byte_offset(top);
-  test_sq_does_not_forward_from_younger_store(top);
   test_group_wb_round_robin_prevents_lane_starvation(top);
   test_group_ldreq_round_robin_prefers_waiting_lane(top);
   test_lq_queue_occupancy_four_entries(top);
-  test_sq_queue_ordered_dequeue_contract(top);
   test_amo_forward_all_ops(top);
   test_amo_dcache_rmw_path(top);
   test_amo_misaligned_reports_store_exception(top);

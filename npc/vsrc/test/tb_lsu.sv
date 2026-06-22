@@ -86,16 +86,7 @@ module tb_lsu #(
     output logic                          lq_test_pop_ready_o,
     output logic [$clog2(TB_LQ_DEPTH + 1)-1:0] lq_test_count_o,
     output logic                          lq_test_head_valid_o,
-    output logic [TB_ROB_IDX_WIDTH-1:0]   lq_test_head_rob_tag_o,
-
-    input  logic                          sq_test_alloc_valid_i,
-    input  logic [TB_ROB_IDX_WIDTH-1:0]   sq_test_alloc_rob_tag_i,
-    output logic                          sq_test_alloc_ready_o,
-    input  logic                          sq_test_pop_valid_i,
-    output logic                          sq_test_pop_ready_o,
-    output logic [$clog2(TB_SQ_DEPTH + 1)-1:0] sq_test_count_o,
-    output logic                          sq_test_head_valid_o,
-    output logic [TB_ROB_IDX_WIDTH-1:0]   sq_test_head_rob_tag_o
+    output logic [TB_ROB_IDX_WIDTH-1:0]   lq_test_head_rob_tag_o
 );
 
   decode_pkg::uop_t uop;
@@ -143,9 +134,13 @@ module tb_lsu #(
       .sb_ex_rob_idx_o(),
 
       .sb_load_addr_o,
+      .sb_load_be_o(),
       .sb_load_rob_idx_o(),
       .sb_load_hit_i,
       .sb_load_data_i,
+      .sb_order_query_valid_o(),
+      .sb_order_query_sb_id_o(),
+      .sb_order_query_clear_i(1'b1),
 
       .ld_req_valid_o,
       .ld_req_ready_i,
@@ -158,6 +153,12 @@ module tb_lsu #(
       .ld_rsp_ready_o,
       .ld_rsp_data_i,
       .ld_rsp_err_i,
+      .mmio_req_valid_o(),
+      .mmio_req_ready_i(1'b1),
+      .mmio_req_addr_o(),
+      .mmio_req_op_o(),
+      .mmio_rsp_valid_i(1'b0),
+      .mmio_rsp_data_i('0),
       .pte_req_valid_o,
       .pte_req_ready_i,
       .pte_req_paddr_o,
@@ -200,40 +201,6 @@ module tb_lsu #(
       .head_valid_o(lq_test_head_valid_o),
       .head_rob_tag_o(lq_test_head_rob_tag_o),
       .count_o(lq_test_count_o),
-      .full_o(),
-      .empty_o()
-  );
-
-  sq #(
-      .ROB_IDX_WIDTH(TB_ROB_IDX_WIDTH),
-      .ADDR_WIDTH(global_config_pkg::Cfg.PLEN),
-      .DATA_WIDTH(global_config_pkg::Cfg.XLEN),
-      .DEPTH(TB_SQ_DEPTH)
-  ) u_sq_test (
-      .clk_i,
-      .rst_ni,
-      .flush_i,
-      .alloc_valid_i(sq_test_alloc_valid_i),
-      .alloc_ready_o(sq_test_alloc_ready_o),
-      .alloc_rob_tag_i(sq_test_alloc_rob_tag_i),
-      .alloc_addr_i('0),
-      .alloc_data_i('0),
-      .alloc_be_i({global_config_pkg::Cfg.XLEN / 8{1'b1}}),
-      .pop_valid_i(sq_test_pop_valid_i),
-      .pop_ready_o(sq_test_pop_ready_o),
-      .fwd_query_valid_i(1'b0),
-      .fwd_query_addr_i('0),
-      .fwd_query_be_i('0),
-      .fwd_query_rob_tag_i('0),
-      .rob_head_i('0),
-      .fwd_query_hit_o(),
-      .fwd_query_data_o(),
-      .head_valid_o(sq_test_head_valid_o),
-      .head_rob_tag_o(sq_test_head_rob_tag_o),
-      .head_addr_o(),
-      .head_data_o(),
-      .head_be_o(),
-      .count_o(sq_test_count_o),
       .full_o(),
       .empty_o()
   );

@@ -54,10 +54,13 @@ module store_buffer #(
     // =======================================================
     // 5. Load Forwarding (From Load Unit) - 關鍵邏輯
     // =======================================================
+    // load_be_i: 本次 load 需要的字節掩碼 (相對所在字)；轉發命中要求所有
+    // 請求字節都被更老的 store 完全覆蓋 (byte-merge)。
+    input  logic [   Cfg.XLEN/8-1:0] load_be_i,
     input  logic [     Cfg.PLEN-1:0] load_addr_i,
     input  logic [ROB_IDX_WIDTH-1:0] load_rob_idx_i,
-    output logic                     load_hit_o,      // 在 SB 中命中且數據有效
-    output logic [     Cfg.XLEN-1:0] load_data_o,     // 轉發的數據
+    output logic                     load_hit_o,      // 在 SB 中命中且數據完全覆蓋
+    output logic [     Cfg.XLEN-1:0] load_data_o,     // 轉發的數據 (已對齊到字節 0)
     input  logic [ROB_IDX_WIDTH-1:0] rob_head_i,
 
     // =======================================================
@@ -81,12 +84,71 @@ module store_buffer #(
 
   sb_entry_t [SB_DEPTH-1:0] mem;
 
+  localparam int unsigned BYTE_W = Cfg.XLEN / 8;
+  localparam int unsigned BYTE_OFF_W = (BYTE_W <= 1) ? 1 : $clog2(BYTE_W);
+
   function automatic logic [ROB_IDX_WIDTH-1:0] rob_age(input logic [ROB_IDX_WIDTH-1:0] idx,
                                                        input logic [ROB_IDX_WIDTH-1:0] head);
     logic [ROB_IDX_WIDTH-1:0] diff;
     begin
       diff = idx - head;
       return diff;
+    end
+  endfunction
+
+  // Byte-enable mask of a buffered store, relative to its containing word.
+  // SC_FAIL / 非 store op 返回 0，使其不参与转发覆盖。
+  function automatic logic [BYTE_W-1:0] store_be_mask(input decode_pkg::lsu_op_e op,
+                                                      input logic [Cfg.PLEN-1:0] addr);
+    logic [BYTE_W-1:0] mask;
+    logic [BYTE_OFF_W-1:0] off;
+    begin
+      mask = '0;
+      off  = addr[BYTE_OFF_W-1:0];
+      unique case (op)
+        decode_pkg::LSU_SB: mask[off] = 1'b1;
+        decode_pkg::LSU_SH: begin
+          for (int i = 0; i < 2; i++) begin
+            if ((off + i) < BYTE_W) mask[off+i] = 1'b1;
+          end
+        end
+        decode_pkg::LSU_SW, decode_pkg::LSU_SC, decode_pkg::LSU_AMO: begin
+          for (int i = 0; i < 4; i++) begin
+            if ((off + i) < BYTE_W) mask[off+i] = 1'b1;
+          end
+        end
+        decode_pkg::LSU_SD: begin
+          for (int i = 0; i < BYTE_W; i++) mask[i] = 1'b1;
+        end
+        default: mask = '0;
+      endcase
+      store_be_mask = mask;
+    end
+  endfunction
+
+  // Place a buffered store's raw data at its byte offset inside the word.
+  function automatic logic [Cfg.XLEN-1:0] store_aligned_data(input decode_pkg::lsu_op_e op,
+                                                             input logic [Cfg.XLEN-1:0] data,
+                                                             input logic [Cfg.PLEN-1:0] addr);
+    logic [Cfg.XLEN-1:0] aligned;
+    logic [BYTE_OFF_W-1:0] off;
+    begin
+      aligned = '0;
+      off     = addr[BYTE_OFF_W-1:0];
+      unique case (op)
+        decode_pkg::LSU_SB: begin
+          if (off < BYTE_W) aligned[(8*off)+:8] = data[7:0];
+        end
+        decode_pkg::LSU_SH: begin
+          if ((off + 1) < BYTE_W) aligned[(8*off)+:16] = data[15:0];
+        end
+        decode_pkg::LSU_SW, decode_pkg::LSU_SC, decode_pkg::LSU_AMO: begin
+          if ((off + 3) < BYTE_W) aligned[(8*off)+:32] = data[31:0];
+        end
+        decode_pkg::LSU_SD: aligned = data;
+        default: aligned = data;
+      endcase
+      store_aligned_data = aligned;
     end
   endfunction
 
@@ -313,47 +375,59 @@ module store_buffer #(
   end
 
   // =======================================================
-  // Store-to-Load Forwarding Logic
+  // Store-to-Load Forwarding Logic (唯一轉發源, byte-merge)
   // =======================================================
-  // 策略：從最新分配的條目 (tail-1) 開始向舊條目 (head) 搜索。
-  // 找到的第一個地址匹配且有效的 Store 即為正確的數據來源。
+  // 策略：從最新分配的條目 (tail-1) 向最舊 (head) 掃描，對每個更老、同字、
+  // 地址/數據就緒的 store 按字節合併 (年輕者優先填未覆蓋字節)。當 load 請求
+  // 的所有字節都被覆蓋才算命中；輸出數據右移到字節 0，供 lane 直接提取。
   logic [ROB_IDX_WIDTH-1:0] load_age;
+  logic [BYTE_OFF_W-1:0] load_off;
 
   always_comb begin
+    logic [BYTE_W-1:0] covered_be;
+    logic [Cfg.XLEN-1:0] merged_word;
+    logic [BYTE_W-1:0] st_be;
+    logic [Cfg.XLEN-1:0] st_aligned;
+
     load_hit_o = 1'b0;
     load_data_o = '0;
+    covered_be = '0;
+    merged_word = '0;
 
     load_age = rob_age(load_rob_idx_i, rob_head_i);
+    load_off = load_addr_i[BYTE_OFF_W-1:0];
 
-    // 遍歷整個 SB (邏輯上從 tail-1 到 head)
+    // 邏輯順序：tail-1, tail-2, ..., head (年輕到年老)
     for (int i = 0; i < SB_DEPTH; i++) begin
-      // 計算當前檢查的索引 (回繞處理)
-      // 邏輯順序：tail-1, tail-2, ..., head
       logic [$clog2(SB_DEPTH)-1:0] idx;
       logic older_than_load;
+      logic same_word;
       idx = tail_ptr - 1 - i[$clog2(SB_DEPTH)-1:0];
 
-      // 檢查條件：
-      // 1. 條目有效 (可能是 Speculative 也可能是 Committed)
-      // 2. 地址匹配
-      // 3. 數據已就緒 (如果不就緒但地址匹配，真實硬件通常會 stall load，這裡簡化為不命中)
       older_than_load = mem[idx].committed ||
                         (rob_age(mem[idx].rob_tag, rob_head_i) < load_age);
+      same_word = (mem[idx].addr[Cfg.PLEN-1:BYTE_OFF_W] == load_addr_i[Cfg.PLEN-1:BYTE_OFF_W]);
 
-      if (mem[idx].valid && 
-                mem[idx].addr_valid && 
-                mem[idx].data_valid && 
-                (mem[idx].addr == load_addr_i) &&
-                older_than_load) begin
-
-        load_hit_o  = 1'b1;
-        load_data_o = mem[idx].data;
-
-        // 找到最年輕的匹配項後立即停止搜索
-        break;
+      if (mem[idx].valid &&
+          mem[idx].addr_valid &&
+          mem[idx].data_valid &&
+          same_word &&
+          older_than_load) begin
+        st_be = store_be_mask(mem[idx].op, mem[idx].addr);
+        st_aligned = store_aligned_data(mem[idx].op, mem[idx].data, mem[idx].addr);
+        for (int b = 0; b < BYTE_W; b++) begin
+          if (load_be_i[b] && st_be[b] && !covered_be[b]) begin
+            merged_word[(8*b)+:8] = st_aligned[(8*b)+:8];
+            covered_be[b] = 1'b1;
+          end
+        end
       end
     end
 
+    // 命中 = load 請求的所有字節都被覆蓋
+    load_hit_o = ((covered_be & load_be_i) == load_be_i) && (load_be_i != '0);
+    // 對齊到字節 0 (lane 的 extract_fwd 假設數據從 bit0 開始)
+    load_data_o = merged_word >> (8 * load_off);
   end
 
   // =======================================================

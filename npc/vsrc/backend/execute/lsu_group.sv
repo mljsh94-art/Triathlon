@@ -43,8 +43,9 @@ module lsu_group #(
     output decode_pkg::lsu_op_e                     sb_ex_op_o,
     output logic                [ROB_IDX_WIDTH-1:0] sb_ex_rob_idx_o,
 
-    // Store-to-Load Forwarding (query)
+    // Store-to-Load Forwarding (query) — store_buffer 为唯一转发源
     output logic [     Cfg.PLEN-1:0] sb_load_addr_o,
+    output logic [   Cfg.XLEN/8-1:0] sb_load_be_o,
     output logic [ROB_IDX_WIDTH-1:0] sb_load_rob_idx_o,
     input  logic                     sb_load_hit_i,
     input  logic [     Cfg.XLEN-1:0] sb_load_data_i,
@@ -215,22 +216,14 @@ module lsu_group #(
   logic                                                        lq_full;
   logic                                                        lq_empty;
 
-  logic                                                        sq_alloc_valid;
+  // Store-queue debug/ordering remnants: the dedicated `sq` structure was
+  // removed (forwarding now lives solely in store_buffer). These signals are
+  // kept as store_wb-derived debug/diag aliases so existing hierarchical
+  // probes (tb/profiler) keep resolving.
   logic                                                        sq_alloc_ready;
-  logic                                                        sq_pop_valid;
-  logic                                                        sq_pop_ready;
   logic                                                        sq_full;
   logic                                                        sq_empty;
-  logic                                                        sq_fwd_query_valid;
-  logic                                                        sq_fwd_query_hit;
-  logic                [     Cfg.XLEN-1:0]                    sq_fwd_query_data;
-  logic                [      Cfg.PLEN-1:0]                   sq_req_word_addr;
-  logic                [      Cfg.XLEN-1:0]                   sq_store_data_aligned;
-  logic                [     SQ_BE_WIDTH-1:0]                 sq_store_be;
-  logic                [     SQ_BE_WIDTH-1:0]                 sq_load_be;
-  logic                                                        sb_load_hit_mux;
-  logic                [     Cfg.XLEN-1:0]                    sb_load_data_mux;
-  logic                [     Cfg.XLEN-1:0]                    sq_fwd_data_rshift;
+  logic                [     SQ_BE_WIDTH-1:0]                 load_fwd_be;
   logic                [      Cfg.XLEN-1:0]                   req_eff_addr_xlen;
   logic                [      Cfg.PLEN-1:0]                   req_eff_addr;
 
@@ -239,7 +232,6 @@ module lsu_group #(
   logic                                                        req_is_amo;
   logic                                                        store_misaligned;
   logic                                                        store_page_fault;
-  logic                                                        store_need_sq;
   logic                                                        store_req_ready;
   logic                                                        load_req_ready;
   logic                                                        req_has_force_fault;
@@ -332,44 +324,6 @@ module lsu_group #(
     end
   endfunction
 
-  function automatic logic [SQ_BE_WIDTH-1:0] store_be_mask(input decode_pkg::lsu_op_e op,
-                                                            input logic [Cfg.PLEN-1:0] addr);
-    logic [SQ_BE_WIDTH-1:0] mask;
-    logic [SQ_BYTE_OFF_W-1:0] off;
-    begin
-      mask = '0;
-      off = addr[SQ_BYTE_OFF_W-1:0];
-      unique case (op)
-        decode_pkg::LSU_SB: begin
-          mask[off] = 1'b1;
-        end
-        decode_pkg::LSU_SH: begin
-          for (int i = 0; i < 2; i++) begin
-            if ((off + i) < SQ_BE_WIDTH) begin
-              mask[off+i] = 1'b1;
-            end
-          end
-        end
-        decode_pkg::LSU_SW, decode_pkg::LSU_SC, decode_pkg::LSU_AMO: begin
-          for (int i = 0; i < 4; i++) begin
-            if ((off + i) < SQ_BE_WIDTH) begin
-              mask[off+i] = 1'b1;
-            end
-          end
-        end
-        decode_pkg::LSU_SD: begin
-          for (int i = 0; i < SQ_BE_WIDTH; i++) begin
-            mask[i] = 1'b1;
-          end
-        end
-        default: begin
-          mask = '0;
-        end
-      endcase
-      store_be_mask = mask;
-    end
-  endfunction
-
   function automatic logic [SQ_BE_WIDTH-1:0] load_be_mask(input decode_pkg::lsu_op_e op,
                                                            input logic [Cfg.PLEN-1:0] addr);
     logic [SQ_BE_WIDTH-1:0] mask;
@@ -432,43 +386,6 @@ module lsu_group #(
         decode_pkg::LSU_LD: is_load_misaligned = |addr[2:0];
         default: is_load_misaligned = 1'b0;
       endcase
-    end
-  endfunction
-
-  function automatic logic [Cfg.XLEN-1:0] store_aligned_data(
-      input decode_pkg::lsu_op_e op,
-      input logic [Cfg.XLEN-1:0] data,
-      input logic [Cfg.PLEN-1:0] addr
-  );
-    logic [Cfg.XLEN-1:0] aligned;
-    logic [SQ_BYTE_OFF_W-1:0] off;
-    begin
-      aligned = '0;
-      off = addr[SQ_BYTE_OFF_W-1:0];
-      unique case (op)
-        decode_pkg::LSU_SB: begin
-          if (off < SQ_BE_WIDTH) begin
-            aligned[(8*off)+:8] = data[7:0];
-          end
-        end
-        decode_pkg::LSU_SH: begin
-          if ((off + 1) < SQ_BE_WIDTH) begin
-            aligned[(8*off)+:16] = data[15:0];
-          end
-        end
-        decode_pkg::LSU_SW, decode_pkg::LSU_SC, decode_pkg::LSU_AMO: begin
-          if ((off + 3) < SQ_BE_WIDTH) begin
-            aligned[(8*off)+:32] = data[31:0];
-          end
-        end
-        decode_pkg::LSU_SD: begin
-          aligned = data;
-        end
-        default: begin
-          aligned = data;
-        end
-      endcase
-      store_aligned_data = aligned;
     end
   endfunction
 
@@ -625,8 +542,8 @@ module lsu_group #(
 
           .sb_load_addr_o(lane_sb_load_addr[gi]),
           .sb_load_rob_idx_o(lane_sb_load_rob_idx[gi]),
-          .sb_load_hit_i(sb_load_hit_mux),
-          .sb_load_data_i(sb_load_data_mux),
+          .sb_load_hit_i(sb_load_hit_i),
+          .sb_load_data_i(sb_load_data_i),
 
           .ld_req_valid_o(lane_ld_req_valid[gi]),
           .ld_req_ready_i(lane_ld_req_ready[gi]),
@@ -703,9 +620,9 @@ module lsu_group #(
                             (req_is_store && is_store_misaligned(uop_i.lsu_op, req_eff_addr));
   assign store_page_fault = pend_valid_q ? (req_is_store && req_has_force_fault &&
                                             (req_force_ecause == EXC_ST_PAGE_FAULT)) : 1'b0;
-  assign store_need_sq = req_is_store && !store_misaligned && !store_page_fault;
   assign amo_inflight = |lane_amo_valid_q;
-  assign amo_order_clear = (dbg_lane_busy == '0) && lq_empty && sq_empty &&
+  // store_wb_count_q==0 蕴含所有已准入 store 已写回 (sq_empty 等价项已去除)。
+  assign amo_order_clear = (dbg_lane_busy == '0) && lq_empty &&
                            (store_wb_count_q == '0) && sb_order_query_clear_i;
   assign store_wb_head_valid = (store_wb_count_q != 0);
   assign store_wb_head_rob_idx = store_wb_rob_idx_q[store_wb_head_q];
@@ -716,23 +633,14 @@ module lsu_group #(
   assign store_wb_head_redirect_pc = store_wb_redirect_pc_q[store_wb_head_q];
   assign store_wb_head_has_sq = store_wb_has_sq_q[store_wb_head_q];
   assign store_wb_head_pc = store_wb_pc_q[store_wb_head_q];
-  assign sq_req_word_addr = {req_eff_addr[Cfg.PLEN-1:SQ_BYTE_OFF_W], {SQ_BYTE_OFF_W{1'b0}}};
-  assign sq_store_be = store_be_mask(pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op, req_eff_addr);
-  assign sq_load_be = load_be_mask(pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op, req_eff_addr);
-  assign sq_store_data_aligned = store_aligned_data(
-      pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op,
-      pend_valid_q ? pend_rs2_data_q : rs2_data_i,
-      req_eff_addr
-  );
-  assign sq_fwd_query_valid = load_alloc_fire && req_is_load;
-  assign sq_fwd_data_rshift = sq_fwd_query_data >> (8 * req_eff_addr[SQ_BYTE_OFF_W-1:0]);
-  assign sb_load_hit_mux = sb_load_hit_i || sq_fwd_query_hit;
-  assign sb_load_data_mux = sq_fwd_query_hit ? sq_fwd_data_rshift : sb_load_data_i;
+  // 转发的字节掩码：交给 store_buffer 做 byte-merge，命中即返回对齐到字节 0 的数据。
+  // 仅在本周期有 load 准入时驱动 (否则 be=0，store_buffer 自然不命中)。
+  assign load_fwd_be = load_be_mask(pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op, req_eff_addr);
+  assign sb_load_be_o = (load_alloc_fire && req_is_load) ? load_fwd_be : '0;
   assign sb_order_query_valid_o = req_is_amo;
   assign sb_order_query_sb_id_o = pend_valid_q ? pend_sb_id_q : sb_id_i;
 
   assign lq_alloc_valid = load_alloc_fire && req_is_load;
-  assign sq_alloc_valid = store_req_fire && store_need_sq;
 
   logic res_valid_q;
   logic [Cfg.PLEN-1:0] res_addr_q;
@@ -763,9 +671,13 @@ module lsu_group #(
   end
 
   // Keep store admission independent from selected-uop decode details to avoid
-  // combinational feedback with issue selection.
-  assign store_req_ready = ((store_wb_count_q < STORE_WB_Q_DEPTH) || (store_wb_head_valid && wb_ready_i)) &&
-                           sq_alloc_ready;
+  // combinational feedback with issue selection. Admission now gated solely by
+  // the store writeback queue (the deep `sq` backpressure was never binding).
+  assign store_req_ready = (store_wb_count_q < STORE_WB_Q_DEPTH) || (store_wb_head_valid && wb_ready_i);
+  // Debug/diag aliases for the removed `sq` (store_wb-derived).
+  assign sq_alloc_ready = store_req_ready;
+  assign sq_full = !store_req_ready;
+  assign sq_empty = (store_wb_count_q == '0);
   always_comb begin
     req_ready_o = 1'b0;
     if (pend_valid_q || (mmu_state_q != MMU_ST_IDLE) || amo_inflight) begin
@@ -927,7 +839,6 @@ module lsu_group #(
                                       lane_amo_rs2_q[wb_lane_idx]);
   assign ld_req_fire = ld_req_grant_valid && ld_req_ready_i;
   assign lq_pop_valid = wb_fire && !wb_sel_store;
-  assign sq_pop_valid = wb_fire && wb_sel_store && store_wb_head_has_sq;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -1112,39 +1023,12 @@ module lsu_group #(
       .empty_o(lq_empty)
   );
 
-  sq #(
-      .ROB_IDX_WIDTH(ROB_IDX_WIDTH),
-      .ADDR_WIDTH(Cfg.PLEN),
-      .DATA_WIDTH(Cfg.XLEN),
-      .DEPTH(SQ_DEPTH)
-  ) u_sq (
-      .clk_i,
-      .rst_ni,
-      .flush_i,
-      .alloc_valid_i(sq_alloc_valid),
-      .alloc_ready_o(sq_alloc_ready),
-      .alloc_rob_tag_i(pend_valid_q ? pend_rob_tag_q : rob_tag_i),
-      .alloc_addr_i(sq_req_word_addr),
-      .alloc_data_i(sq_store_data_aligned),
-      .alloc_be_i(sq_store_be),
-      .pop_valid_i(sq_pop_valid),
-      .pop_ready_o(sq_pop_ready),
-      .fwd_query_valid_i(sq_fwd_query_valid),
-      .fwd_query_addr_i(sq_req_word_addr),
-      .fwd_query_be_i(sq_load_be),
-      .fwd_query_rob_tag_i(pend_valid_q ? pend_rob_tag_q : rob_tag_i),
-      .rob_head_i(rob_head_i),
-      .fwd_query_hit_o(sq_fwd_query_hit),
-      .fwd_query_data_o(sq_fwd_query_data),
-      .head_valid_o(dbg_sq_head_valid_o),
-      .head_rob_tag_o(dbg_sq_head_rob_tag_o),
-      .head_addr_o(),
-      .head_data_o(),
-      .head_be_o(),
-      .count_o(dbg_sq_count_o),
-      .full_o(sq_full),
-      .empty_o(sq_empty)
-  );
+  // The dedicated `sq` was removed: store-to-load forwarding now lives solely
+  // in store_buffer, and AMO ordering / store admission rely on store_wb_q.
+  // Debug ports are driven from store_wb_q so existing probes stay meaningful.
+  assign dbg_sq_count_o = ($clog2(SQ_DEPTH + 1))'(store_wb_count_q);
+  assign dbg_sq_head_valid_o = store_wb_head_valid;
+  assign dbg_sq_head_rob_tag_o = store_wb_head_rob_idx;
 
   always_comb begin
     dbg_alloc_lane = load_alloc_fire ? DBG_SEL_WIDTH'(alloc_lane_idx + 1'b1) : '0;

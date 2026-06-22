@@ -489,6 +489,7 @@ module backend #(
   logic [ROB_IDX_WIDTH-1:0] sb_ex_rob_idx;
 
   logic [Cfg.PLEN-1:0] sb_load_addr;
+  logic [Cfg.XLEN/8-1:0] sb_load_be;
   logic [ROB_IDX_WIDTH-1:0] sb_load_rob_idx;
   logic sb_load_hit;
   logic [Cfg.XLEN-1:0] sb_load_data;
@@ -530,6 +531,7 @@ module backend #(
       .order_query_sb_id_i(sb_order_query_sb_id),
       .order_query_clear_o(sb_order_query_clear),
 
+      .load_be_i(sb_load_be),
       .load_addr_i(sb_load_addr),
       .load_rob_idx_i(sb_load_rob_idx),
       .load_hit_o(sb_load_hit),
@@ -1814,6 +1816,7 @@ module backend #(
       .sb_ex_rob_idx_o(sb_ex_rob_idx),
 
       .sb_load_addr_o(sb_load_addr),
+      .sb_load_be_o(sb_load_be),
       .sb_load_rob_idx_o(sb_load_rob_idx),
       .sb_load_hit_i(sb_load_hit),
       .sb_load_data_i(sb_load_data),
