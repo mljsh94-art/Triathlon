@@ -64,7 +64,8 @@ static void set_defaults(Vtb_lsu *top) {
 
   top->lq_test_alloc_valid_i = 0;
   top->lq_test_alloc_rob_tag_i = 0;
-  top->lq_test_pop_valid_i = 0;
+  top->lq_test_commit_valid_i = 0;
+  top->lq_test_commit_rob_idx_i = 0;
 
   // Keep each test deterministic even when LSU arbiters use round-robin state.
   top->flush_i = 1;
@@ -1119,20 +1120,50 @@ static void test_lq_queue_occupancy_four_entries(Vtb_lsu *top) {
   eval_comb(top);
   expect(top->lq_test_count_o == 4, "LQ queue: occupancy reaches 4");
   expect(top->lq_test_head_valid_o == 1, "LQ queue: head valid after fill");
-  expect(top->lq_test_head_rob_tag_o == 0x20, "LQ queue: oldest entry remains at head");
+  expect(top->lq_test_head_rob_tag_o == 0x20, "LQ queue: lowest-index entry visible at head");
 
-  top->lq_test_pop_valid_i = 1;
+  // B2: entries are freed associatively by committing rob_idx (out-of-order
+  // capable). Free them oldest-first and confirm the occupancy drains.
   for (uint32_t i = 0; i < 4; i++) {
+    top->lq_test_commit_valid_i = 1;
+    top->lq_test_commit_rob_idx_i = 0x20 + i;
     eval_comb(top);
-    expect(top->lq_test_pop_ready_o == 1, "LQ queue: pop ready while non-empty");
-    expect(top->lq_test_head_rob_tag_o == (0x20 + i), "LQ queue: pop order is FIFO");
+    expect(top->lq_test_count_o == (4 - i), "LQ queue: occupancy before commit");
     tick(top);
   }
-  top->lq_test_pop_valid_i = 0;
+  top->lq_test_commit_valid_i = 0;
 
   eval_comb(top);
   expect(top->lq_test_count_o == 0, "LQ queue: occupancy returns to zero");
   expect(top->lq_test_head_valid_o == 0, "LQ queue: head invalid when empty");
+
+  // Out-of-order free: refill, then commit a middle entry first.
+  for (uint32_t i = 0; i < 4; i++) {
+    top->lq_test_alloc_valid_i = 1;
+    top->lq_test_alloc_rob_tag_i = 0x30 + i;
+    eval_comb(top);
+    tick(top);
+  }
+  top->lq_test_alloc_valid_i = 0;
+  eval_comb(top);
+  expect(top->lq_test_count_o == 4, "LQ queue: occupancy reaches 4 (refill)");
+
+  top->lq_test_commit_valid_i = 1;
+  top->lq_test_commit_rob_idx_i = 0x32;  // free a non-oldest entry
+  eval_comb(top);
+  tick(top);
+  top->lq_test_commit_valid_i = 0;
+  eval_comb(top);
+  expect(top->lq_test_count_o == 3, "LQ queue: out-of-order commit frees one slot");
+
+  // Committing a rob_idx with no matching entry must be a no-op.
+  top->lq_test_commit_valid_i = 1;
+  top->lq_test_commit_rob_idx_i = 0x3F;
+  eval_comb(top);
+  tick(top);
+  top->lq_test_commit_valid_i = 0;
+  eval_comb(top);
+  expect(top->lq_test_count_o == 3, "LQ queue: non-matching commit is a no-op");
 }
 
 static uint32_t amo_expected(uint32_t op, uint32_t old_val, uint32_t operand) {

@@ -80,9 +80,12 @@ module backend #(
   localparam int unsigned ROB_MAX_COMMIT_BR = (Cfg.ROB_MAX_COMMIT_BR >= 1) ? Cfg.ROB_MAX_COMMIT_BR : 1;
   localparam int unsigned ROB_MAX_COMMIT_ST = (Cfg.ROB_MAX_COMMIT_ST >= 1) ? Cfg.ROB_MAX_COMMIT_ST : 2;
   localparam int unsigned ROB_MAX_COMMIT_LD = (Cfg.ROB_MAX_COMMIT_LD >= 1) ? Cfg.ROB_MAX_COMMIT_LD : 2;
-  localparam int unsigned LSU_LQ_DEPTH = (Cfg.ROB_DEPTH >= 16) ? 16 : Cfg.ROB_DEPTH;
+  // B2: the LQ holds each load until it commits, so an in-flight load must
+  // always be able to claim a slot to avoid starving the ROB head. Sizing the
+  // LQ to the full ROB depth makes allocation deadlock-free by construction:
+  // #in-flight loads <= #ROB entries <= ROB_DEPTH == LQ depth.
+  localparam int unsigned LSU_LQ_DEPTH = ROB_DEPTH;
   localparam int unsigned LSU_SQ_DEPTH = (Cfg.SB_DEPTH >= 16) ? 16 : Cfg.SB_DEPTH;
-  localparam int unsigned MEM_DEP_STORE_DEPTH = 8;
   localparam int unsigned COMPLETION_Q_DEPTH = 32;
   // A2.2: 开启 commit-time call/ret 更新，配合 BPU speculative RAS 降低 return miss。
   localparam bit ENABLE_COMMIT_RAS_UPDATE = (Cfg.ENABLE_COMMIT_RAS_UPDATE != 0);
@@ -1679,16 +1682,7 @@ module backend #(
   logic [$clog2(LSU_SQ_DEPTH + 1)-1:0] lsu_sq_count_dbg;
   logic lsu_sq_head_valid_dbg;
   logic [ROB_IDX_WIDTH-1:0] lsu_sq_head_rob_tag_dbg;
-  logic mem_dep_req_fire;
-  logic [Cfg.XLEN-1:0] mem_dep_req_addr_xlen;
-  logic [Cfg.PLEN-1:0] mem_dep_req_addr;
-  logic mem_dep_replay_valid;
-  logic [ROB_IDX_WIDTH-1:0] mem_dep_replay_rob_idx;
-  logic mem_dep_bypass_allow;
 
-  assign mem_dep_req_fire = lsu_en && lsu_req_ready;
-  assign mem_dep_req_addr_xlen = lsu_v1 + lsu_uop.imm;
-  assign mem_dep_req_addr = mem_dep_req_addr_xlen[Cfg.PLEN-1:0];
   assign ifu_pte_req_valid = ifu_pte_ld_req_valid_i;
   assign ifu_pte_req_paddr = ifu_pte_ld_req_paddr_i;
   assign ifu_pte_upd_valid = ifu_pte_st_req_valid_i;
@@ -1764,35 +1758,21 @@ module backend #(
       .dcache_st_req_op_o(dcache_st_req_op)
   );
 
-  mem_dep_predictor #(
-      .ROB_IDX_WIDTH(ROB_IDX_WIDTH),
-      .ADDR_WIDTH(Cfg.PLEN),
-      .STORE_DEPTH(MEM_DEP_STORE_DEPTH)
-  ) u_mem_dep_predictor (
-      .clk_i,
-      .rst_ni,
-      .flush_i(backend_flush),
-      .req_fire_i(mem_dep_req_fire),
-      .req_is_load_i(lsu_uop.is_load),
-      .req_is_store_i(lsu_uop.is_store),
-      .req_addr_i(mem_dep_req_addr),
-      .req_rob_idx_i(lsu_dst),
-      .bypass_allow_o(mem_dep_bypass_allow),
-      .replay_valid_o(mem_dep_replay_valid),
-      .replay_rob_idx_o(mem_dep_replay_rob_idx)
-  );
-
   lsu_group #(
       .Cfg(Cfg),
       .ROB_IDX_WIDTH(ROB_IDX_WIDTH),
       .SB_DEPTH(SB_DEPTH),
       .LQ_DEPTH(LSU_LQ_DEPTH),
       .SQ_DEPTH(LSU_SQ_DEPTH),
-      .N_LSU(LSU_GROUP_SIZE)
+      .N_LSU(LSU_GROUP_SIZE),
+      .COMMIT_WIDTH(COMMIT_WIDTH)
   ) u_lsu_group (
       .clk_i  (clk_i),
       .rst_ni (rst_ni),
       .flush_i(backend_flush),
+
+      .commit_valid_i(commit_valid),
+      .commit_rob_idx_i(commit_rob_index),
 
       .req_valid_i(lsu_en),
       .req_ready_o(lsu_req_ready),

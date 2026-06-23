@@ -82,8 +82,9 @@ module tb_lsu #(
     input  logic                          lq_test_alloc_valid_i,
     input  logic [TB_ROB_IDX_WIDTH-1:0]   lq_test_alloc_rob_tag_i,
     output logic                          lq_test_alloc_ready_o,
-    input  logic                          lq_test_pop_valid_i,
-    output logic                          lq_test_pop_ready_o,
+    // B2: free is associative by committing rob_idx (no head pop).
+    input  logic                          lq_test_commit_valid_i,
+    input  logic [TB_ROB_IDX_WIDTH-1:0]   lq_test_commit_rob_idx_i,
     output logic [$clog2(TB_LQ_DEPTH + 1)-1:0] lq_test_count_o,
     output logic                          lq_test_head_valid_o,
     output logic [TB_ROB_IDX_WIDTH-1:0]   lq_test_head_rob_tag_o
@@ -100,17 +101,33 @@ module tb_lsu #(
     uop.imm      = imm_i;
   end
 
+  // The unit testbench has no ROB; free each LQ entry as soon as its load
+  // writes back so the datapath tests keep their original occupancy behavior.
+  localparam int unsigned TB_COMMIT_WIDTH = 4;
+  logic [TB_COMMIT_WIDTH-1:0]                    dut_commit_valid;
+  logic [TB_COMMIT_WIDTH-1:0][TB_ROB_IDX_WIDTH-1:0] dut_commit_rob_idx;
+  always_comb begin
+    dut_commit_valid   = '0;
+    dut_commit_rob_idx = '0;
+    dut_commit_valid[0]   = wb_valid_o && wb_ready_i;
+    dut_commit_rob_idx[0] = wb_rob_idx_o;
+  end
+
   lsu_group #(
       .Cfg(global_config_pkg::Cfg),
       .ROB_IDX_WIDTH(TB_ROB_IDX_WIDTH),
       .SB_DEPTH(TB_SB_DEPTH),
       .LQ_DEPTH(TB_LQ_DEPTH),
       .SQ_DEPTH(TB_SQ_DEPTH),
-      .N_LSU(TB_LSU_GROUP_SIZE)
+      .N_LSU(TB_LSU_GROUP_SIZE),
+      .COMMIT_WIDTH(TB_COMMIT_WIDTH)
   ) dut (
       .clk_i,
       .rst_ni,
       .flush_i,
+
+      .commit_valid_i(dut_commit_valid),
+      .commit_rob_idx_i(dut_commit_rob_idx),
 
       .req_valid_i,
       .req_ready_o,
@@ -188,7 +205,8 @@ module tb_lsu #(
 
   lq #(
       .ROB_IDX_WIDTH(TB_ROB_IDX_WIDTH),
-      .DEPTH(TB_LQ_DEPTH)
+      .DEPTH(TB_LQ_DEPTH),
+      .COMMIT_WIDTH(1)
   ) u_lq_test (
       .clk_i,
       .rst_ni,
@@ -196,13 +214,27 @@ module tb_lsu #(
       .alloc_valid_i(lq_test_alloc_valid_i),
       .alloc_ready_o(lq_test_alloc_ready_o),
       .alloc_rob_tag_i(lq_test_alloc_rob_tag_i),
-      .pop_valid_i(lq_test_pop_valid_i),
-      .pop_ready_o(lq_test_pop_ready_o),
+      .alloc_pc_i('0),
+      .alloc_paddr_i('0),
+      .alloc_be_i('0),
+      .commit_valid_i(lq_test_commit_valid_i),
+      .commit_rob_idx_i(lq_test_commit_rob_idx_i),
+      .exec_valid_i(1'b0),
+      .exec_rob_tag_i('0),
+      .st_query_valid_i(1'b0),
+      .st_paddr_i('0),
+      .st_be_i('0),
+      .st_rob_tag_i('0),
+      .rob_head_i('0),
+      .violation_valid_o(),
+      .violation_pc_o(),
+      .violation_rob_idx_o(),
       .head_valid_o(lq_test_head_valid_o),
       .head_rob_tag_o(lq_test_head_rob_tag_o),
       .count_o(lq_test_count_o),
       .full_o(),
-      .empty_o()
+      .empty_o(),
+      .inflight_empty_o()
   );
 
 endmodule

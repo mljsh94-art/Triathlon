@@ -10,11 +10,16 @@ module lsu_group #(
     parameter int unsigned      LQ_DEPTH      = 16,
     parameter int unsigned      SQ_DEPTH      = 16,
     parameter int unsigned      N_LSU         = 1,
+    parameter int unsigned      COMMIT_WIDTH  = 4,
     parameter int unsigned      ECAUSE_WIDTH  = 5
 ) (
     input logic clk_i,
     input logic rst_ni,
     input logic flush_i,
+
+    // ROB commit broadcast: used to free LQ entries (loads live until retire).
+    input logic [COMMIT_WIDTH-1:0]                    commit_valid_i,
+    input logic [COMMIT_WIDTH-1:0][ROB_IDX_WIDTH-1:0] commit_rob_idx_i,
 
     // =========================================================
     // 1) Request from Issue/Execute
@@ -206,10 +211,18 @@ module lsu_group #(
 
   logic                                                        lq_alloc_valid;
   logic                                                        lq_alloc_ready;
-  logic                                                        lq_pop_valid;
-  logic                                                        lq_pop_ready;
   logic                                                        lq_full;
   logic                                                        lq_empty;
+  logic                                                        lq_inflight_empty;
+  logic                                                        lq_exec_valid;
+  logic                [ ROB_IDX_WIDTH-1:0]                   lq_exec_rob_tag;
+  logic                                                        lq_st_query_valid;
+  logic                [      Cfg.PLEN-1:0]                   lq_st_paddr;
+  logic                [     SQ_BE_WIDTH-1:0]                 lq_st_be;
+  logic                [ ROB_IDX_WIDTH-1:0]                   lq_st_rob_tag;
+  logic                                                        lq_violation_valid;
+  logic                [      Cfg.PLEN-1:0]                   lq_violation_pc;
+  logic                [ ROB_IDX_WIDTH-1:0]                   lq_violation_rob_idx;
 
   // Store-queue debug/ordering remnants: the dedicated `sq` structure was
   // removed (forwarding now lives solely in store_buffer). These signals are
@@ -340,6 +353,38 @@ module lsu_group #(
         end
       endcase
       load_be_mask = mask;
+    end
+  endfunction
+
+  // Byte-enable mask of a resolving store, relative to its containing word.
+  // Mirrors store_buffer's store_be_mask: used to drive the LQ violation CAM
+  // (overlap = same word address AND intersecting byte mask). SC_FAIL / non
+  // store ops return 0 so they never trigger a violation.
+  function automatic logic [SQ_BE_WIDTH-1:0] store_be_mask(input decode_pkg::lsu_op_e op,
+                                                           input logic [Cfg.PLEN-1:0] addr);
+    logic [SQ_BE_WIDTH-1:0] mask;
+    logic [SQ_BYTE_OFF_W-1:0] off;
+    begin
+      mask = '0;
+      off  = addr[SQ_BYTE_OFF_W-1:0];
+      unique case (op)
+        decode_pkg::LSU_SB: mask[off] = 1'b1;
+        decode_pkg::LSU_SH: begin
+          for (int i = 0; i < 2; i++) begin
+            if ((off + i) < SQ_BE_WIDTH) mask[off+i] = 1'b1;
+          end
+        end
+        decode_pkg::LSU_SW, decode_pkg::LSU_SC, decode_pkg::LSU_AMO: begin
+          for (int i = 0; i < 4; i++) begin
+            if ((off + i) < SQ_BE_WIDTH) mask[off+i] = 1'b1;
+          end
+        end
+        decode_pkg::LSU_SD: begin
+          for (int i = 0; i < SQ_BE_WIDTH; i++) mask[i] = 1'b1;
+        end
+        default: mask = '0;
+      endcase
+      store_be_mask = mask;
     end
   endfunction
 
@@ -627,7 +672,9 @@ module lsu_group #(
                                             (req_force_ecause == EXC_ST_PAGE_FAULT)) : 1'b0;
   assign amo_inflight = |lane_amo_valid_q;
   // store_wb_count_q==0 蕴含所有已准入 store 已写回 (sq_empty 等价项已去除)。
-  assign amo_order_clear = (dbg_lane_busy == '0) && lq_empty &&
+  // LQ 现持有 load 到提交，AMO 排序只需所有更老 load 已执行 (读完内存)，
+  // 故用 inflight_empty（无未写回 load）而非 empty（无任何在飞 load）。
+  assign amo_order_clear = (dbg_lane_busy == '0) && lq_inflight_empty &&
                            (store_wb_count_q == '0) && sb_order_query_clear_i;
   assign store_wb_head_valid = (store_wb_count_q != 0);
   assign store_wb_head_rob_idx = store_wb_rob_idx_q[store_wb_head_q];
@@ -646,6 +693,24 @@ module lsu_group #(
   assign sb_order_query_sb_id_o = pend_valid_q ? pend_sb_id_q : sb_id_i;
 
   assign lq_alloc_valid = load_alloc_fire && req_is_load;
+
+  // B2: load writeback marks the matching LQ entry executed (no longer pops).
+  // The entry is freed later, when the ROB commits the load (commit_*_i).
+  assign lq_exec_valid = wb_fire && !wb_sel_store;
+  assign lq_exec_rob_tag = lane_wb_rob_idx[wb_lane_idx];
+
+  // B3: drive the LQ store->load violation CAM the cycle a store resolves its
+  // physical address (store_req_fire). Only stores that actually write memory
+  // can alias a younger load: skip faulting stores and a failed SC (which
+  // commits a dummy store writing no bytes). AMO is serialized on the single
+  // lane (amo_inflight blocks younger loads from executing concurrently), so
+  // its store side needs no CAM here.
+  assign lq_st_query_valid = store_req_fire && req_is_store &&
+                             !store_misaligned && !store_page_fault &&
+                             !(is_sc && sc_fail);
+  assign lq_st_paddr       = req_eff_addr;
+  assign lq_st_be          = store_be_mask(selected_uop.lsu_op, req_eff_addr);
+  assign lq_st_rob_tag     = pend_valid_q ? pend_rob_tag_q : rob_tag_i;
 
   logic res_valid_q;
   logic [Cfg.PLEN-1:0] res_addr_q;
@@ -786,7 +851,6 @@ module lsu_group #(
   // Advance the arbiter writeback round-robin pointer when the granted lane
   // (not the store-writeback path) is actually consumed this cycle.
   assign wb_pop_w = wb_fire && !wb_sel_store && wb_grant_valid;
-  assign lq_pop_valid = wb_fire && !wb_sel_store;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -884,8 +948,13 @@ module lsu_group #(
         store_wb_exception_q[store_wb_tail_q] <= store_misaligned || store_page_fault;
         store_wb_ecause_q[store_wb_tail_q] <= store_misaligned ? EXC_ST_ADDR_MISALIGNED :
                                               (store_page_fault ? EXC_ST_PAGE_FAULT : '0);
-        store_wb_is_mispred_q[store_wb_tail_q] <= 1'b0;
-        store_wb_redirect_pc_q[store_wb_tail_q] <= '0;
+        // B3: a store->load ordering violation (younger executed load aliased
+        // this store) is recorded on the store's writeback. When the store
+        // retires, the ROB treats is_mispred generically: it commits the store
+        // then flushes younger entries and redirects fetch to the violating
+        // load's PC so it (and everything after) re-executes.
+        store_wb_is_mispred_q[store_wb_tail_q] <= lq_violation_valid;
+        store_wb_redirect_pc_q[store_wb_tail_q] <= lq_violation_pc;
         store_wb_has_sq_q[store_wb_tail_q] <= !store_misaligned && !store_page_fault;
         store_wb_pc_q[store_wb_tail_q] <= pend_valid_q ? pend_uop_q.pc : uop_i.pc;
         store_wb_tail_q <= store_wbq_next_idx(store_wb_tail_q);
@@ -944,7 +1013,10 @@ module lsu_group #(
 
   lq #(
       .ROB_IDX_WIDTH(ROB_IDX_WIDTH),
-      .DEPTH(LQ_DEPTH)
+      .DEPTH(LQ_DEPTH),
+      .PLEN(Cfg.PLEN),
+      .BE_WIDTH(SQ_BE_WIDTH),
+      .COMMIT_WIDTH(COMMIT_WIDTH)
   ) u_lq (
       .clk_i,
       .rst_ni,
@@ -952,13 +1024,27 @@ module lsu_group #(
       .alloc_valid_i(lq_alloc_valid),
       .alloc_ready_o(lq_alloc_ready),
       .alloc_rob_tag_i(pend_valid_q ? pend_rob_tag_q : rob_tag_i),
-      .pop_valid_i(lq_pop_valid),
-      .pop_ready_o(lq_pop_ready),
+      .alloc_pc_i(pend_valid_q ? pend_uop_q.pc : uop_i.pc),
+      .alloc_paddr_i(req_eff_addr),
+      .alloc_be_i(load_fwd_be),
+      .commit_valid_i(commit_valid_i),
+      .commit_rob_idx_i(commit_rob_idx_i),
+      .exec_valid_i(lq_exec_valid),
+      .exec_rob_tag_i(lq_exec_rob_tag),
+      .st_query_valid_i(lq_st_query_valid),
+      .st_paddr_i(lq_st_paddr),
+      .st_be_i(lq_st_be),
+      .st_rob_tag_i(lq_st_rob_tag),
+      .rob_head_i(rob_head_i),
+      .violation_valid_o(lq_violation_valid),
+      .violation_pc_o(lq_violation_pc),
+      .violation_rob_idx_o(lq_violation_rob_idx),
       .head_valid_o(dbg_lq_head_valid_o),
       .head_rob_tag_o(dbg_lq_head_rob_tag_o),
       .count_o(dbg_lq_count_o),
       .full_o(lq_full),
-      .empty_o(lq_empty)
+      .empty_o(lq_empty),
+      .inflight_empty_o(lq_inflight_empty)
   );
 
   // The dedicated `sq` was removed: store-to-load forwarding now lives solely

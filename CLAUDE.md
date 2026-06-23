@@ -28,7 +28,7 @@ Triathlon is a **4-wide superscalar out-of-order RISC-V RV32IMAC processor** (To
 | `linux_workspace/` | Linux build scripts, `merge.py` |
 | `fw_combined.bin` | Prebuilt full-system image @ `0x80000000` |
 
-Key RTL tops: `frontend.sv`, `backend.sv`, `ifu.sv`, `bpu.sv`, `instr_aligner.sv`, `ibuffer.sv`, `rob.sv`, `lsu_group.sv`, `csr.sv`, `icache.sv`, `dcache.sv`.
+Key RTL tops: `frontend.sv`, `backend.sv`, `ifu.sv`, `bpu.sv`, `instr_aligner.sv`, `ibuffer.sv`, `rob.sv`, `lsu_group.sv`, `lsu_agu.sv`, `lsu_translate.sv`, `lsu_arbiter.sv`, `lq.sv`, `store_buffer.sv`, `csr.sv`, `icache.sv`, `dcache.sv`.
 
 ## Configuration (`test_config_pkg`)
 
@@ -75,10 +75,22 @@ Fetch -> Decode -> Rename -> Dispatch -> Issue -> Execute -> Writeback -> Commit
 | **Decode** | 4-wide; illegal ops → CSR FU for precise trap. |
 | **Rename** | ROB + RAT + store buffer alloc; stall if RS full. |
 | **Issue** | ALU RS (4-way), BRU/CSR single, LSU single (ROB-head CSR ordering). |
-| **Execute** | 4× ALU, BRU, LSU group (LQ/SQ, MDP, SV32 D-MMU, RV32A `.W`), CSR (delegation, PLIC/SEIP path, counters, `satp`). |
+| **Execute** | 4× ALU, BRU, LSU group (see below), CSR (delegation, PLIC/SEIP path, counters, `satp`). |
 | **Writeback** | 7 FU → 4 CDB ports. |
 | **Commit** | 64-entry ROB, up to 4/cycle (stores 2, branches 1, loads 2 max). Mispredict → flush + FE redirect. |
-| **Store buffer** | 32 entries; load forwarding; commit → DCache or MMIO hook. |
+| **Store buffer** | 32 entries; sole store-to-load forwarding source; commit → DCache or MMIO hook. |
+
+#### LSU (`lsu_group.sv`)
+
+| Block | Role |
+|-------|------|
+| **lsu_agu** | Combinational effective address, alignment, load/store/AMO classify. |
+| **lsu_translate** | SV32 D-MMU + DTLB; req/resp handshake isolated from dispatch. |
+| **Dispatch** | Unified admission/backpressure (replaces pend/load_alloc_fire scatter). |
+| **lsu_lane ×N** | Pure execute FSM: issue request → wait response → writeback. |
+| **store_buffer** | Store lifecycle + store-to-load forwarding (no separate SQ). |
+| **lsu_arbiter** | DCache load RR, MMIO, and writeback lane arbitration. |
+| **LQ** | In-flight load queue (depth = ROB depth); holds `{pc, paddr, be, executed}` until commit. Store address resolution CAM detects load–store ordering violations; violation → store WB `is_mispred` + ROB flush redirect to violating load PC. |
 
 ### Cache & Memory
 

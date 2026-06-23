@@ -76,7 +76,6 @@ module tb_backend (
     output logic                               dbg_lsu_req_ready_o,
     output logic                               dbg_lsu_issue_fire_o,
     output logic [3:0]                         dbg_lsu_grp_lane_busy_o,
-    output logic                               dbg_mem_dep_replay_o,
     output logic [7:0]                         dbg_completion_q_count_o,
     output logic                               dbg_rob_head_complete_o,
     output logic                               dbg_rob_head_is_branch_o,
@@ -192,7 +191,6 @@ module tb_backend (
   assign dbg_lsu_req_ready_o = dut.lsu_req_ready;
   assign dbg_lsu_issue_fire_o = dut.lsu_en & dut.lsu_req_ready;
   assign dbg_lsu_grp_lane_busy_o = {2'b0, dut.u_lsu_group.dbg_lane_busy};
-  assign dbg_mem_dep_replay_o = dut.mem_dep_replay_valid;
   assign dbg_completion_q_count_o = dut.completion_q_count;
   // Observe ROB's effective head-complete (includes same-cycle ALU fast-visible path).
   assign dbg_rob_head_complete_o = !dut.rob_empty && dut.u_rob.head_fast_complete[0];
