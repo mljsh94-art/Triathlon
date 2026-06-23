@@ -11,7 +11,10 @@ namespace {
 
 constexpr int kDebugLaneCount = 4;
 constexpr int kDebugRobIdxWidth = 7;
-constexpr int kDebugWbWidth = 7;
+// LSU writeback experiment: CDB widened to 9 (6 non-LSU FUs + 3 LSU ports) and
+// the LSU exposes 3 writeback ports (2 load + 1 store).
+constexpr int kDebugWbWidth = 9;
+constexpr int kDebugLsuWbPorts = 3;
 constexpr int kDebugLsuFuIndex = 3;
 
 struct LsuHeadLaneSnapshot {
@@ -56,8 +59,21 @@ bool wb_selects_rob_head(const Vtb_triathlon *top, uint32_t head) {
   return false;
 }
 
+// Any of the LSU writeback ports asserting valid this cycle.
+bool lsu_group_wb_any(const Vtb_triathlon *top) {
+  return static_cast<uint32_t>(top->dbg_lsu_wb_valid_o) != 0u;
+}
+
 bool lsu_group_wb_selects_rob_head(const Vtb_triathlon *top, uint32_t head) {
-  return top->dbg_lsu_wb_valid_o && static_cast<uint32_t>(top->dbg_lsu_wb_rob_idx_o) == head;
+  const uint32_t valid = static_cast<uint32_t>(top->dbg_lsu_wb_valid_o);
+  const uint32_t rob_idx_packed = static_cast<uint32_t>(top->dbg_lsu_wb_rob_idx_o);
+  for (int p = 0; p < kDebugLsuWbPorts; p++) {
+    if (bit_at(valid, p) &&
+        packed_field(rob_idx_packed, p, kDebugRobIdxWidth) == head) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool lsu_fu_ready(const Vtb_triathlon *top) {
@@ -119,7 +135,7 @@ const char *classify_lsu_head_lane_detail(const Vtb_triathlon *top, bool nonbp) 
       return nonbp ? "rob_head_lsu_incomplete_group_wb_hit_no_lane_nonbp"
                    : "rob_lsu_incomplete_group_wb_hit_no_lane";
     }
-    if (top->dbg_lsu_wb_valid_o) {
+    if (lsu_group_wb_any(top)) {
       return nonbp ? "rob_head_lsu_incomplete_other_lsu_wb_no_lane_nonbp"
                    : "rob_lsu_incomplete_other_lsu_wb_no_lane";
     }
@@ -346,6 +362,8 @@ void ProfileCollector::on_no_commit_cycle(uint64_t cycles,
               << "/" << wb_rob_idx(top, 4)
               << "/" << wb_rob_idx(top, 5)
               << "/" << wb_rob_idx(top, 6)
+              << "/" << wb_rob_idx(top, 7)
+              << "/" << wb_rob_idx(top, 8)
               << " fu(v/r)=0x" << static_cast<uint32_t>(top->dbg_fu_valid_o)
               << "/0x" << static_cast<uint32_t>(top->dbg_fu_ready_o)
               << " lsug(busy/alloc_fire/alloc_lane/ld_owner)=0x"
@@ -670,7 +688,7 @@ const char *ProfileCollector::classify_other_detail_cycle(const Vtb_triathlon *t
     return "rob_empty_refill_other";
   }
 
-  if (top->dbg_lsu_wb_valid_o) {
+  if (lsu_group_wb_any(top)) {
     const uint32_t head = static_cast<uint32_t>(top->dbg_rob_head_ptr_o);
     if (fu == 3u && !rob_head_complete) {
       if (wb_selects_rob_head(top, head)) return "lsu_wait_wb_head_lsu_cdb_visible";

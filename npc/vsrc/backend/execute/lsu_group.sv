@@ -11,7 +11,13 @@ module lsu_group #(
     parameter int unsigned      SQ_DEPTH      = 16,
     parameter int unsigned      N_LSU         = 1,
     parameter int unsigned      COMMIT_WIDTH  = 4,
-    parameter int unsigned      ECAUSE_WIDTH  = 5
+    parameter int unsigned      ECAUSE_WIDTH  = 5,
+    // Writeback experiment: widen LSU completion to LSU_WB_PORTS CDB ports.
+    // Ports [0 .. LOAD_WB_PORTS-1] carry load-lane writebacks (arbiter grants
+    // up to LOAD_WB_PORTS distinct lanes per cycle); the final port carries the
+    // store-writeback queue head. LSU_WB_PORTS = LOAD_WB_PORTS + 1.
+    parameter int unsigned      LOAD_WB_PORTS = 2,
+    parameter int unsigned      LSU_WB_PORTS  = LOAD_WB_PORTS + 1
 ) (
     input logic clk_i,
     input logic rst_ni,
@@ -97,14 +103,14 @@ module lsu_group #(
     // =========================================================
     // 4) Writeback to ROB/CDB
     // =========================================================
-    output logic                     wb_valid_o,
-    output logic [ROB_IDX_WIDTH-1:0] wb_rob_idx_o,
-    output logic [     Cfg.XLEN-1:0] wb_data_o,
-    output logic                     wb_exception_o,
-    output logic [ECAUSE_WIDTH-1:0]  wb_ecause_o,
-    output logic                     wb_is_mispred_o,
-    output logic [     Cfg.PLEN-1:0] wb_redirect_pc_o,
-    input  logic                     wb_ready_i,
+    output logic [LSU_WB_PORTS-1:0]                     wb_valid_o,
+    output logic [LSU_WB_PORTS-1:0][ROB_IDX_WIDTH-1:0]  wb_rob_idx_o,
+    output logic [LSU_WB_PORTS-1:0][     Cfg.XLEN-1:0]  wb_data_o,
+    output logic [LSU_WB_PORTS-1:0]                     wb_exception_o,
+    output logic [LSU_WB_PORTS-1:0][ECAUSE_WIDTH-1:0]   wb_ecause_o,
+    output logic [LSU_WB_PORTS-1:0]                     wb_is_mispred_o,
+    output logic [LSU_WB_PORTS-1:0][     Cfg.PLEN-1:0]  wb_redirect_pc_o,
+    input  logic [LSU_WB_PORTS-1:0]                     wb_ready_i,
 
     // =========================================================
     // 5) Debug visibility for queue skeleton
@@ -118,6 +124,7 @@ module lsu_group #(
 );
 
   localparam int unsigned LANE_SEL_WIDTH = (N_LSU <= 1) ? 1 : $clog2(N_LSU);
+  localparam int unsigned STORE_WB_PORT = LOAD_WB_PORTS;  // dedicated store wb port index
   localparam int unsigned DBG_SEL_WIDTH = (N_LSU <= 1) ? 1 : $clog2(N_LSU + 1);
   localparam int unsigned SQ_BE_WIDTH = Cfg.XLEN / 8;
   localparam int unsigned SQ_BYTE_OFF_W = (SQ_BE_WIDTH <= 1) ? 1 : $clog2(SQ_BE_WIDTH);
@@ -201,21 +208,23 @@ module lsu_group #(
   logic                                                        store_req_fire;
 
   // DCache load request / writeback lane selection now live in lsu_arbiter;
-  // the group only consumes the granted writeback lane (final mux vs. the
-  // store-writeback path stays here as part of the store path).
-  logic                [LANE_SEL_WIDTH-1:0]                    wb_lane_idx;
-  logic                                                        wb_grant_valid;
-  logic                                                        wb_fire;
-  logic                                                        wb_sel_store;
-  logic                                                        wb_pop_w;
+  // the group fans the up-to-LOAD_WB_PORTS granted lanes onto the load
+  // writeback ports and drives the dedicated store-writeback port separately.
+  logic                [LOAD_WB_PORTS-1:0][LANE_SEL_WIDTH-1:0] wb_lane_idx;
+  logic                [LOAD_WB_PORTS-1:0]                     wb_grant_valid;
+  logic                [LOAD_WB_PORTS-1:0]                     wb_port_fire;
+  logic                [LOAD_WB_PORTS-1:0]                     wb_pop_w;
+  logic                                                        store_wb_fire;
+  logic                                                        amo_wb_fire;
+  logic                [LANE_SEL_WIDTH-1:0]                    amo_wb_lane;
 
   logic                                                        lq_alloc_valid;
   logic                                                        lq_alloc_ready;
   logic                                                        lq_full;
   logic                                                        lq_empty;
   logic                                                        lq_inflight_empty;
-  logic                                                        lq_exec_valid;
-  logic                [ ROB_IDX_WIDTH-1:0]                   lq_exec_rob_tag;
+  logic                [LOAD_WB_PORTS-1:0]                     lq_exec_valid;
+  logic                [LOAD_WB_PORTS-1:0][ROB_IDX_WIDTH-1:0] lq_exec_rob_tag;
   logic                                                        lq_st_query_valid;
   logic                [      Cfg.PLEN-1:0]                   lq_st_paddr;
   logic                [     SQ_BE_WIDTH-1:0]                 lq_st_be;
@@ -301,7 +310,6 @@ module lsu_group #(
   logic [N_LSU-1:0][Cfg.XLEN-1:0] lane_amo_rs2_q;
   logic [N_LSU-1:0][SB_IDX_WIDTH-1:0] lane_amo_sb_id_q;
   logic [N_LSU-1:0][Cfg.PLEN-1:0] lane_amo_addr_q;
-  logic amo_wb_fire;
   logic [Cfg.XLEN-1:0] amo_wb_new_data;
 
   function automatic logic [STORE_WB_Q_IDX_W-1:0] store_wbq_next_idx(
@@ -609,7 +617,8 @@ module lsu_group #(
   // ---------------------------------------------------------
   lsu_arbiter #(
       .Cfg(Cfg),
-      .N_LSU(N_LSU)
+      .N_LSU(N_LSU),
+      .N_WB(LOAD_WB_PORTS)
   ) u_arbiter (
       .clk_i,
       .rst_ni,
@@ -696,8 +705,14 @@ module lsu_group #(
 
   // B2: load writeback marks the matching LQ entry executed (no longer pops).
   // The entry is freed later, when the ROB commits the load (commit_*_i).
-  assign lq_exec_valid = wb_fire && !wb_sel_store;
-  assign lq_exec_rob_tag = lane_wb_rob_idx[wb_lane_idx];
+  // One exec port per granted load-writeback port; the LQ observes all of them
+  // so the disambiguation CAM never misses a same-cycle retiring load.
+  always_comb begin
+    for (int p = 0; p < LOAD_WB_PORTS; p++) begin
+      lq_exec_valid[p]   = wb_port_fire[p];
+      lq_exec_rob_tag[p] = lane_wb_rob_idx[wb_lane_idx[p]];
+    end
+  end
 
   // B3: drive the LQ store->load violation CAM the cycle a store resolves its
   // physical address (store_req_fire). Only stores that actually write memory
@@ -743,7 +758,8 @@ module lsu_group #(
   // Keep store admission independent from selected-uop decode details to avoid
   // combinational feedback with issue selection. Admission now gated solely by
   // the store writeback queue (the deep `sq` backpressure was never binding).
-  assign store_req_ready = (store_wb_count_q < STORE_WB_Q_DEPTH) || (store_wb_head_valid && wb_ready_i);
+  assign store_req_ready = (store_wb_count_q < STORE_WB_Q_DEPTH) ||
+                           (store_wb_head_valid && wb_ready_i[STORE_WB_PORT]);
   // Debug/diag aliases for the removed `sq` (store_wb-derived).
   assign sq_alloc_ready = store_req_ready;
   assign sq_full = !store_req_ready;
@@ -785,13 +801,13 @@ module lsu_group #(
     sb_ex_rob_idx_o = pend_valid_q ? pend_rob_tag_q : rob_tag_i;
     sb_load_addr_o = '0;
     sb_load_rob_idx_o = '0;
-    if (amo_wb_fire && !lane_wb_exception[wb_lane_idx]) begin
+    if (amo_wb_fire && !lane_wb_exception[amo_wb_lane]) begin
       sb_ex_valid_o = 1'b1;
-      sb_ex_sb_id_o = lane_amo_sb_id_q[wb_lane_idx];
-      sb_ex_addr_o = lane_amo_addr_q[wb_lane_idx];
+      sb_ex_sb_id_o = lane_amo_sb_id_q[amo_wb_lane];
+      sb_ex_addr_o = lane_amo_addr_q[amo_wb_lane];
       sb_ex_data_o = amo_wb_new_data;
       sb_ex_op_o = decode_pkg::LSU_SW;
-      sb_ex_rob_idx_o = lane_wb_rob_idx[wb_lane_idx];
+      sb_ex_rob_idx_o = lane_wb_rob_idx[amo_wb_lane];
     end
     for (int i = 0; i < N_LSU; i++) begin
       if (lane_sb_ex_valid[i] && !sb_ex_valid_o) begin
@@ -810,47 +826,61 @@ module lsu_group #(
   end
 
   // DCache load request RR, load response routing and writeback lane RR are
-  // owned by u_arbiter above; the group only performs the final writeback mux
-  // (store path vs. the arbiter-granted lane).
+  // owned by u_arbiter above; the group fans the up-to-LOAD_WB_PORTS granted
+  // lanes onto the load writeback ports and drives the store-writeback port
+  // independently. Each port is 1:1 with a CDB port (wb_ready_i is held high),
+  // so a granted lane and a queued store can complete in the same cycle.
   always_comb begin
-    wb_sel_store = store_wb_head_valid;
-    wb_valid_o = store_wb_head_valid || wb_grant_valid;
-    wb_rob_idx_o = '0;
-    wb_data_o = '0;
-    wb_exception_o = 1'b0;
-    wb_ecause_o = '0;
-    wb_is_mispred_o = 1'b0;
-    wb_redirect_pc_o = '0;
     lane_wb_ready = '0;
 
-    if (store_wb_head_valid) begin
-      wb_rob_idx_o = store_wb_head_rob_idx;
-      wb_data_o = store_wb_head_data;
-      wb_exception_o = store_wb_head_exception;
-      wb_ecause_o = store_wb_head_ecause;
-      wb_is_mispred_o = store_wb_head_is_mispred;
-      wb_redirect_pc_o = store_wb_head_redirect_pc;
-    end else if (wb_grant_valid) begin
-      wb_sel_store = 1'b0;
-      wb_rob_idx_o = lane_wb_rob_idx[wb_lane_idx];
-      wb_data_o = lane_wb_data[wb_lane_idx];
-      wb_exception_o = lane_wb_exception[wb_lane_idx];
-      wb_ecause_o = lane_wb_ecause[wb_lane_idx];
-      wb_is_mispred_o = lane_wb_is_mispred[wb_lane_idx];
-      wb_redirect_pc_o = lane_wb_redirect_pc[wb_lane_idx];
-      lane_wb_ready[wb_lane_idx] = wb_ready_i;
+    // Load writeback ports [0 .. LOAD_WB_PORTS-1]: arbiter-granted lanes.
+    for (int p = 0; p < LOAD_WB_PORTS; p++) begin
+      wb_valid_o[p]       = wb_grant_valid[p];
+      wb_rob_idx_o[p]     = lane_wb_rob_idx[wb_lane_idx[p]];
+      wb_data_o[p]        = lane_wb_data[wb_lane_idx[p]];
+      wb_exception_o[p]   = lane_wb_exception[wb_lane_idx[p]];
+      wb_ecause_o[p]      = lane_wb_ecause[wb_lane_idx[p]];
+      wb_is_mispred_o[p]  = lane_wb_is_mispred[wb_lane_idx[p]];
+      wb_redirect_pc_o[p] = lane_wb_redirect_pc[wb_lane_idx[p]];
+      if (wb_grant_valid[p]) begin
+        lane_wb_ready[wb_lane_idx[p]] = wb_ready_i[p];
+      end
     end
+
+    // Dedicated store writeback port [STORE_WB_PORT].
+    wb_valid_o[STORE_WB_PORT]       = store_wb_head_valid;
+    wb_rob_idx_o[STORE_WB_PORT]     = store_wb_head_rob_idx;
+    wb_data_o[STORE_WB_PORT]        = store_wb_head_data;
+    wb_exception_o[STORE_WB_PORT]   = store_wb_head_exception;
+    wb_ecause_o[STORE_WB_PORT]      = store_wb_head_ecause;
+    wb_is_mispred_o[STORE_WB_PORT]  = store_wb_head_is_mispred;
+    wb_redirect_pc_o[STORE_WB_PORT] = store_wb_head_redirect_pc;
   end
 
-  assign wb_fire = wb_valid_o && wb_ready_i;
-  assign amo_wb_fire = wb_fire && !wb_sel_store && wb_grant_valid &&
-                       lane_amo_valid_q[wb_lane_idx];
-  assign amo_wb_new_data = amo_result(lane_amo_op_q[wb_lane_idx],
-                                      lane_wb_data[wb_lane_idx],
-                                      lane_amo_rs2_q[wb_lane_idx]);
-  // Advance the arbiter writeback round-robin pointer when the granted lane
-  // (not the store-writeback path) is actually consumed this cycle.
-  assign wb_pop_w = wb_fire && !wb_sel_store && wb_grant_valid;
+  // Per-port writeback fire + arbiter pointer-advance feedback.
+  always_comb begin
+    for (int p = 0; p < LOAD_WB_PORTS; p++) begin
+      wb_port_fire[p] = wb_grant_valid[p] && wb_ready_i[p];
+      wb_pop_w[p]     = wb_port_fire[p];
+    end
+  end
+  assign store_wb_fire = wb_valid_o[STORE_WB_PORT] && wb_ready_i[STORE_WB_PORT];
+
+  // AMO completes on whichever granted load port carries the (single, due to
+  // amo_inflight serialization) in-flight AMO lane.
+  always_comb begin
+    amo_wb_fire = 1'b0;
+    amo_wb_lane = '0;
+    for (int p = 0; p < LOAD_WB_PORTS; p++) begin
+      if (wb_port_fire[p] && lane_amo_valid_q[wb_lane_idx[p]]) begin
+        amo_wb_fire = 1'b1;
+        amo_wb_lane = wb_lane_idx[p];
+      end
+    end
+  end
+  assign amo_wb_new_data = amo_result(lane_amo_op_q[amo_wb_lane],
+                                      lane_wb_data[amo_wb_lane],
+                                      lane_amo_rs2_q[amo_wb_lane]);
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -907,7 +937,7 @@ module lsu_group #(
         res_valid_q <= 1'b1;
         res_addr_q <= req_eff_addr;
       end else if ((store_req_fire && (is_sc || (!store_misaligned && !store_page_fault))) ||
-                   (amo_wb_fire && !lane_wb_exception[wb_lane_idx])) begin
+                   (amo_wb_fire && !lane_wb_exception[amo_wb_lane])) begin
         res_valid_q <= 1'b0;
       end
 
@@ -920,7 +950,7 @@ module lsu_group #(
       end
 
       if (amo_wb_fire) begin
-        lane_amo_valid_q[wb_lane_idx] <= 1'b0;
+        lane_amo_valid_q[amo_wb_lane] <= 1'b0;
       end
 
 `ifndef SYNTHESIS
@@ -959,22 +989,25 @@ module lsu_group #(
         store_wb_pc_q[store_wb_tail_q] <= pend_valid_q ? pend_uop_q.pc : uop_i.pc;
         store_wb_tail_q <= store_wbq_next_idx(store_wb_tail_q);
       end
-      if (wb_fire && wb_sel_store) begin
+      if (store_wb_fire) begin
         store_wb_valid_q[store_wb_head_q] <= 1'b0;
         store_wb_head_q <= store_wbq_next_idx(store_wb_head_q);
       end
-      if (store_req_fire && !(wb_fire && wb_sel_store)) begin
+      if (store_req_fire && !store_wb_fire) begin
         store_wb_count_q <= store_wb_count_q + 1'b1;
-      end else if (!store_req_fire && (wb_fire && wb_sel_store)) begin
+      end else if (!store_req_fire && store_wb_fire) begin
         store_wb_count_q <= store_wb_count_q - 1'b1;
       end
 `ifndef SYNTHESIS
-      if (lsu_trace_en_q && wb_fire && wb_exception_o &&
-          ((wb_ecause_o == EXC_LD_PAGE_FAULT) || (wb_ecause_o == EXC_ST_PAGE_FAULT))) begin
-        if (lsu_pf_log_cnt_q < LSU_PF_LOG_BUDGET) begin
-          $display("[lsu-wb-pf] rob=%0d data=%h ecause=%0d sel_store=%0d lane=%0d flush=%0d",
-                   wb_rob_idx_o, wb_data_o, wb_ecause_o, wb_sel_store, wb_lane_idx, flush_i);
-          lsu_pf_log_cnt_q <= lsu_pf_log_cnt_q + 1'b1;
+      for (int p = 0; p < LSU_WB_PORTS; p++) begin
+        if (lsu_trace_en_q && wb_valid_o[p] && wb_ready_i[p] && wb_exception_o[p] &&
+            ((wb_ecause_o[p] == EXC_LD_PAGE_FAULT) || (wb_ecause_o[p] == EXC_ST_PAGE_FAULT))) begin
+          if (lsu_pf_log_cnt_q < LSU_PF_LOG_BUDGET) begin
+            $display("[lsu-wb-pf] port=%0d rob=%0d data=%h ecause=%0d is_store_port=%0d flush=%0d",
+                     p, wb_rob_idx_o[p], wb_data_o[p], wb_ecause_o[p],
+                     (p == STORE_WB_PORT), flush_i);
+            lsu_pf_log_cnt_q <= lsu_pf_log_cnt_q + 1'b1;
+          end
         end
       end
 `endif
@@ -1016,7 +1049,8 @@ module lsu_group #(
       .DEPTH(LQ_DEPTH),
       .PLEN(Cfg.PLEN),
       .BE_WIDTH(SQ_BE_WIDTH),
-      .COMMIT_WIDTH(COMMIT_WIDTH)
+      .COMMIT_WIDTH(COMMIT_WIDTH),
+      .N_EXEC(LOAD_WB_PORTS)
   ) u_lq (
       .clk_i,
       .rst_ni,

@@ -63,8 +63,15 @@ module backend #(
   localparam int unsigned SB_DEPTH = (Cfg.SB_DEPTH >= 4) ? Cfg.SB_DEPTH : 32;
   localparam int unsigned SB_IDX_WIDTH = $clog2(SB_DEPTH);
   localparam int unsigned RS_DEPTH = Cfg.RS_DEPTH;
-  localparam int unsigned WB_WIDTH = 7;
-  localparam int unsigned NUM_FUS = 7;  // ALU0, ALU1, BRU, LSU, ALU2, ALU3, CSR
+  // LSU writeback experiment: widen LSU completion to LSU_WB_PORTS CDB ports
+  // (LOAD_WB_PORTS load-lane ports + 1 dedicated store port). Non-LSU FUs are
+  // ALU0, ALU1, BRU, ALU2, ALU3, CSR (= 6). FU layout is reordered so CSR is
+  // the highest index (wakeup-mask invariant): [ALU0,ALU1,BRU,LSU0,LSU1,LSU2,
+  // ALU2,ALU3,CSR].
+  localparam int unsigned LSU_LOAD_WB_PORTS = 2;
+  localparam int unsigned LSU_WB_PORTS = LSU_LOAD_WB_PORTS + 1;  // 2 load + 1 store
+  localparam int unsigned WB_WIDTH = 6 + LSU_WB_PORTS;  // 1:1 CDB
+  localparam int unsigned NUM_FUS = 6 + LSU_WB_PORTS;
   localparam int unsigned LSU_GROUP_SIZE = (Cfg.LSU_GROUP_SIZE >= 1) ? Cfg.LSU_GROUP_SIZE : 1;
   localparam int unsigned LSU_LD_ID_WIDTH = (LSU_GROUP_SIZE <= 1) ? 1 : $clog2(LSU_GROUP_SIZE);
   localparam int unsigned DCACHE_LD_ID_WIDTH = LSU_LD_ID_WIDTH + 1;
@@ -1458,7 +1465,7 @@ module backend #(
       .cdb_valid(cdb_valid),
       .cdb_tag  (cdb_tag),
       .cdb_val  (cdb_val),
-      .cdb_wakeup_mask({WB_WIDTH{1'b1}} & ~(WB_WIDTH'(1) << 6)),
+      .cdb_wakeup_mask({WB_WIDTH{1'b1}} & ~(WB_WIDTH'(1) << (WB_WIDTH-1))),
 
       .fu_en (csr_en),
       .fu_uop(csr_uop),
@@ -1623,13 +1630,13 @@ module backend #(
   logic [SB_IDX_WIDTH-1:0] lsu_sb_id;
 
   logic lsu_req_ready;
-  logic lsu_wb_valid;
-  logic [ROB_IDX_WIDTH-1:0] lsu_wb_tag;
-  logic [Cfg.XLEN-1:0] lsu_wb_data;
-  logic lsu_wb_exception;
-  logic [4:0] lsu_wb_ecause;
-  logic lsu_wb_is_mispred;
-  logic [Cfg.PLEN-1:0] lsu_wb_redirect_pc;
+  logic [LSU_WB_PORTS-1:0] lsu_wb_valid;
+  logic [LSU_WB_PORTS-1:0][ROB_IDX_WIDTH-1:0] lsu_wb_tag;
+  logic [LSU_WB_PORTS-1:0][Cfg.XLEN-1:0] lsu_wb_data;
+  logic [LSU_WB_PORTS-1:0] lsu_wb_exception;
+  logic [LSU_WB_PORTS-1:0][4:0] lsu_wb_ecause;
+  logic [LSU_WB_PORTS-1:0] lsu_wb_is_mispred;
+  logic [LSU_WB_PORTS-1:0][Cfg.PLEN-1:0] lsu_wb_redirect_pc;
 
   // LSU <-> D$
   logic lsu_ld_req_valid;
@@ -1765,7 +1772,9 @@ module backend #(
       .LQ_DEPTH(LSU_LQ_DEPTH),
       .SQ_DEPTH(LSU_SQ_DEPTH),
       .N_LSU(LSU_GROUP_SIZE),
-      .COMMIT_WIDTH(COMMIT_WIDTH)
+      .COMMIT_WIDTH(COMMIT_WIDTH),
+      .LOAD_WB_PORTS(LSU_LOAD_WB_PORTS),
+      .LSU_WB_PORTS(LSU_WB_PORTS)
   ) u_lsu_group (
       .clk_i  (clk_i),
       .rst_ni (rst_ni),
@@ -1840,7 +1849,7 @@ module backend #(
       .wb_ecause_o     (lsu_wb_ecause),
       .wb_is_mispred_o (lsu_wb_is_mispred),
       .wb_redirect_pc_o(lsu_wb_redirect_pc),
-      .wb_ready_i      (1'b1),
+      .wb_ready_i      ({LSU_WB_PORTS{1'b1}}),
 
       .dbg_lq_count_o(lsu_lq_count_dbg),
       .dbg_lq_head_valid_o(lsu_lq_head_valid_dbg),
@@ -2015,33 +2024,40 @@ module backend #(
     fu_is_mispred[2]  = bru_mispred;
     fu_redirect_pc[2] = bru_redirect_pc;
 
-    fu_valid[3]       = lsu_wb_valid;
-    fu_data[3]        = lsu_wb_data;
-    fu_rob_idx[3]     = lsu_wb_tag;
-    fu_exception[3]   = lsu_wb_exception;
-    fu_ecause[3]      = lsu_wb_ecause;
-    fu_is_mispred[3]  = lsu_wb_is_mispred;
-    fu_redirect_pc[3] = lsu_wb_redirect_pc;
+    // LSU widened writeback: ports [0..LOAD-1] are load lanes (may carry load
+    // page-fault exceptions); the last LSU port is the store-writeback head
+    // (may carry a store->load ordering-violation redirect). Each maps 1:1 to
+    // CDB ports fu[3 .. 3+LSU_WB_PORTS-1].
+    for (int p = 0; p < LSU_WB_PORTS; p++) begin
+      fu_valid[3+p]       = lsu_wb_valid[p];
+      fu_data[3+p]        = lsu_wb_data[p];
+      fu_rob_idx[3+p]     = lsu_wb_tag[p];
+      fu_exception[3+p]   = lsu_wb_exception[p];
+      fu_ecause[3+p]      = lsu_wb_ecause[p];
+      fu_is_mispred[3+p]  = lsu_wb_is_mispred[p];
+      fu_redirect_pc[3+p] = lsu_wb_redirect_pc[p];
+    end
 
-    fu_valid[4]       = alu2_wb_valid;
-    fu_data[4]        = alu2_wb_data;
-    fu_rob_idx[4]     = alu2_wb_tag;
-    fu_is_mispred[4]  = alu2_mispred;
-    fu_redirect_pc[4] = alu2_redirect_pc;
+    fu_valid[3+LSU_WB_PORTS]       = alu2_wb_valid;
+    fu_data[3+LSU_WB_PORTS]        = alu2_wb_data;
+    fu_rob_idx[3+LSU_WB_PORTS]     = alu2_wb_tag;
+    fu_is_mispred[3+LSU_WB_PORTS]  = alu2_mispred;
+    fu_redirect_pc[3+LSU_WB_PORTS] = alu2_redirect_pc;
 
-    fu_valid[5]       = alu3_wb_valid;
-    fu_data[5]        = alu3_wb_data;
-    fu_rob_idx[5]     = alu3_wb_tag;
-    fu_is_mispred[5]  = alu3_mispred;
-    fu_redirect_pc[5] = alu3_redirect_pc;
+    fu_valid[4+LSU_WB_PORTS]       = alu3_wb_valid;
+    fu_data[4+LSU_WB_PORTS]        = alu3_wb_data;
+    fu_rob_idx[4+LSU_WB_PORTS]     = alu3_wb_tag;
+    fu_is_mispred[4+LSU_WB_PORTS]  = alu3_mispred;
+    fu_redirect_pc[4+LSU_WB_PORTS] = alu3_redirect_pc;
 
-    fu_valid[6]       = csr_wb_valid;
-    fu_data[6]        = csr_wb_data;
-    fu_rob_idx[6]     = csr_wb_tag;
-    fu_exception[6]   = csr_wb_exception;
-    fu_ecause[6]      = csr_wb_ecause;
-    fu_is_mispred[6]  = csr_wb_is_mispred;
-    fu_redirect_pc[6] = csr_wb_redirect_pc;
+    // CSR is the highest FU index (wakeup-mask invariant).
+    fu_valid[5+LSU_WB_PORTS]       = csr_wb_valid;
+    fu_data[5+LSU_WB_PORTS]        = csr_wb_data;
+    fu_rob_idx[5+LSU_WB_PORTS]     = csr_wb_tag;
+    fu_exception[5+LSU_WB_PORTS]   = csr_wb_exception;
+    fu_ecause[5+LSU_WB_PORTS]      = csr_wb_ecause;
+    fu_is_mispred[5+LSU_WB_PORTS]  = csr_wb_is_mispred;
+    fu_redirect_pc[5+LSU_WB_PORTS] = csr_wb_redirect_pc;
   end
 
   logic [WB_WIDTH-1:0]                    wb_raw_valid;

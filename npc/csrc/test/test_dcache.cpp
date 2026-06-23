@@ -567,6 +567,18 @@ int main(int argc, char **argv) {
     assert(false);
   }
 
+  // With the 1-cycle hit path a stalled hit response is presented in S_LOOKUP
+  // for one cycle; the port only buffers the next request after it falls back to
+  // S_RESP. Advance one cycle (response stays valid because ld_rsp_ready_i is 0)
+  // so request B can be queued, exactly as the slow path always did.
+  tick(top, tfp);
+  if (!top->ld_rsp_valid_o || top->ld_rsp_data_o != case10_a_data ||
+      top->ld_rsp_id_o != 1) {
+    std::cout << "[FAIL] Case 10: first response not held across stall."
+              << std::endl;
+    assert(false);
+  }
+
   // Response channel is stalled now.
   top->eval();
 
@@ -706,6 +718,16 @@ int main(int argc, char **argv) {
     assert(false);
   }
 
+  // 1-cycle hit path: move the stalled hit from S_LOOKUP into S_RESP so the next
+  // request can be buffered (response is held while ld_rsp_ready_i is low).
+  tick(top, tfp);
+  if (!top->ld_rsp_valid_o || top->ld_rsp_id_o != 1 ||
+      top->ld_rsp_data_o != case12_a_data) {
+    std::cout << "[FAIL] Case 12: first response not held across stall."
+              << std::endl;
+    assert(false);
+  }
+
   // While first response is stalled, second request B(id=0) must be accepted.
   top->ld_req_valid_i = 1;
   top->ld_req_addr_i = case12_b;
@@ -807,13 +829,15 @@ int main(int argc, char **argv) {
               << std::endl;
     assert(false);
   }
-  tick(top, tfp); // consume first response + accept second request
+  tick(top, tfp); // consume first response (A) + accept second request (B)
   top->ld_req_valid_i = 0;
+  top->ld_rsp_ready_i = 0; // hold B's response to observe the single-cycle latency
 
-  // One cycle later, second response should already be valid (no IDLE bubble).
-  tick(top, tfp);
+  // With the lookup fast path the handoff lands directly in S_LOOKUP, so B's
+  // response is already valid this very cycle (1-cycle hit latency, no bubble).
+  top->eval();
   if (!top->ld_rsp_valid_o) {
-    std::cout << "[FAIL] Case 12B: second response missing at no-bubble timing."
+    std::cout << "[FAIL] Case 12B: second response missing at single-cycle timing."
               << std::endl;
     assert(false);
   }
@@ -888,13 +912,15 @@ int main(int argc, char **argv) {
               << std::endl;
     assert(false);
   }
-  tick(top, tfp); // consume first response + accept second request
+  tick(top, tfp); // consume first response (A) + accept second request (B)
   top->ld_req_valid_i = 0;
+  top->ld_rsp_ready_i = 0; // hold B's response to observe the single-cycle latency
 
-  // One cycle later, second response should be B's payload (not stale A).
-  tick(top, tfp);
+  // With the lookup fast path the predriven address means B is looked up the very
+  // next cycle: B's response must be valid now and carry B's payload (not stale A).
+  top->eval();
   if (!top->ld_rsp_valid_o) {
-    std::cout << "[FAIL] Case 12C: second response missing at no-bubble timing."
+    std::cout << "[FAIL] Case 12C: second response missing at single-cycle timing."
               << std::endl;
     assert(false);
   }
@@ -909,6 +935,60 @@ int main(int argc, char **argv) {
   tick(top, tfp);
   std::cout << "[PASS] Case 12C: handoff cross-line read data is correct."
             << std::endl;
+
+  // ============================================================
+  // Test 12D: Sustained load hits return one response per cycle
+  // ============================================================
+  std::cout << "[TEST] Case 12D: Sustained hit throughput (1 load/cycle)"
+            << std::endl;
+
+  reset(top, tfp);
+  top->miss_req_ready_i = 1;
+  top->refill_valid_i = 0;
+  top->wb_req_ready_i = 1;
+  top->ld_rsp_ready_i = 1;
+  top->st_req_valid_i = 0;
+  top->ld_req_valid_i = 0;
+
+  const uint32_t case12d_addr = 0x8000E000;
+  const uint32_t case12d_data = 0x0F1E2D3C;
+
+  // Warm the line so every subsequent load to it hits.
+  check_load(top, tfp, case12d_addr, case12d_data, OP_LW, "Case 12D: Warmup");
+
+  // Drive a continuous stream of hitting loads with the response channel ready.
+  top->ld_rsp_ready_i = 1;
+  top->ld_req_valid_i = 1;
+  top->ld_req_addr_i = case12d_addr;
+  top->ld_req_op_i = OP_LW;
+  top->ld_req_id_i = 0;
+
+  const int kStreamCycles = 16;
+  int case12d_rsp_fire = 0;
+  for (int i = 0; i < kStreamCycles; i++) {
+    top->eval();
+    if (top->ld_rsp_valid_o && top->ld_rsp_ready_i) {
+      if (top->ld_rsp_data_o != case12d_data || top->ld_rsp_id_o != 0) {
+        std::cout << "[FAIL] Case 12D: streamed response payload mismatch. data=0x"
+                  << std::hex << top->ld_rsp_data_o
+                  << " id=" << static_cast<int>(top->ld_rsp_id_o) << std::endl;
+        assert(false);
+      }
+      case12d_rsp_fire++;
+    }
+    tick(top, tfp);
+  }
+  top->ld_req_valid_i = 0;
+
+  // Steady state is one response per cycle. Over kStreamCycles we should observe
+  // at least kStreamCycles-2 responses (allow a short pipeline fill margin).
+  if (case12d_rsp_fire < kStreamCycles - 2) {
+    std::cout << "[FAIL] Case 12D: sustained hit throughput too low. rsp_fire="
+              << std::dec << case12d_rsp_fire << "/" << kStreamCycles << std::endl;
+    assert(false);
+  }
+  std::cout << "[PASS] Case 12D: sustained load hits return ~1/cycle. rsp_fire="
+            << std::dec << case12d_rsp_fire << "/" << kStreamCycles << std::endl;
 
   // ============================================================
   // Test 13: Reset must invalidate cache contents

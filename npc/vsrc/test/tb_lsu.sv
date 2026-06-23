@@ -101,6 +101,44 @@ module tb_lsu #(
     uop.imm      = imm_i;
   end
 
+  // Widened LSU writeback (experiment): the group now exposes LSU_WB_PORTS
+  // CDB ports (LOAD load-lane ports + 1 store port). The unit-test harness
+  // keeps a single-port observation interface (test_lsu.cpp), so reduce the
+  // vector to a scalar (store port takes priority, matching the old mux), and
+  // free every retiring port through the commit broadcast.
+  localparam int unsigned TB_LOAD_WB_PORTS = 2;
+  localparam int unsigned TB_LSU_WB_PORTS  = TB_LOAD_WB_PORTS + 1;
+  localparam int unsigned TB_STORE_WB_PORT = TB_LOAD_WB_PORTS;
+
+  logic [TB_LSU_WB_PORTS-1:0]                                  dut_wb_valid;
+  logic [TB_LSU_WB_PORTS-1:0][TB_ROB_IDX_WIDTH-1:0]            dut_wb_rob_idx;
+  logic [TB_LSU_WB_PORTS-1:0][global_config_pkg::Cfg.XLEN-1:0] dut_wb_data;
+  logic [TB_LSU_WB_PORTS-1:0]                                  dut_wb_exception;
+  logic [TB_LSU_WB_PORTS-1:0][4:0]                             dut_wb_ecause;
+  logic [TB_LSU_WB_PORTS-1:0]                                  dut_wb_is_mispred;
+  logic [TB_LSU_WB_PORTS-1:0][global_config_pkg::Cfg.PLEN-1:0] dut_wb_redirect_pc;
+
+  always_comb begin
+    wb_valid_o       = |dut_wb_valid;
+    wb_rob_idx_o     = dut_wb_rob_idx[0];
+    wb_data_o        = dut_wb_data[0];
+    wb_exception_o   = dut_wb_exception[0];
+    wb_ecause_o      = dut_wb_ecause[0];
+    wb_is_mispred_o  = dut_wb_is_mispred[0];
+    wb_redirect_pc_o = dut_wb_redirect_pc[0];
+    // Last valid port wins => store port (highest index) takes priority.
+    for (int p = 0; p < TB_LSU_WB_PORTS; p++) begin
+      if (dut_wb_valid[p]) begin
+        wb_rob_idx_o     = dut_wb_rob_idx[p];
+        wb_data_o        = dut_wb_data[p];
+        wb_exception_o   = dut_wb_exception[p];
+        wb_ecause_o      = dut_wb_ecause[p];
+        wb_is_mispred_o  = dut_wb_is_mispred[p];
+        wb_redirect_pc_o = dut_wb_redirect_pc[p];
+      end
+    end
+  end
+
   // The unit testbench has no ROB; free each LQ entry as soon as its load
   // writes back so the datapath tests keep their original occupancy behavior.
   localparam int unsigned TB_COMMIT_WIDTH = 4;
@@ -109,8 +147,10 @@ module tb_lsu #(
   always_comb begin
     dut_commit_valid   = '0;
     dut_commit_rob_idx = '0;
-    dut_commit_valid[0]   = wb_valid_o && wb_ready_i;
-    dut_commit_rob_idx[0] = wb_rob_idx_o;
+    for (int p = 0; p < TB_LSU_WB_PORTS; p++) begin
+      dut_commit_valid[p]   = dut_wb_valid[p] && wb_ready_i;
+      dut_commit_rob_idx[p] = dut_wb_rob_idx[p];
+    end
   end
 
   lsu_group #(
@@ -120,7 +160,9 @@ module tb_lsu #(
       .LQ_DEPTH(TB_LQ_DEPTH),
       .SQ_DEPTH(TB_SQ_DEPTH),
       .N_LSU(TB_LSU_GROUP_SIZE),
-      .COMMIT_WIDTH(TB_COMMIT_WIDTH)
+      .COMMIT_WIDTH(TB_COMMIT_WIDTH),
+      .LOAD_WB_PORTS(TB_LOAD_WB_PORTS),
+      .LSU_WB_PORTS(TB_LSU_WB_PORTS)
   ) dut (
       .clk_i,
       .rst_ni,
@@ -186,14 +228,14 @@ module tb_lsu #(
       .pte_upd_paddr_o,
       .pte_upd_data_o,
 
-      .wb_valid_o,
-      .wb_rob_idx_o,
-      .wb_data_o,
-      .wb_exception_o,
-      .wb_ecause_o,
-      .wb_is_mispred_o,
-      .wb_redirect_pc_o,
-      .wb_ready_i,
+      .wb_valid_o      (dut_wb_valid),
+      .wb_rob_idx_o    (dut_wb_rob_idx),
+      .wb_data_o       (dut_wb_data),
+      .wb_exception_o  (dut_wb_exception),
+      .wb_ecause_o     (dut_wb_ecause),
+      .wb_is_mispred_o (dut_wb_is_mispred),
+      .wb_redirect_pc_o(dut_wb_redirect_pc),
+      .wb_ready_i      ({TB_LSU_WB_PORTS{wb_ready_i}}),
 
       .dbg_lq_count_o(),
       .dbg_lq_head_valid_o(),

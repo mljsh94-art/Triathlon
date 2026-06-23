@@ -218,11 +218,35 @@ module dcache #(
   logic [BANK_SEL_WIDTH-1:0] rsp_handoff_bank_sel_w;
   logic rsp_handoff_err_w;
 
+  // Lookup-stage load-hit fast path: drive the load response combinationally in
+  // the same cycle the hit is computed (1-cycle latency) and accept/predrive the
+  // next load so a stream of hits retires one load per cycle. Mirrors the
+  // rsp_handoff_* signals but for the S_LOOKUP hit cycle.
+  logic                           lookup_load_fast;
+  logic [Cfg.XLEN-1:0]            lookup_rsp_data;
+  logic                           lookup_rsp_fire_w;
+  logic                           lookup_handoff_use_pending_w;
+  logic                           lookup_handoff_use_live_req_w;
+  logic                           lookup_handoff_fire_w;
+  logic [Cfg.PLEN-1:0]            lookup_handoff_addr_w;
+  decode_pkg::lsu_op_e            lookup_handoff_op_w;
+  logic [LD_PORT_ID_WIDTH-1:0]    lookup_handoff_id_w;
+  logic [LINE_ADDR_WIDTH-1:0]     lookup_handoff_line_addr_w;
+  logic [INDEX_WIDTH-1:0]         lookup_handoff_index_w;
+  logic [TAG_WIDTH-1:0]           lookup_handoff_tag_w;
+  logic [OFFSET_WIDTH-1:0]        lookup_handoff_byte_off_w;
+  logic [SETS_PER_BANK_WIDTH-1:0] lookup_handoff_bank_addr_w;
+  logic [BANK_SEL_WIDTH-1:0]      lookup_handoff_bank_sel_w;
+  logic                           lookup_handoff_err_w;
+
   // Ready policy: serve requests in IDLE, but give refill handshake priority.
   always_comb begin
     // Allow one buffered load request only when waiting on load response (S_RESP).
     // This avoids accepting a same-line request during miss LOOKUP before MSHR is visible.
-    ld_req_ready_o = ((state_q == S_IDLE) || (state_q == S_RESP)) &&
+    // Lookup fast path: also accept the next load on a consumed hit cycle
+    // (gated by ld_rsp_ready_i; miss LOOKUP has hit=0 so it is still blocked).
+    ld_req_ready_o = ((state_q == S_IDLE) || (state_q == S_RESP) ||
+                      (state_q == S_LOOKUP && lookup_load_fast && ld_rsp_ready_i)) &&
                      !pending_ld_valid_q && !flush_i && !refill_valid_i &&
                      (!ld_req_valid_i || !ld_req_line_in_mshr);
     st_req_ready_o = st_req_is_mmio
@@ -331,6 +355,13 @@ module dcache #(
   // Read address (port A). IMPORTANT: when writing, must match write address.
   logic [SETS_PER_BANK_WIDTH-1:0]                 r_bank_addr;
   logic [     BANK_SEL_WIDTH-1:0]                 r_bank_sel;
+  // Output-mux bank select (data routing) = the read bank select REGISTERED by
+  // one cycle. The single-port SRAMs have synchronous (1-cycle) reads, so the
+  // bank that must be selected for the data output this cycle is the bank that
+  // was addressed last cycle. Registering also breaks the combinational loop
+  // r_bank_sel -> tag_a -> hit -> lookup_load_fast -> ld_req_ready_o ->
+  // rsp_handoff/accept -> r_bank_sel that the lookup fast path would form.
+  logic [     BANK_SEL_WIDTH-1:0]                 r_bank_sel_o_q;
 
   // ---------------------------------------------------------------------------
   // State machine
@@ -527,13 +558,13 @@ module dcache #(
 
       .bank_addr_ra_i (r_bank_addr),
       .bank_sel_ra_i  (r_bank_sel),
-      .bank_sel_ra_o_i(r_bank_sel),
+      .bank_sel_ra_o_i(r_bank_sel_o_q),
       .rdata_tag_a_o  (tag_a),
       .rdata_valid_a_o(meta_a),
 
       .bank_addr_rb_i (r_bank_addr),
       .bank_sel_rb_i  (r_bank_sel),
-      .bank_sel_rb_o_i(r_bank_sel),
+      .bank_sel_rb_o_i(r_bank_sel_o_q),
       .rdata_tag_b_o  (tag_b),
       .rdata_valid_b_o(meta_b),
 
@@ -555,12 +586,12 @@ module dcache #(
 
       .bank_addr_ra_i(r_bank_addr),
       .bank_sel_ra_i (r_bank_sel),
-      .bank_sel_ra_o_i(r_bank_sel),
+      .bank_sel_ra_o_i(r_bank_sel_o_q),
       .rdata_a_o     (line_a_all),
 
       .bank_addr_rb_i(r_bank_addr),
       .bank_sel_rb_i (r_bank_sel),
-      .bank_sel_rb_o_i(r_bank_sel),
+      .bank_sel_rb_o_i(r_bank_sel_o_q),
       .rdata_b_o     (line_b_all),
 
       .w_bank_addr_i(w_bank_addr),
@@ -762,6 +793,22 @@ module dcache #(
       r_bank_addr = miss_bank_addr_q;
       r_bank_sel  = miss_bank_sel_q;
     end
+
+    // Lookup fast path: predrive the next load's bank/set (SRAM read is sync)
+    // so the handed-off load can be looked up next cycle. The output mux uses
+    // the registered bank select (r_bank_sel_o_q), so this cycle's load still
+    // reads its own bank. Mutually exclusive with lookup_store_refill_fire
+    // (which requires refill_valid_i).
+    if ((state_q == S_LOOKUP) && lookup_handoff_fire_w) begin
+      r_bank_addr = lookup_handoff_bank_addr_w;
+      r_bank_sel  = lookup_handoff_bank_sel_w;
+    end
+  end
+
+  // Register the read bank select for the synchronous-read data output mux.
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) r_bank_sel_o_q <= '0;
+    else         r_bank_sel_o_q <= r_bank_sel;
   end
 
   // Select the freshest line data for a hit (bypass last write if same line/way).
@@ -775,6 +822,35 @@ module dcache #(
       hit_line = last_write_line_q;
     end
   end
+
+  // ---------------------------------------------------------------------------
+  // Lookup-stage load-hit fast path
+  // ---------------------------------------------------------------------------
+  // A load that hits in S_LOOKUP returns its data combinationally this cycle
+  // (no separate S_RESP cycle). Misaligned (err) loads keep the slow S_RESP path.
+  assign lookup_load_fast = (state_q == S_LOOKUP) && !req_is_store_q && !req_err_q && hit;
+  assign lookup_rsp_data  = extract_load(hit_line, req_byte_off_q, req_op_q);
+
+  // Handoff to the next load when this cycle's hit response is actually consumed.
+  // Mirrors rsp_handoff_*: a buffered pending load wins over a live request.
+  assign lookup_rsp_fire_w = lookup_load_fast && ld_rsp_ready_i;
+  assign lookup_handoff_use_pending_w = lookup_rsp_fire_w && pending_ld_valid_q &&
+                                        !flush_i && !refill_valid_i;
+  assign lookup_handoff_use_live_req_w = lookup_rsp_fire_w && !pending_ld_valid_q &&
+                                         ld_req_valid_i && ld_req_ready_o &&
+                                         !flush_i && !refill_valid_i;
+  assign lookup_handoff_fire_w = lookup_handoff_use_pending_w || lookup_handoff_use_live_req_w;
+
+  assign lookup_handoff_addr_w = lookup_handoff_use_pending_w ? pending_ld_addr_q : ld_req_addr_i;
+  assign lookup_handoff_op_w   = lookup_handoff_use_pending_w ? pending_ld_op_q   : ld_req_op_i;
+  assign lookup_handoff_id_w   = lookup_handoff_use_pending_w ? pending_ld_id_q   : ld_req_id_i;
+  assign lookup_handoff_line_addr_w = lookup_handoff_addr_w[Cfg.PLEN-1:OFFSET_WIDTH];
+  assign lookup_handoff_index_w     = lookup_handoff_line_addr_w[INDEX_WIDTH-1:0];
+  assign lookup_handoff_tag_w       = lookup_handoff_line_addr_w[INDEX_WIDTH+:TAG_WIDTH];
+  assign lookup_handoff_byte_off_w  = lookup_handoff_addr_w[OFFSET_WIDTH-1:0];
+  assign lookup_handoff_bank_addr_w = lookup_handoff_index_w[INDEX_WIDTH-1:BANK_SEL_WIDTH];
+  assign lookup_handoff_bank_sel_w  = lookup_handoff_index_w[BANK_SEL_WIDTH-1:0];
+  assign lookup_handoff_err_w       = is_misaligned(lookup_handoff_op_w, lookup_handoff_addr_w);
 
   // ---------------------------------------------------------------------------
   // Default assignments for write port and memory interface
@@ -803,11 +879,13 @@ module dcache #(
     wb_req_paddr_o        = wb_paddr_q;
     wb_req_data_o         = victim_line_q;
 
-    // Load response outputs
-    ld_rsp_valid_o        = (state_q == S_RESP);
-    ld_rsp_data_o         = rsp_data_q;
-    ld_rsp_err_o          = rsp_err_q;
-    ld_rsp_id_o           = rsp_id_q;
+    // Load response outputs. The lookup fast path overlays the S_RESP slow path;
+    // both routes produce identical data/id/err for a given load so a stalled
+    // hit can fall back from S_LOOKUP to S_RESP without violating valid-ready.
+    ld_rsp_valid_o        = (state_q == S_RESP) || lookup_load_fast;
+    ld_rsp_data_o         = lookup_load_fast ? lookup_rsp_data : rsp_data_q;
+    ld_rsp_err_o          = lookup_load_fast ? 1'b0            : rsp_err_q;
+    ld_rsp_id_o           = lookup_load_fast ? req_id_q        : rsp_id_q;
 
     unique case (state_q)
       S_STORE_WRITE: begin
@@ -924,8 +1002,15 @@ module dcache #(
             state_d = S_IDLE;
           end
         end else if (hit) begin
-          if (req_is_store_q) state_d = S_STORE_WRITE;
-          else state_d = S_RESP;
+          if (req_is_store_q) begin
+            state_d = S_STORE_WRITE;
+          end else begin
+            // Load hit fast path: response is driven combinationally this cycle.
+            // If consumed, hand off to the next load (stay in S_LOOKUP) or go
+            // IDLE; if the consumer stalls, fall back to the slow S_RESP path.
+            if (ld_rsp_ready_i) state_d = lookup_handoff_fire_w ? S_LOOKUP : S_IDLE;
+            else                state_d = S_RESP;
+          end
         end else if (req_is_store_q) begin
           // Committed stores have already been dequeued from the Store Buffer.
           // Keep store misses blocking in D$ so exception flushes cannot drop
@@ -1113,6 +1198,29 @@ module dcache #(
         req_err_q       <= rsp_handoff_err_w;
 
         if (rsp_handoff_use_pending_w) begin
+          pending_ld_valid_q <= 1'b0;
+        end
+      end
+
+      // Lookup fast-path handoff: register the next load directly into the
+      // in-flight request regs (read address was predriven above). Writes only
+      // req_*_q (the S_LOOKUP block below writes victim_*/miss_*/rsp_data_q), so
+      // there is no NBA conflict; the current load's response was already driven.
+      if ((state_q == S_LOOKUP) && lookup_handoff_fire_w) begin
+        req_is_store_q  <= 1'b0;
+        req_addr_q      <= lookup_handoff_addr_w;
+        req_op_q        <= lookup_handoff_op_w;
+        req_wdata_q     <= '0;
+        req_id_q        <= lookup_handoff_id_w;
+        req_line_addr_q <= lookup_handoff_line_addr_w;
+        req_index_q     <= lookup_handoff_index_w;
+        req_tag_q       <= lookup_handoff_tag_w;
+        req_byte_off_q  <= lookup_handoff_byte_off_w;
+        req_bank_addr_q <= lookup_handoff_bank_addr_w;
+        req_bank_sel_q  <= lookup_handoff_bank_sel_w;
+        req_err_q       <= lookup_handoff_err_w;
+
+        if (lookup_handoff_use_pending_w) begin
           pending_ld_valid_q <= 1'b0;
         end
       end

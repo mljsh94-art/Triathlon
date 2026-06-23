@@ -20,7 +20,11 @@ import decode_pkg::*;
 // lsu_group.
 module lsu_arbiter #(
     parameter config_pkg::cfg_t Cfg           = config_pkg::EmptyCfg,
-    parameter int unsigned      N_LSU         = 1
+    parameter int unsigned      N_LSU         = 1,
+    // Number of concurrent writeback grants the arbiter may hand out per cycle
+    // (one load-writeback port each). Capped at N_LSU since two grants must be
+    // distinct lanes.
+    parameter int unsigned      N_WB          = 1
 ) (
     input logic clk_i,
     input logic rst_ni,
@@ -65,12 +69,12 @@ module lsu_arbiter #(
     input  logic                                                    mmio_rsp_valid_i,
 
     // =========================================================
-    // 4) Writeback lane arbitration (round-robin)
+    // 4) Writeback lane arbitration (multi-wide round-robin)
     // =========================================================
-    input  logic                [         N_LSU-1:0]                lane_wb_valid_i,
-    input  logic                                                    wb_pop_i,
-    output logic                                                    wb_grant_valid_o,
-    output logic [((N_LSU <= 1) ? 1 : $clog2(N_LSU))-1:0]           wb_lane_idx_o
+    input  logic                [         N_LSU-1:0]                                       lane_wb_valid_i,
+    input  logic                [          N_WB-1:0]                                       wb_pop_i,
+    output logic                [          N_WB-1:0]                                       wb_grant_valid_o,
+    output logic [          N_WB-1:0][((N_LSU <= 1) ? 1 : $clog2(N_LSU))-1:0]              wb_lane_idx_o
 );
 
   localparam int unsigned LANE_SEL_WIDTH = (N_LSU <= 1) ? 1 : $clog2(N_LSU);
@@ -178,24 +182,48 @@ module lsu_arbiter #(
   end
 
   // ---------------------------------------------------------
-  // 4) Writeback lane arbitration (round-robin)
+  // 4) Writeback lane arbitration (multi-wide round-robin)
+  //
+  // Starting from wb_rr_q, scan the lanes and hand out up to N_WB grants to
+  // distinct valid lanes (a `picked` mask prevents granting the same lane to
+  // two ports). The pointer advances past the last lane actually consumed
+  // (reported by wb_pop_i), so unselected/back-pressured lanes keep priority.
   // ---------------------------------------------------------
-  logic [N_LSU-1:0]          wb_grant;
+  logic [N_LSU-1:0] wb_picked;
 
   always_comb begin
-    wb_grant = '0;
-    wb_lane_idx_o = '0;
-    wb_grant_valid_o = 1'b0;
-    for (int off = 0; off < N_LSU; off++) begin
-      int unsigned idx;
-      idx = $unsigned(wb_rr_q) + off;
-      if (idx >= N_LSU) begin
-        idx -= N_LSU;
+    wb_picked = '0;
+    for (int g = 0; g < N_WB; g++) begin
+      wb_grant_valid_o[g] = 1'b0;
+      wb_lane_idx_o[g]    = '0;
+    end
+    for (int g = 0; g < N_WB; g++) begin
+      for (int off = 0; off < N_LSU; off++) begin
+        int unsigned idx;
+        idx = $unsigned(wb_rr_q) + off;
+        if (idx >= N_LSU) begin
+          idx -= N_LSU;
+        end
+        if (!wb_grant_valid_o[g] && lane_wb_valid_i[idx] && !wb_picked[idx]) begin
+          wb_grant_valid_o[g] = 1'b1;
+          wb_lane_idx_o[g]    = LANE_SEL_WIDTH'(idx);
+          wb_picked[idx]      = 1'b1;
+        end
       end
-      if (!wb_grant_valid_o && lane_wb_valid_i[idx]) begin
-        wb_grant_valid_o = 1'b1;
-        wb_grant[idx] = 1'b1;
-        wb_lane_idx_o = LANE_SEL_WIDTH'(idx);
+    end
+  end
+
+  // Advance the round-robin pointer to just past the highest-priority grant
+  // that was actually consumed this cycle.
+  logic                      wb_adv_en;
+  logic [LANE_SEL_WIDTH-1:0] wb_adv_idx;
+  always_comb begin
+    wb_adv_en  = 1'b0;
+    wb_adv_idx = '0;
+    for (int g = 0; g < N_WB; g++) begin
+      if (wb_pop_i[g]) begin
+        wb_adv_en  = 1'b1;
+        wb_adv_idx = wb_lane_idx_o[g];
       end
     end
   end
@@ -214,8 +242,8 @@ module lsu_arbiter #(
       if (ld_req_fire) begin
         ld_req_rr_q <= rr_next_idx(ld_req_lane_idx);
       end
-      if (wb_pop_i) begin
-        wb_rr_q <= rr_next_idx(wb_lane_idx_o);
+      if (wb_adv_en) begin
+        wb_rr_q <= rr_next_idx(wb_adv_idx);
       end
     end
   end

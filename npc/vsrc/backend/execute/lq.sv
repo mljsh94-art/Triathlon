@@ -22,7 +22,12 @@ module lq #(
     parameter int unsigned DEPTH         = 16,
     parameter int unsigned PLEN          = 32,
     parameter int unsigned BE_WIDTH      = 4,
-    parameter int unsigned COMMIT_WIDTH  = 4
+    parameter int unsigned COMMIT_WIDTH  = 4,
+    // Number of concurrent load-writeback (executed) update ports. With a wide
+    // LSU writeback (multiple load lanes retiring per cycle) more than one entry
+    // may transition to `executed` in the same cycle; the disambiguation CAM
+    // must observe all of them to avoid missing an ordering violation.
+    parameter int unsigned N_EXEC        = 1
 ) (
     input logic clk_i,
     input logic rst_ni,
@@ -51,8 +56,8 @@ module lq #(
     // Executed update (load writeback): mark the matching entry as having
     // produced its value. Associative match on ROB tag.
     // ---------------------------------------------------------------
-    input logic                     exec_valid_i,
-    input logic [ROB_IDX_WIDTH-1:0] exec_rob_tag_i,
+    input logic [N_EXEC-1:0]                    exec_valid_i,
+    input logic [N_EXEC-1:0][ROB_IDX_WIDTH-1:0] exec_rob_tag_i,
 
     // ---------------------------------------------------------------
     // Store->load violation CAM. Driven when a store resolves its address.
@@ -200,8 +205,12 @@ module lq #(
     best_rob   = '0;
 
     for (int i = 0; i < DEPTH; i++) begin
-      ld_executed = executed_q[i] ||
-                    (exec_valid_i && (rob_tag_q[i] == exec_rob_tag_i));
+      ld_executed = executed_q[i];
+      for (int e = 0; e < N_EXEC; e++) begin
+        if (exec_valid_i[e] && (rob_tag_q[i] == exec_rob_tag_i[e])) begin
+          ld_executed = 1'b1;
+        end
+      end
       if (valid_q[i] && ld_executed &&
           (paddr_q[i][PLEN-1:2] == st_paddr_i[PLEN-1:2]) &&
           ((be_q[i] & st_be_i) != '0)) begin
@@ -250,8 +259,12 @@ module lq #(
           be_q[i] <= alloc_be_i;
         end else if (free_match[i]) begin
           valid_q[i] <= 1'b0;
-        end else if (exec_valid_i && valid_q[i] && (rob_tag_q[i] == exec_rob_tag_i)) begin
-          executed_q[i] <= 1'b1;
+        end else if (valid_q[i]) begin
+          for (int e = 0; e < N_EXEC; e++) begin
+            if (exec_valid_i[e] && (rob_tag_q[i] == exec_rob_tag_i[e])) begin
+              executed_q[i] <= 1'b1;
+            end
+          end
         end
       end
 
