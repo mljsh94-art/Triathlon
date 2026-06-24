@@ -753,6 +753,7 @@ module bpu #(
     logic tage_provider_ok;
     logic tage_allow_override;
     logic sc_allow_override;
+    logic cond_override_nt;
 
     local_idx = bht_pc_index(cond_branch_pc_w);
     global_idx = bht_global_index(cond_branch_pc_w, spec_ghr_q);
@@ -782,6 +783,15 @@ module bpu #(
     end
     cond_tage_candidate_w = ftb_pick_is_cond_w && tage_allow_override;
 
+    // 方向-only override：已 pick 的 cond 分支必然是 taken-pick（FTB 只挑 taken 槽）。
+    // 当 TAGE 强命中且方向判为 not-taken 时，把该分支翻成 NT，重定向到它的另一个
+    // 出口（fall-through）。不重新挑选其它分支，只翻方向。
+    if (cond_tage_candidate_w && !tage_taken_w) begin
+      cond_tage_override_w = 1'b1;
+      cond_selected_provider_w = COND_PROVIDER_TAGE;
+      cond_selected_taken_w = tage_taken_w;
+    end
+
     sc_allow_override = USE_SC && sc_confident_w;
     if (selected_legacy_strong) begin
       sc_allow_override = 1'b0;
@@ -807,21 +817,26 @@ module bpu #(
     end
 
     predict_hit = ftb_pick_valid_w;
-    predict_taken = predict_hit;
+    // 已 pick 分支的有效方向：cond 命中 TAGE override 时翻成 not-taken，其余保持 taken。
+    cond_override_nt = cond_tage_override_w;
+    predict_taken = predict_hit && !cond_override_nt;
     predict_is_cond = ftb_pick_is_cond_w;
     predict_is_call = ftb_pick_is_call_w;
     predict_is_ret = ftb_pick_is_ret_w;
     predict_is_indirect = ftb_pick_is_indirect_w;
     predict_is_rvc = ftb_pick_is_rvc_w;
 
-    pred_slot_valid_w   = predict_hit;
+    // 下游 FTQ：只有"有效 taken"才需要重定向；override 成 NT 时按 fall-through 顺序前进。
+    pred_slot_valid_w   = predict_hit && predict_taken;
     pred_slot_idx_w     = pred_slot_valid_w ? ftb_pick_end_idx_w : '0;
     pred_slot_is_call_w = pred_slot_valid_w && predict_is_call;
     pred_slot_is_ret_w  = pred_slot_valid_w && predict_is_ret;
     pred_slot_is_rvc_w  = pred_slot_valid_w && predict_is_rvc;
-    pred_slot_is_cond_w = pred_slot_valid_w && predict_is_cond;
-    pred_slot_taken_w   = pred_slot_valid_w;
-    pred_slot_pc_w      = pred_slot_valid_w ? ftb_pick_pc_w : '0;
+    // cond 事件用于历史/统计：与 taken 解耦，picked cond 无论翻不翻都记一次（方向见
+    // pred_slot_taken_w）。picked-cond 集合不变，仅 taken 位随 override 改变。
+    pred_slot_is_cond_w = predict_hit && predict_is_cond;
+    pred_slot_taken_w   = predict_taken;
+    pred_slot_pc_w      = predict_hit ? ftb_pick_pc_w : '0;
     pred_slot_target_w  = predict_target;
 
     dbg_snap_ittage_raw_hit_w = ittage_raw_hit_w;

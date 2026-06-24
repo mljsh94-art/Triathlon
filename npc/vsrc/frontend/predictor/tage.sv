@@ -9,7 +9,10 @@ module tage #(
     parameter int unsigned HIST_LEN0 = 2,
     parameter int unsigned HIST_LEN1 = 4,
     parameter int unsigned HIST_LEN2 = 6,
-    parameter int unsigned HIST_LEN3 = 8
+    parameter int unsigned HIST_LEN3 = 8,
+    parameter int unsigned USEFUL_BITS = 2,
+    parameter int unsigned USE_ALT_BITS = 4,
+    parameter int unsigned AGING_PERIOD = 4096
 ) (
     input logic clk_i,
     input logic rst_i,
@@ -32,27 +35,48 @@ module tage #(
   localparam int unsigned INSTR_ADDR_LSB = 1;
   localparam int unsigned IDX_W = (TABLE_ENTRIES > 1) ? $clog2(TABLE_ENTRIES) : 1;
   localparam int unsigned GHR_W = (GHR_BITS > 0) ? GHR_BITS : 1;
-  localparam int unsigned SLOT_IDX_W = (INSTR_PER_FETCH > 1) ? $clog2(INSTR_PER_FETCH) : 1;
+  localparam int unsigned AGE_W = (AGING_PERIOD > 1) ? $clog2(AGING_PERIOD) : 1;
 
-  logic [INSTR_PER_FETCH-1:0][IDX_W-1:0] pred_idx_t0, pred_idx_t1, pred_idx_t2, pred_idx_t3;
-  logic [INSTR_PER_FETCH-1:0][TAG_BITS-1:0] pred_tag_t0, pred_tag_t1, pred_tag_t2, pred_tag_t3;
-  logic [INSTR_PER_FETCH-1:0] hit_t0, hit_t1, hit_t2, hit_t3;
-  logic [INSTR_PER_FETCH-1:0][1:0] ctr_t0, ctr_t1, ctr_t2, ctr_t3;
+  // 几何递增历史长度与各表的撒盐常数（盐用于打散 PC/历史的折叠位置）。
+  localparam int unsigned HIST_LEN  [NUM_TABLES] = '{HIST_LEN0, HIST_LEN1, HIST_LEN2, HIST_LEN3};
+  localparam int unsigned IDX_SALT  [NUM_TABLES] = '{1, 2, 4, 6};
+  localparam int unsigned IDX_HSALT [NUM_TABLES] = '{3, 5, 7, 11};
+  localparam int unsigned TAG_SALT  [NUM_TABLES] = '{1, 2, 4, 6};
+  localparam int unsigned TAG_HSALT [NUM_TABLES] = '{3, 5, 7, 11};
 
-  logic [IDX_W-1:0] update_idx_t0, update_idx_t1, update_idx_t2, update_idx_t3;
-  logic [TAG_BITS-1:0] update_tag_t0, update_tag_t1, update_tag_t2, update_tag_t3;
-  logic upd_hit_t0, upd_hit_t1, upd_hit_t2, upd_hit_t3;
+  logic [INSTR_PER_FETCH-1:0][IDX_W-1:0]   pred_idx [NUM_TABLES];
+  logic [INSTR_PER_FETCH-1:0][TAG_BITS-1:0] pred_tag [NUM_TABLES];
+  logic [INSTR_PER_FETCH-1:0]              hit      [NUM_TABLES];
+  logic [INSTR_PER_FETCH-1:0][1:0]         ctr      [NUM_TABLES];
 
-  logic upd_provider_hit;
-  logic [1:0] upd_provider_idx;
-  logic [1:0] upd_provider_ctr;
-  logic upd_need_alloc;
-  logic upd_alloc_valid;
-  logic [1:0] upd_alloc_idx;
+  logic [IDX_W-1:0]            upd_idx [NUM_TABLES];
+  logic [TAG_BITS-1:0]         upd_tag [NUM_TABLES];
+  logic                        upd_hit [NUM_TABLES];
+  logic [1:0]                  upd_ctr [NUM_TABLES];
+  logic [USEFUL_BITS-1:0]      upd_u   [NUM_TABLES];
 
-  logic upd_t0_valid, upd_t1_valid, upd_t2_valid, upd_t3_valid;
-  logic upd_t0_alloc, upd_t1_alloc, upd_t2_alloc, upd_t3_alloc;
+  logic                        upd_t_valid [NUM_TABLES];
+  logic                        upd_t_alloc [NUM_TABLES];
+  logic                        upd_t_ctr   [NUM_TABLES];
+  logic                        upd_t_uinc  [NUM_TABLES];
+  logic                        upd_t_udec  [NUM_TABLES];
 
+  // alt-pred / use_alt_on_newalloc 状态与周期老化计数器。
+  logic [USE_ALT_BITS-1:0] use_alt_on_na_q;
+  logic [AGE_W-1:0]        age_cnt_q;
+  logic                    upd_age;
+
+  // 折叠后的 update 侧 provider / alt 解析结果（也供时序块训练 use_alt 计数器）。
+  logic       upd_prov_found, upd_alt_found;
+  logic [1:0] upd_prov_t, upd_alt_t;
+  logic [1:0] upd_prov_ctr;
+  logic       upd_prov_taken, upd_prov_strong, upd_prov_weak;
+  logic       upd_alt_taken;
+  logic       upd_use_alt, upd_final_taken, upd_mispred;
+  logic       upd_alloc_found;
+  logic [1:0] upd_alloc_t;
+
+  // ---- 折叠哈希（PC 与历史各自折叠后再异或；历史侧 lim 限制实现长历史折叠） ----
   function automatic logic [IDX_W-1:0] fold_hist_idx(input logic [GHR_W-1:0] hist,
                                                      input int unsigned hist_len,
                                                      input int unsigned salt);
@@ -107,197 +131,211 @@ module tage #(
     end
   endfunction
 
+  function automatic logic is_strong(input logic [1:0] c);
+    is_strong = (c == 2'b00) || (c == 2'b11);
+  endfunction
+
   always_comb begin
     for (int i = 0; i < INSTR_PER_FETCH; i++) begin
       logic [Cfg.PLEN-1:0] slot_pc;
       slot_pc = predict_base_pc_i + Cfg.PLEN'(INSTR_BYTES * i);
-
-      pred_idx_t0[i] = fold_pc_idx(slot_pc, 1) ^ fold_hist_idx(predict_ghr_i, HIST_LEN0, 3);
-      pred_idx_t1[i] = fold_pc_idx(slot_pc, 2) ^ fold_hist_idx(predict_ghr_i, HIST_LEN1, 5);
-      pred_idx_t2[i] = fold_pc_idx(slot_pc, 4) ^ fold_hist_idx(predict_ghr_i, HIST_LEN2, 7);
-      pred_idx_t3[i] = fold_pc_idx(slot_pc, 6) ^ fold_hist_idx(predict_ghr_i, HIST_LEN3, 11);
-
-      pred_tag_t0[i] = fold_pc_tag(slot_pc, 1) ^ fold_hist_tag(predict_ghr_i, HIST_LEN0, 3);
-      pred_tag_t1[i] = fold_pc_tag(slot_pc, 2) ^ fold_hist_tag(predict_ghr_i, HIST_LEN1, 5);
-      pred_tag_t2[i] = fold_pc_tag(slot_pc, 4) ^ fold_hist_tag(predict_ghr_i, HIST_LEN2, 7);
-      pred_tag_t3[i] = fold_pc_tag(slot_pc, 6) ^ fold_hist_tag(predict_ghr_i, HIST_LEN3, 11);
+      for (int t = 0; t < NUM_TABLES; t++) begin
+        pred_idx[t][i] = fold_pc_idx(slot_pc, IDX_SALT[t]) ^
+                         fold_hist_idx(predict_ghr_i, HIST_LEN[t], IDX_HSALT[t]);
+        pred_tag[t][i] = fold_pc_tag(slot_pc, TAG_SALT[t]) ^
+                         fold_hist_tag(predict_ghr_i, HIST_LEN[t], TAG_HSALT[t]);
+      end
     end
 
-    update_idx_t0 = fold_pc_idx(update_pc_i, 1) ^ fold_hist_idx(update_ghr_i, HIST_LEN0, 3);
-    update_idx_t1 = fold_pc_idx(update_pc_i, 2) ^ fold_hist_idx(update_ghr_i, HIST_LEN1, 5);
-    update_idx_t2 = fold_pc_idx(update_pc_i, 4) ^ fold_hist_idx(update_ghr_i, HIST_LEN2, 7);
-    update_idx_t3 = fold_pc_idx(update_pc_i, 6) ^ fold_hist_idx(update_ghr_i, HIST_LEN3, 11);
-
-    update_tag_t0 = fold_pc_tag(update_pc_i, 1) ^ fold_hist_tag(update_ghr_i, HIST_LEN0, 3);
-    update_tag_t1 = fold_pc_tag(update_pc_i, 2) ^ fold_hist_tag(update_ghr_i, HIST_LEN1, 5);
-    update_tag_t2 = fold_pc_tag(update_pc_i, 4) ^ fold_hist_tag(update_ghr_i, HIST_LEN2, 7);
-    update_tag_t3 = fold_pc_tag(update_pc_i, 6) ^ fold_hist_tag(update_ghr_i, HIST_LEN3, 11);
+    for (int t = 0; t < NUM_TABLES; t++) begin
+      upd_idx[t] = fold_pc_idx(update_pc_i, IDX_SALT[t]) ^
+                   fold_hist_idx(update_ghr_i, HIST_LEN[t], IDX_HSALT[t]);
+      upd_tag[t] = fold_pc_tag(update_pc_i, TAG_SALT[t]) ^
+                   fold_hist_tag(update_ghr_i, HIST_LEN[t], TAG_HSALT[t]);
+    end
   end
 
-  tage_table #(
-      .INSTR_PER_FETCH(INSTR_PER_FETCH),
-      .ENTRIES(TABLE_ENTRIES),
-      .TAG_BITS(TAG_BITS)
-  ) u_tage_t0 (
-      .clk_i(clk_i),
-      .rst_i(rst_i),
-      .predict_idx_i(pred_idx_t0),
-      .predict_tag_i(pred_tag_t0),
-      .predict_hit_o(hit_t0),
-      .predict_ctr_o(ctr_t0),
-      .update_valid_i(upd_t0_valid),
-      .update_idx_i(update_idx_t0),
-      .update_tag_i(update_tag_t0),
-      .update_taken_i(update_taken_i),
-      .update_alloc_i(upd_t0_alloc),
-      .update_hit_o(upd_hit_t0)
-  );
+  generate
+    for (genvar t = 0; t < NUM_TABLES; t++) begin : g_table
+      tage_table #(
+          .INSTR_PER_FETCH(INSTR_PER_FETCH),
+          .ENTRIES(TABLE_ENTRIES),
+          .TAG_BITS(TAG_BITS),
+          .USEFUL_BITS(USEFUL_BITS)
+      ) u_tab (
+          .clk_i(clk_i),
+          .rst_i(rst_i),
+          .predict_idx_i(pred_idx[t]),
+          .predict_tag_i(pred_tag[t]),
+          .predict_hit_o(hit[t]),
+          .predict_ctr_o(ctr[t]),
+          .update_valid_i(upd_t_valid[t]),
+          .update_idx_i(upd_idx[t]),
+          .update_tag_i(upd_tag[t]),
+          .update_taken_i(update_taken_i),
+          .update_alloc_i(upd_t_alloc[t]),
+          .update_ctr_i(upd_t_ctr[t]),
+          .update_u_inc_i(upd_t_uinc[t]),
+          .update_u_dec_i(upd_t_udec[t]),
+          .update_age_i(upd_age),
+          .update_hit_o(upd_hit[t]),
+          .update_ctr_o(upd_ctr[t]),
+          .update_useful_o(upd_u[t])
+      );
+    end
+  endgenerate
 
-  tage_table #(
-      .INSTR_PER_FETCH(INSTR_PER_FETCH),
-      .ENTRIES(TABLE_ENTRIES),
-      .TAG_BITS(TAG_BITS)
-  ) u_tage_t1 (
-      .clk_i(clk_i),
-      .rst_i(rst_i),
-      .predict_idx_i(pred_idx_t1),
-      .predict_tag_i(pred_tag_t1),
-      .predict_hit_o(hit_t1),
-      .predict_ctr_o(ctr_t1),
-      .update_valid_i(upd_t1_valid),
-      .update_idx_i(update_idx_t1),
-      .update_tag_i(update_tag_t1),
-      .update_taken_i(update_taken_i),
-      .update_alloc_i(upd_t1_alloc),
-      .update_hit_o(upd_hit_t1)
-  );
-
-  tage_table #(
-      .INSTR_PER_FETCH(INSTR_PER_FETCH),
-      .ENTRIES(TABLE_ENTRIES),
-      .TAG_BITS(TAG_BITS)
-  ) u_tage_t2 (
-      .clk_i(clk_i),
-      .rst_i(rst_i),
-      .predict_idx_i(pred_idx_t2),
-      .predict_tag_i(pred_tag_t2),
-      .predict_hit_o(hit_t2),
-      .predict_ctr_o(ctr_t2),
-      .update_valid_i(upd_t2_valid),
-      .update_idx_i(update_idx_t2),
-      .update_tag_i(update_tag_t2),
-      .update_taken_i(update_taken_i),
-      .update_alloc_i(upd_t2_alloc),
-      .update_hit_o(upd_hit_t2)
-  );
-
-  tage_table #(
-      .INSTR_PER_FETCH(INSTR_PER_FETCH),
-      .ENTRIES(TABLE_ENTRIES),
-      .TAG_BITS(TAG_BITS)
-  ) u_tage_t3 (
-      .clk_i(clk_i),
-      .rst_i(rst_i),
-      .predict_idx_i(pred_idx_t3),
-      .predict_tag_i(pred_tag_t3),
-      .predict_hit_o(hit_t3),
-      .predict_ctr_o(ctr_t3),
-      .update_valid_i(upd_t3_valid),
-      .update_idx_i(update_idx_t3),
-      .update_tag_i(update_tag_t3),
-      .update_taken_i(update_taken_i),
-      .update_alloc_i(upd_t3_alloc),
-      .update_hit_o(upd_hit_t3)
-  );
-
+  // ---- 预测：最长命中表为 provider，次长命中表为 alt；新分配弱条目先信 alt ----
   always_comb begin
     for (int i = 0; i < INSTR_PER_FETCH; i++) begin
-      predict_hit_o[i] = 1'b0;
-      predict_taken_o[i] = 1'b0;
-      predict_strong_o[i] = 1'b0;
+      logic       prov_found, alt_found;
+      logic [1:0] prov_t, alt_t;
+      logic [1:0] prov_ctr_v, alt_ctr_v;
+      logic       prov_weak, use_alt_sel;
+
+      predict_hit_o[i]      = 1'b0;
+      predict_taken_o[i]    = 1'b0;
+      predict_strong_o[i]   = 1'b0;
       predict_provider_o[i] = '0;
 
-      if (hit_t3[i]) begin
-        predict_hit_o[i] = 1'b1;
-        predict_provider_o[i] = 2'd3;
-        predict_taken_o[i] = ctr_t3[i][1];
-        predict_strong_o[i] = (ctr_t3[i] == 2'b00) || (ctr_t3[i] == 2'b11);
-      end else if (hit_t2[i]) begin
-        predict_hit_o[i] = 1'b1;
-        predict_provider_o[i] = 2'd2;
-        predict_taken_o[i] = ctr_t2[i][1];
-        predict_strong_o[i] = (ctr_t2[i] == 2'b00) || (ctr_t2[i] == 2'b11);
-      end else if (hit_t1[i]) begin
-        predict_hit_o[i] = 1'b1;
-        predict_provider_o[i] = 2'd1;
-        predict_taken_o[i] = ctr_t1[i][1];
-        predict_strong_o[i] = (ctr_t1[i] == 2'b00) || (ctr_t1[i] == 2'b11);
-      end else if (hit_t0[i]) begin
-        predict_hit_o[i] = 1'b1;
-        predict_provider_o[i] = 2'd0;
-        predict_taken_o[i] = ctr_t0[i][1];
-        predict_strong_o[i] = (ctr_t0[i] == 2'b00) || (ctr_t0[i] == 2'b11);
+      prov_found  = 1'b0;
+      alt_found   = 1'b0;
+      prov_t      = '0;
+      alt_t       = '0;
+      prov_ctr_v  = 2'b01;
+      alt_ctr_v   = 2'b01;
+      prov_weak   = 1'b0;
+      use_alt_sel = 1'b0;
+      for (int t = NUM_TABLES - 1; t >= 0; t--) begin
+        if (hit[t][i]) begin
+          if (!prov_found) begin
+            prov_found = 1'b1;
+            prov_t     = t[1:0];
+          end else if (!alt_found) begin
+            alt_found = 1'b1;
+            alt_t     = t[1:0];
+          end
+        end
+      end
+
+      if (prov_found) begin
+        prov_ctr_v  = ctr[prov_t][i];
+        prov_weak   = !is_strong(prov_ctr_v);
+        use_alt_sel = prov_weak && use_alt_on_na_q[USE_ALT_BITS-1] && alt_found;
+
+        predict_hit_o[i]      = 1'b1;
+        predict_provider_o[i] = prov_t;
+        if (use_alt_sel) begin
+          alt_ctr_v           = ctr[alt_t][i];
+          predict_taken_o[i]  = alt_ctr_v[1];
+          predict_strong_o[i] = is_strong(alt_ctr_v);
+        end else begin
+          predict_taken_o[i]  = prov_ctr_v[1];
+          predict_strong_o[i] = is_strong(prov_ctr_v);
+        end
       end
     end
   end
 
+  // ---- 更新：基于 update_idx 处的真实 ctr/useful 判断分配，而非预测槽噪声 ----
   always_comb begin
-    upd_provider_hit = 1'b0;
-    upd_provider_idx = '0;
-    upd_provider_ctr = 2'b01;
-
-    if (upd_hit_t3) begin
-      upd_provider_hit = 1'b1;
-      upd_provider_idx = 2'd3;
-      upd_provider_ctr = ctr_t3[0];
-    end else if (upd_hit_t2) begin
-      upd_provider_hit = 1'b1;
-      upd_provider_idx = 2'd2;
-      upd_provider_ctr = ctr_t2[0];
-    end else if (upd_hit_t1) begin
-      upd_provider_hit = 1'b1;
-      upd_provider_idx = 2'd1;
-      upd_provider_ctr = ctr_t1[0];
-    end else if (upd_hit_t0) begin
-      upd_provider_hit = 1'b1;
-      upd_provider_idx = 2'd0;
-      upd_provider_ctr = ctr_t0[0];
+    for (int t = 0; t < NUM_TABLES; t++) begin
+      upd_t_valid[t] = 1'b0;
+      upd_t_alloc[t] = 1'b0;
+      upd_t_ctr[t]   = 1'b0;
+      upd_t_uinc[t]  = 1'b0;
+      upd_t_udec[t]  = 1'b0;
     end
 
-    upd_need_alloc = update_valid_i &&
-                     (!upd_provider_hit || (upd_provider_ctr[1] != update_taken_i));
-
-    upd_alloc_valid = 1'b0;
-    upd_alloc_idx = '0;
-    if (upd_need_alloc) begin
-      if (!upd_hit_t3) begin
-        upd_alloc_valid = 1'b1;
-        upd_alloc_idx = 2'd3;
-      end else if (!upd_hit_t2) begin
-        upd_alloc_valid = 1'b1;
-        upd_alloc_idx = 2'd2;
-      end else if (!upd_hit_t1) begin
-        upd_alloc_valid = 1'b1;
-        upd_alloc_idx = 2'd1;
-      end else if (!upd_hit_t0) begin
-        upd_alloc_valid = 1'b1;
-        upd_alloc_idx = 2'd0;
+    upd_prov_found = 1'b0;
+    upd_alt_found  = 1'b0;
+    upd_prov_t     = '0;
+    upd_alt_t      = '0;
+    for (int t = NUM_TABLES - 1; t >= 0; t--) begin
+      if (upd_hit[t]) begin
+        if (!upd_prov_found) begin
+          upd_prov_found = 1'b1;
+          upd_prov_t     = t[1:0];
+        end else if (!upd_alt_found) begin
+          upd_alt_found = 1'b1;
+          upd_alt_t     = t[1:0];
+        end
       end
     end
 
-    upd_t0_valid = (update_valid_i && upd_provider_hit && (upd_provider_idx == 2'd0)) ||
-                   (upd_alloc_valid && (upd_alloc_idx == 2'd0));
-    upd_t1_valid = (update_valid_i && upd_provider_hit && (upd_provider_idx == 2'd1)) ||
-                   (upd_alloc_valid && (upd_alloc_idx == 2'd1));
-    upd_t2_valid = (update_valid_i && upd_provider_hit && (upd_provider_idx == 2'd2)) ||
-                   (upd_alloc_valid && (upd_alloc_idx == 2'd2));
-    upd_t3_valid = (update_valid_i && upd_provider_hit && (upd_provider_idx == 2'd3)) ||
-                   (upd_alloc_valid && (upd_alloc_idx == 2'd3));
+    upd_prov_ctr    = upd_prov_found ? upd_ctr[upd_prov_t] : 2'b01;
+    upd_prov_taken  = upd_prov_ctr[1];
+    upd_prov_strong = is_strong(upd_prov_ctr);
+    upd_prov_weak   = !upd_prov_strong;
+    upd_alt_taken   = upd_alt_found ? upd_ctr[upd_alt_t][1] : 1'b0;
+    upd_use_alt     = upd_prov_weak && use_alt_on_na_q[USE_ALT_BITS-1] && upd_alt_found;
+    upd_final_taken = upd_use_alt ? upd_alt_taken : upd_prov_taken;
+    upd_mispred     = !upd_prov_found || (upd_final_taken != update_taken_i);
 
-    upd_t0_alloc = upd_alloc_valid && (upd_alloc_idx == 2'd0);
-    upd_t1_alloc = upd_alloc_valid && (upd_alloc_idx == 2'd1);
-    upd_t2_alloc = upd_alloc_valid && (upd_alloc_idx == 2'd2);
-    upd_t3_alloc = upd_alloc_valid && (upd_alloc_idx == 2'd3);
+    // 牺牲项：在比 provider 更长的表里挑第一个 useful==0 的条目。
+    upd_alloc_found = 1'b0;
+    upd_alloc_t     = '0;
+    for (int t = 0; t < NUM_TABLES; t++) begin
+      if (((!upd_prov_found) || (t > int'(upd_prov_t))) && (upd_u[t] == '0) && !upd_alloc_found) begin
+        upd_alloc_found = 1'b1;
+        upd_alloc_t     = t[1:0];
+      end
+    end
+
+    if (update_valid_i) begin
+      // provider：强化方向计数；与 alt 分歧时按命中与否调整 useful。
+      if (upd_prov_found) begin
+        upd_t_valid[upd_prov_t] = 1'b1;
+        upd_t_ctr[upd_prov_t]   = 1'b1;
+        if (upd_alt_found && (upd_prov_taken != upd_alt_taken)) begin
+          if (upd_prov_taken == update_taken_i) begin
+            upd_t_uinc[upd_prov_t] = 1'b1;
+          end else begin
+            upd_t_udec[upd_prov_t] = 1'b1;
+          end
+        end
+      end
+
+      // 误预测才分配；有 u==0 牺牲项就分配，否则把候选项 useful 全部老化一格。
+      if (upd_mispred) begin
+        if (upd_alloc_found) begin
+          upd_t_valid[upd_alloc_t] = 1'b1;
+          upd_t_alloc[upd_alloc_t] = 1'b1;
+        end else begin
+          for (int t = 0; t < NUM_TABLES; t++) begin
+            if ((!upd_prov_found) || (t > int'(upd_prov_t))) begin
+              upd_t_valid[t] = 1'b1;
+              upd_t_udec[t]  = 1'b1;
+            end
+          end
+        end
+      end
+    end
+  end
+
+  assign upd_age = update_valid_i && (age_cnt_q == AGE_W'(AGING_PERIOD - 1));
+
+  always_ff @(posedge clk_i or posedge rst_i) begin
+    if (rst_i) begin
+      // MSB 置 1：初始倾向于对新分配弱条目使用 alt。
+      use_alt_on_na_q <= {1'b1, {(USE_ALT_BITS - 1) {1'b0}}};
+      age_cnt_q       <= '0;
+    end else if (update_valid_i) begin
+      if (upd_prov_found && upd_alt_found && upd_prov_weak &&
+          (upd_prov_taken != upd_alt_taken)) begin
+        if ((upd_alt_taken == update_taken_i) && (upd_prov_taken != update_taken_i)) begin
+          if (use_alt_on_na_q != '1) use_alt_on_na_q <= use_alt_on_na_q + 1'b1;
+        end else if ((upd_prov_taken == update_taken_i) && (upd_alt_taken != update_taken_i)) begin
+          if (use_alt_on_na_q != '0) use_alt_on_na_q <= use_alt_on_na_q - 1'b1;
+        end
+      end
+
+      if (age_cnt_q == AGE_W'(AGING_PERIOD - 1)) begin
+        age_cnt_q <= '0;
+      end else begin
+        age_cnt_q <= age_cnt_q + 1'b1;
+      end
+    end
   end
 
 endmodule
