@@ -11,6 +11,7 @@ module tage #(
     parameter int unsigned HIST_LEN2 = 6,
     parameter int unsigned HIST_LEN3 = 8,
     parameter int unsigned USEFUL_BITS = 2,
+    parameter int unsigned CTR_BITS = 3,
     parameter int unsigned USE_ALT_BITS = 4,
     parameter int unsigned AGING_PERIOD = 4096
 ) (
@@ -23,6 +24,7 @@ module tage #(
     output logic [INSTR_PER_FETCH-1:0] predict_taken_o,
     output logic [INSTR_PER_FETCH-1:0] predict_strong_o,
     output logic [INSTR_PER_FETCH-1:0][1:0] predict_provider_o,
+    output logic [INSTR_PER_FETCH-1:0][USEFUL_BITS-1:0] predict_useful_o,
 
     input logic update_valid_i,
     input logic [Cfg.PLEN-1:0] update_pc_i,
@@ -36,6 +38,11 @@ module tage #(
   localparam int unsigned IDX_W = (TABLE_ENTRIES > 1) ? $clog2(TABLE_ENTRIES) : 1;
   localparam int unsigned GHR_W = (GHR_BITS > 0) ? GHR_BITS : 1;
   localparam int unsigned AGE_W = (AGING_PERIOD > 1) ? $clog2(AGING_PERIOD) : 1;
+  localparam logic signed [CTR_BITS-1:0] CTR_MAX =
+      {1'b0, {(CTR_BITS - 1) {1'b1}}};
+  localparam logic signed [CTR_BITS-1:0] CTR_MIN =
+      {1'b1, {(CTR_BITS - 1) {1'b0}}};
+  localparam logic signed [CTR_BITS-1:0] CTR_WEAK_NT = -$signed(1);
 
   // 几何递增历史长度与各表的撒盐常数（盐用于打散 PC/历史的折叠位置）。
   localparam int unsigned HIST_LEN  [NUM_TABLES] = '{HIST_LEN0, HIST_LEN1, HIST_LEN2, HIST_LEN3};
@@ -47,12 +54,13 @@ module tage #(
   logic [INSTR_PER_FETCH-1:0][IDX_W-1:0]   pred_idx [NUM_TABLES];
   logic [INSTR_PER_FETCH-1:0][TAG_BITS-1:0] pred_tag [NUM_TABLES];
   logic [INSTR_PER_FETCH-1:0]              hit      [NUM_TABLES];
-  logic [INSTR_PER_FETCH-1:0][1:0]         ctr      [NUM_TABLES];
+  logic [INSTR_PER_FETCH-1:0][CTR_BITS-1:0]         ctr      [NUM_TABLES];
+  logic [INSTR_PER_FETCH-1:0][USEFUL_BITS-1:0] useful [NUM_TABLES];
 
   logic [IDX_W-1:0]            upd_idx [NUM_TABLES];
   logic [TAG_BITS-1:0]         upd_tag [NUM_TABLES];
   logic                        upd_hit [NUM_TABLES];
-  logic [1:0]                  upd_ctr [NUM_TABLES];
+  logic [CTR_BITS-1:0]                  upd_ctr [NUM_TABLES];
   logic [USEFUL_BITS-1:0]      upd_u   [NUM_TABLES];
 
   logic                        upd_t_valid [NUM_TABLES];
@@ -69,7 +77,7 @@ module tage #(
   // 折叠后的 update 侧 provider / alt 解析结果（也供时序块训练 use_alt 计数器）。
   logic       upd_prov_found, upd_alt_found;
   logic [1:0] upd_prov_t, upd_alt_t;
-  logic [1:0] upd_prov_ctr;
+  logic [CTR_BITS-1:0] upd_prov_ctr;
   logic       upd_prov_taken, upd_prov_strong, upd_prov_weak;
   logic       upd_alt_taken;
   logic       upd_use_alt, upd_final_taken, upd_mispred;
@@ -131,8 +139,14 @@ module tage #(
     end
   endfunction
 
-  function automatic logic is_strong(input logic [1:0] c);
-    is_strong = (c == 2'b00) || (c == 2'b11);
+  function automatic logic ctr_taken(input logic [CTR_BITS-1:0] c);
+    ctr_taken = ($signed(c) >= 0);
+  endfunction
+
+  function automatic logic is_strong(input logic [CTR_BITS-1:0] c);
+    logic signed [CTR_BITS-1:0] s;
+    s = $signed(c);
+    is_strong = (s == CTR_MAX) || (s == CTR_MIN);
   endfunction
 
   always_comb begin
@@ -161,6 +175,7 @@ module tage #(
           .INSTR_PER_FETCH(INSTR_PER_FETCH),
           .ENTRIES(TABLE_ENTRIES),
           .TAG_BITS(TAG_BITS),
+          .CTR_BITS(CTR_BITS),
           .USEFUL_BITS(USEFUL_BITS)
       ) u_tab (
           .clk_i(clk_i),
@@ -169,6 +184,7 @@ module tage #(
           .predict_tag_i(pred_tag[t]),
           .predict_hit_o(hit[t]),
           .predict_ctr_o(ctr[t]),
+          .predict_useful_o(useful[t]),
           .update_valid_i(upd_t_valid[t]),
           .update_idx_i(upd_idx[t]),
           .update_tag_i(upd_tag[t]),
@@ -190,20 +206,21 @@ module tage #(
     for (int i = 0; i < INSTR_PER_FETCH; i++) begin
       logic       prov_found, alt_found;
       logic [1:0] prov_t, alt_t;
-      logic [1:0] prov_ctr_v, alt_ctr_v;
+      logic [CTR_BITS-1:0] prov_ctr_v, alt_ctr_v;
       logic       prov_weak, use_alt_sel;
 
       predict_hit_o[i]      = 1'b0;
       predict_taken_o[i]    = 1'b0;
       predict_strong_o[i]   = 1'b0;
       predict_provider_o[i] = '0;
+      predict_useful_o[i]   = '0;
 
       prov_found  = 1'b0;
       alt_found   = 1'b0;
       prov_t      = '0;
       alt_t       = '0;
-      prov_ctr_v  = 2'b01;
-      alt_ctr_v   = 2'b01;
+      prov_ctr_v  = CTR_BITS'(CTR_WEAK_NT);
+      alt_ctr_v   = CTR_BITS'(CTR_WEAK_NT);
       prov_weak   = 1'b0;
       use_alt_sel = 1'b0;
       for (int t = NUM_TABLES - 1; t >= 0; t--) begin
@@ -225,12 +242,13 @@ module tage #(
 
         predict_hit_o[i]      = 1'b1;
         predict_provider_o[i] = prov_t;
+        predict_useful_o[i]   = useful[prov_t][i];
         if (use_alt_sel) begin
           alt_ctr_v           = ctr[alt_t][i];
-          predict_taken_o[i]  = alt_ctr_v[1];
+          predict_taken_o[i]  = ctr_taken(alt_ctr_v);
           predict_strong_o[i] = is_strong(alt_ctr_v);
         end else begin
-          predict_taken_o[i]  = prov_ctr_v[1];
+          predict_taken_o[i]  = ctr_taken(prov_ctr_v);
           predict_strong_o[i] = is_strong(prov_ctr_v);
         end
       end
@@ -263,11 +281,11 @@ module tage #(
       end
     end
 
-    upd_prov_ctr    = upd_prov_found ? upd_ctr[upd_prov_t] : 2'b01;
-    upd_prov_taken  = upd_prov_ctr[1];
+    upd_prov_ctr    = upd_prov_found ? upd_ctr[upd_prov_t] : CTR_BITS'(CTR_WEAK_NT);
+    upd_prov_taken  = ctr_taken(upd_prov_ctr);
     upd_prov_strong = is_strong(upd_prov_ctr);
     upd_prov_weak   = !upd_prov_strong;
-    upd_alt_taken   = upd_alt_found ? upd_ctr[upd_alt_t][1] : 1'b0;
+    upd_alt_taken   = upd_alt_found ? ctr_taken(upd_ctr[upd_alt_t]) : 1'b0;
     upd_use_alt     = upd_prov_weak && use_alt_on_na_q[USE_ALT_BITS-1] && upd_alt_found;
     upd_final_taken = upd_use_alt ? upd_alt_taken : upd_prov_taken;
     upd_mispred     = !upd_prov_found || (upd_final_taken != update_taken_i);

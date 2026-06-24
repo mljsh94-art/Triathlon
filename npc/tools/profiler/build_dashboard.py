@@ -19,6 +19,7 @@ from profile_schema import (  # noqa: E402
     bench_commits,
     bench_cpi,
     bench_cycles,
+    bench_flush,
     bench_ipc,
     bench_predict,
     bench_stall_detail,
@@ -156,7 +157,8 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
                 f"{k}={fmt_part_total(v, decode_total)}" for k, v in decode_top
             ) if decode_top else "-"
             predict = bench_predict(b)
-            miss_line, acc_line = format_predict_dashboard_lines(predict)
+            flush_b = bench_flush(b)
+            miss_line, acc_line = format_predict_dashboard_lines(predict, flush_b)
             bench_blocks.append(
                 f"<div class='bench-block'><h4>{html.escape(bench)}</h4>"
                 f"<p><b>KPI:</b> IPC={bench_ipc(b):.4f} CPI={bench_cpi(b):.4f} "

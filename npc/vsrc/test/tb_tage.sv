@@ -11,6 +11,7 @@ module tb_tage (
     output logic [3:0] predict_taken_o,
     output logic [3:0] predict_strong_o,
     output logic [7:0] predict_provider_o,
+    output logic [7:0] predict_useful_o,
 
     input  logic update_valid_i,
     input  logic [31:0] update_pc_i,
@@ -34,6 +35,7 @@ module tb_tage (
       .predict_taken_o(predict_taken_o),
       .predict_strong_o(predict_strong_o),
       .predict_provider_o(predict_provider_o),
+      .predict_useful_o(predict_useful_o),
       .update_valid_i(update_valid_i),
       .update_pc_i(update_pc_i),
       .update_ghr_i(update_ghr_i),

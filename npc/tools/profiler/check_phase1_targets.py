@@ -84,14 +84,14 @@ def get_bench(summary: dict, name: str) -> dict:
 def get_coremark_other_share(coremark: dict) -> float | None:
     stall_total = float(bench_stall_total(coremark))
     stall_category = bench_stall_category(coremark)
-    stall_other = stall_category.get("other")
+    stall_other = stall_category.get("pipeline_bubble", stall_category.get("other"))
     if stall_other is None or stall_total <= 0:
         return None
     return float(stall_other) / stall_total
 
 
 def get_hol_incomplete_sum(coremark: dict) -> float | None:
-    detail = bench_stall_detail(coremark, "other")
+    detail = bench_stall_detail(coremark, "pipeline_bubble")
     if not detail:
         return None
 

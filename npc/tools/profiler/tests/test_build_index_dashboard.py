@@ -28,13 +28,15 @@ class BuildIndexDashboardTest(unittest.TestCase):
         bench["kpi"]["ipc"] = ipc
         bench["kpi"]["cpi"] = 1.0 / ipc if ipc else 0.0
         bench["kpi"]["commits"] = int(1000 * ipc)
-        bench["predict"]["cond_miss_rate"] = 0.1
-        bench["predict"]["jump_miss_rate"] = 0.2
-        bench["predict"]["ret_miss_rate"] = 0.05
-        bench["predict"]["cond_selected_accuracy"] = 0.975
-        bench["predict"]["cond_local_accuracy"] = 0.96
-        bench["predict"]["cond_global_accuracy"] = 0.97
-        bench["predict"]["tage_hit_rate"] = 0.93
+        bench["predict"]["retire_miss_rate"] = {
+            "cond": 0.1,
+            "jump": 0.2,
+            "ret": 0.05,
+            "jump_direct": 0.0,
+            "jump_indirect": 0.0,
+        }
+        bench["predict"]["bpu_train"]["cond_selected_accuracy"] = 0.975
+        bench["predict"]["tage"]["table_hit_rate"] = 0.93
         summary = {"schema_version": 2, "coremark": bench, "microbench": bench}
         (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
         (run_dir / "metadata.json").write_text(
@@ -89,13 +91,15 @@ class BuildIndexDashboardTest(unittest.TestCase):
             bench["kpi"]["ipc"] = 0.42
             bench["kpi"]["cpi"] = 1.0 / 0.42
             bench["kpi"]["commits"] = 420
-            bench["predict"]["cond_miss_rate"] = 0.1
-            bench["predict"]["jump_miss_rate"] = 0.2
-            bench["predict"]["ret_miss_rate"] = 0.05
-            bench["predict"]["cond_selected_accuracy"] = 0.975
-            bench["predict"]["cond_local_accuracy"] = 0.96
-            bench["predict"]["cond_global_accuracy"] = 0.97
-            bench["predict"]["tage_hit_rate"] = 0.93
+            bench["predict"]["retire_miss_rate"] = {
+                "cond": 0.1,
+                "jump": 0.2,
+                "ret": 0.05,
+                "jump_direct": 0.0,
+                "jump_indirect": 0.0,
+            }
+            bench["predict"]["bpu_train"]["cond_selected_accuracy"] = 0.975
+            bench["predict"]["tage"]["table_hit_rate"] = 0.93
             (root / "summary.json").write_text(
                 json.dumps({"schema_version": 2, "coremark": bench, "microbench": bench}),
                 encoding="utf-8",

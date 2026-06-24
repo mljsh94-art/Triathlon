@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
   top->i_BPU_ITTAGE_ENTRIES = 256;
   top->i_BPU_ITTAGE_TAG_BITS = 12;
   top->i_BPU_TAGE_OVERRIDE_MIN_PROVIDER = 2;
-  top->i_BPU_TAGE_OVERRIDE_REQUIRE_LEGACY_WEAK = 1;
+  top->i_BPU_TAGE_OVERRIDE_REQUIRE_LEGACY_WEAK = 0;
   top->i_ICACHE_HIT_PIPELINE_EN = 1;
   top->i_IFU_FETCHQ_BYPASS_EN = 1;
   top->i_IFU_REQ_DEPTH = 8;
@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
   assert(top->o_BPU_ITTAGE_ENTRIES == 256);
   assert(top->o_BPU_ITTAGE_TAG_BITS == 12);
   assert(top->o_BPU_TAGE_OVERRIDE_MIN_PROVIDER == 2);
-  assert(top->o_BPU_TAGE_OVERRIDE_REQUIRE_LEGACY_WEAK == 1);
+  assert(top->o_BPU_TAGE_OVERRIDE_REQUIRE_LEGACY_WEAK == 0);
   assert(top->o_ICACHE_HIT_PIPELINE_EN == 1);
   assert(top->o_IFU_FETCHQ_BYPASS_EN == 1);
   assert(top->o_IFU_REQ_DEPTH == 8);

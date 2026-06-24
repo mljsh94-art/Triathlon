@@ -29,7 +29,10 @@ class ProfileSchemaTest(unittest.TestCase):
         self.assertEqual(schema.bench_stall_category(bench)["frontend_empty"], 20)
         self.assertEqual(schema.bench_stall_detail(bench, "frontend_empty")["fe_wait_ibuffer_consume"], 20)
         self.assertEqual(schema.bench_stall_section_total(bench, "decode_blocked"), 5)
-        self.assertEqual(schema.predict_miss_part_totals(bench["predict"])["cond_miss_rate"], (1.0, 10.0))
+        self.assertEqual(
+            schema.predict_miss_part_totals(bench["predict"], bench["flush"])["cond_miss_rate"],
+            (1.0, 10.0),
+        )
         self.assertEqual(len(schema.bench_hotspots(bench)["top_pc"]), 1)
 
     def test_v1_flat_fallback(self):

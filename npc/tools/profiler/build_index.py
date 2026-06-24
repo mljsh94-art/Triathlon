@@ -17,8 +17,10 @@ from profile_schema import (
     bench_commits,
     bench_cpi,
     bench_cycles,
+    bench_flush,
     bench_ipc,
     bench_predict,
+    predict_miss_rates,
     stall_share_pct,
 )
 
@@ -76,20 +78,27 @@ def extract_run_entry(run_dir: Path) -> dict | None:
             k: stall_share_pct(b, k) for k in STALL_GATE_KEYS
         }
         predict = bench_predict(b)
+        flush = bench_flush(b)
+        rates = predict_miss_rates(predict, flush)
         entry["predict_miss_rate"][bench] = {
-            "cond": predict.get("cond_miss_rate", 0.0),
-            "jump": predict.get("jump_miss_rate", 0.0),
-            "ret": predict.get("ret_miss_rate", 0.0),
+            "cond": rates.get("cond_miss_rate", 0.0),
+            "jump": rates.get("jump_miss_rate", 0.0),
+            "ret": rates.get("ret_miss_rate", 0.0),
         }
+        bpu_train = predict.get("bpu_train") or {}
+        tage = predict.get("tage") or {}
+        ftb = predict.get("ftb") or {}
+        ittage = predict.get("ittage") or {}
         entry["predict_accuracy"][bench] = {
-            "cond_selected": predict.get("cond_selected_accuracy", 0.0),
-            "cond_local": predict.get("cond_local_accuracy", 0.0),
-            "cond_global": predict.get("cond_global_accuracy", 0.0),
-            "tage_hit": predict.get("tage_hit_rate", 0.0),
-            "tage_override": predict.get("tage_override_accuracy", 0.0),
-            "ftb_cond_hit": (predict.get("ftb") or {}).get("cond_hit_rate", 0.0),
-            "ftb_jump_hit": (predict.get("ftb") or {}).get("jump_hit_rate", 0.0),
-            "ittage_hit": (predict.get("ittage") or {}).get("hit_rate", 0.0),
+            "cond_selected": float(
+                bpu_train.get("cond_selected_accuracy", predict.get("cond_selected_accuracy", 0.0))
+                or 0.0
+            ),
+            "tage_hit": float(tage.get("table_hit_rate", predict.get("tage_table_hit_rate", 0.0)) or 0.0),
+            "tage_override": float(tage.get("override_accuracy", 0.0) or 0.0),
+            "ftb_cond_pick": float(ftb.get("cond_pick_rate", 0.0) or 0.0),
+            "ftb_jump_pick": float(ftb.get("jump_pick_rate", 0.0) or 0.0),
+            "ittage_hit": float(ittage.get("table_hit_rate", 0.0) or 0.0),
         }
     return entry
 

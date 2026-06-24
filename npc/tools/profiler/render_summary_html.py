@@ -26,6 +26,7 @@ from profile_schema import (
     bench_ipc,
     bench_mispredict_diag,
     bench_predict,
+    bench_predict_doc,
     bench_stall_category,
     bench_stall_detail,
     bench_stall_section_total,
@@ -42,7 +43,7 @@ STALL_DETAIL_SECTIONS = (
     ("decode_blocked", "Decode 阻塞"),
     ("frontend_empty", "前端空取"),
     ("rob_backpressure", "ROB 背压"),
-    ("other", "其他"),
+    ("pipeline_bubble", "流水线气泡"),
 )
 
 TRANSLATIONS = {
@@ -51,15 +52,16 @@ TRANSLATIONS = {
     "Cycles": "总周期数",
     "Commits": "提交指令数",
     "Flush": "流水线冲刷次数",
-    "BRU": "分支解析次数 (BRU)",
-    "Branch penalty": "分支惩罚周期",
-    "Flush/kInst": "每千条指令冲刷",
+    "BRU mispred": "BRU 误预测提交槽 (dbg_bru_mispred)",
+    "Branch penalty": "分支惩罚周期 (至下次提交)",
+    "Flush/kCommit": "每千次提交冲刷次数",
+    "pipeline_bubble": "流水线气泡 (decode/ROB 就绪但零提交)",
     "frontend_empty": "前端空取 (Frontend Empty)",
     "rob_backpressure": "ROB 阻塞 (后端背压)",
     "lsu_req_blocked": "LSU 请求阻塞",
     "decode_blocked": "Decode 阶段阻塞",
     "other": "其他 (Other)",
-    "flush_recovery": "Pipeline Flush 恢复",
+    "flush_recovery": "backend_flush 信号周期 (零提交)",
     "icache_miss_wait": "I-Cache Miss 等待",
     "dcache_miss_wait": "D-Cache Miss 等待",
     "lsug_no_free_lane": "LSU 无空闲通道",
@@ -153,28 +155,20 @@ TRANSLATIONS = {
     "rob_lsu_wait_ld_req_ready": "LSU 等待 Load 请求就绪",
     "rob_lsu_wait_ld_req_ready_sb_conflict": "LSU Load 请求 SB 冲突",
     "rob_lsu_wait_wb": "LSU 等待写回",
-    "cond_miss_rate": "条件分支 (Conditional)",
-    "jump_miss_rate": "无条件跳转 (占 mispredict redirect)",
-    "ret_miss_rate": "函数返回 (Return)",
-    "jump_direct_miss_rate": "直接跳转 (占 mispredict redirect)",
-    "jump_indirect_miss_rate": "间接跳转 (占 mispredict redirect)",
-    "cond_selected_accuracy": "条件分支方向 (Commit 选中精度)",
-    "cond_local_accuracy": "条件分支 Local BHT",
-    "cond_global_accuracy": "条件分支 Global BHT",
-    "tage_hit_rate": "TAGE 命中率",
-    "tage_override_accuracy": "TAGE Override 精度",
-    "sc_override_accuracy": "SC Override 精度",
-    "loop_override_accuracy": "Loop Override 精度",
-    "cond_hit_rate": "FTB Cond Hit",
-    "jump_hit_rate": "FTB Jump Hit",
-    "cond_pick_rate": "FTB Cond Pick",
-    "jump_pick_rate": "FTB Jump Pick",
-    "hit_rate": "ITTAGE Hit",
-    "use_rate": "ITTAGE Use",
-    "legacy_accuracy": "Legacy Provider",
-    "tage_accuracy": "TAGE Provider",
-    "sc_accuracy": "SC Provider",
-    "loop_accuracy": "Loop Provider",
+    "cond_miss_rate": "条件分支误预测率 (提交侧)",
+    "jump_miss_rate": "跳转误预测率 (提交侧)",
+    "ret_miss_rate": "返回误预测率 (提交侧)",
+    "jump_direct_miss_rate": "直接跳转误预测率",
+    "jump_indirect_miss_rate": "间接跳转误预测率",
+    "cond_selected_accuracy": "BHT 训练自检 (非取指精度)",
+    "tage_table_hit_rate": "TAGE 表命中 / lookup",
+    "tage_override_accuracy": "TAGE override 事后正确率",
+    "cond_pick_rate": "FTB 选用 cond / lookup",
+    "jump_pick_rate": "FTB 选用 jump / lookup",
+    "table_hit_per_lookup_rate": "ITTAGE 表命中 / lookup",
+    "use_per_lookup_rate": "ITTAGE 采用 / lookup",
+    "legacy_accuracy": "Legacy provider 准确率",
+    "tage_accuracy": "TAGE provider 准确率",
     "fq_occ_avg": "平均占用量",
     "fq_occ_max": "最大占用量",
     "fq_bypass_ratio": "Bypass 比例",
@@ -204,7 +198,7 @@ TRANSLATIONS = {
     "ftb_hit_out_of_range": "FTB 命中窗口外",
     "ftb_hit_shadowed": "FTB 命中被遮蔽",
     "ftb_unclassified": "FTB 未分类",
-    "bht_direction": "BHT 方向 (rollup)",
+    "bht_direction": "BHT 方向错 (rollup, 不含 FTB NT)",
     "ftb_structural": "FTB 结构 (rollup)",
     "target_wrong": "Target 错 (rollup)",
     "unclassified": "未分类 (rollup)",
@@ -356,9 +350,9 @@ def kv_table(title: str, items: dict, *, total: float | None = None, ratio_keys:
     )
 
 
-def format_predict_dashboard_lines(predict: dict) -> tuple[str, str]:
+def format_predict_dashboard_lines(predict: dict, flush: dict | None = None) -> tuple[str, str]:
     miss_bits: list[str] = []
-    for rate_key, (part, total) in predict_miss_part_totals(predict).items():
+    for rate_key, (part, total) in predict_miss_part_totals(predict, flush).items():
         label = rate_key.replace("_miss_rate", "")
         miss_bits.append(f"{label}={fmt_part_total(part, total)}")
     miss = " ".join(miss_bits) if miss_bits else "-"
@@ -369,16 +363,16 @@ def format_predict_dashboard_lines(predict: dict) -> tuple[str, str]:
             "cond_selected_accuracy": "sel",
             "cond_local_accuracy": "local",
             "cond_global_accuracy": "global",
-            "tage_hit_rate": "tage_hit",
+            "tage_table_hit_rate": "tage_hit",
         }.get(rate_key, rate_key)
         acc_bits.append(f"{label}={fmt_part_total(part, total)}")
     for rate_key, (part, total) in predict_ftb_part_totals(predict).items():
-        if rate_key == "cond_hit_rate":
+        if rate_key == "cond_hit_per_lookup_rate":
             acc_bits.append(f"ftb_cond={fmt_part_total(part, total)}")
-        elif rate_key == "jump_hit_rate":
+        elif rate_key == "jump_hit_per_lookup_rate":
             acc_bits.append(f"ftb_jump={fmt_part_total(part, total)}")
     for rate_key, (part, total) in predict_ittage_part_totals(predict).items():
-        if rate_key == "hit_rate":
+        if rate_key == "table_hit_per_lookup_rate":
             acc_bits.append(f"ittage={fmt_part_total(part, total)}")
     acc = " | ".join(acc_bits) if acc_bits else "-"
     return miss, acc
@@ -446,9 +440,9 @@ def render_benchmark_section(bench_name: str, raw: dict) -> str:
     flush_metrics = "".join(
         [
             metric_card(tr("Flush"), fmt_num(flush.get("count", 0), 0)),
-            metric_card(tr("BRU"), fmt_num(flush.get("bru_count", 0), 0)),
+            metric_card(tr("BRU mispred"), fmt_num(flush.get("bru_mispred_count", flush.get("bru_count", 0)), 0)),
             metric_card(tr("Branch penalty"), fmt_num(flush.get("branch_penalty_cycles", 0), 0)),
-            metric_card(tr("Flush/kInst"), fmt_num(flush.get("per_kinst", 0))),
+            metric_card(tr("Flush/kCommit"), fmt_num(flush.get("per_kcommit", flush.get("per_kinst", 0)))),
         ]
     )
 
@@ -464,11 +458,25 @@ def render_benchmark_section(bench_name: str, raw: dict) -> str:
                 bar_table(f"Stall 明细 · {title}", detail, section_total)
             )
 
-    predict_miss_rows = {tr(k): v for k, v in predict_miss_part_totals(predict).items()}
+    predict_miss_rows = {
+        tr(k): v for k, v in predict_miss_part_totals(predict, flush).items()
+    }
     predict_acc_rows = {tr(k): v for k, v in predict_accuracy_part_totals(predict).items()}
     ftb_rows = {tr(k): v for k, v in predict_ftb_part_totals(predict).items()}
     ittage_rows = {tr(k): v for k, v in predict_ittage_part_totals(predict).items()}
     provider_rows = {tr(k): v for k, v in predict_provider_part_totals(predict).items()}
+    predict_doc = bench_predict_doc(raw)
+    predict_doc_html = ""
+    if predict_doc:
+        doc_rows = "".join(
+            f"<tr><td>{esc(k)}</td><td>{esc(v)}</td></tr>"
+            for k, v in sorted(predict_doc.items())
+        )
+        predict_doc_html = (
+            "<details class='hotspots' style='margin-top:12px'>"
+            "<summary>predict._doc 字段说明</summary>"
+            f"<table><tbody>{doc_rows}</tbody></table></details>"
+        )
     ifu_rows = {
         k: ifu[k]
         for k in (
@@ -515,13 +523,14 @@ def render_benchmark_section(bench_name: str, raw: dict) -> str:
         f"{''.join(stall_detail_sections[:2])}</div>"
         f"<div>{''.join(stall_detail_sections[2:])}</div>"
         f"</div></div>"
-        f"<div class='section'><div class='section-title'>Predict · 分支预测</div>"
+        f"<div class='section'><div class='section-title'>Predict · 分支预测 (见 predict._doc)</div>"
+        f"{predict_doc_html}"
         f"<div class='two-col'>"
-        f"<div>{part_total_bar_table('预测 miss', predict_miss_rows)}"
-        f"{part_total_bar_table('方向预测精度 (Commit 侧)', predict_acc_rows) if predict_acc_rows else ''}"
-        f"{part_total_bar_table('Cond Provider 精度', provider_rows) if provider_rows else ''}</div>"
-        f"<div>{part_total_bar_table('FTB 命中率 (Fetch 侧)', ftb_rows) if ftb_rows else ''}"
-        f"{part_total_bar_table('ITTAGE (间接跳转)', ittage_rows) if ittage_rows else ''}"
+        f"<div>{part_total_bar_table('提交侧误预测 (flush.mispredict / retire_executed)', predict_miss_rows)}"
+        f"{part_total_bar_table('BPU 训练自检', predict_acc_rows) if predict_acc_rows else ''}"
+        f"{part_total_bar_table('Cond Provider', provider_rows) if provider_rows else ''}</div>"
+        f"<div>{part_total_bar_table('FTB (lookup 侧)', ftb_rows) if ftb_rows else ''}"
+        f"{part_total_bar_table('ITTAGE', ittage_rows) if ittage_rows else ''}"
         f"{kv_table('控制流统计', control, total=commits_total, ratio_keys={'control_ratio'})}"
         f"{kv_table('IFU Fetch Queue', ifu_rows, ratio_keys=set(ifu_rows.keys()))}</div>"
         f"</div></div>"

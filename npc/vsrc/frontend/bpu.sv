@@ -24,7 +24,6 @@ module bpu #(
     parameter int unsigned ITTAGE_ENTRIES = 128,
     parameter int unsigned ITTAGE_TAG_BITS = 10,
     parameter int unsigned TAGE_OVERRIDE_MIN_PROVIDER = 0,
-    parameter bit TAGE_OVERRIDE_REQUIRE_LEGACY_WEAK = 1'b0,
     parameter int unsigned TAGE_TAG_BITS = 8,
     parameter int unsigned TAGE_HIST_LEN0 = 2,
     parameter int unsigned TAGE_HIST_LEN1 = 4,
@@ -381,6 +380,7 @@ module bpu #(
   logic tage_taken_w;
   logic tage_strong_w;
   logic [1:0] tage_provider_w;
+  logic [1:0] tage_useful_w;
   logic sc_taken_w;
   logic sc_confident_w;
   logic loop_hit_w;
@@ -432,6 +432,7 @@ module bpu #(
       .predict_taken_o(tage_taken_w),
       .predict_strong_o(tage_strong_w),
       .predict_provider_o(tage_provider_w),
+      .predict_useful_o(tage_useful_w),
       .update_valid_i(update_valid_i && update_is_cond_i && USE_TAGE),
       .update_pc_i(update_pc_i),
       .update_ghr_i(arch_ghr_q),
@@ -751,9 +752,12 @@ module bpu #(
     logic local_global_disagree;
     logic selected_legacy_strong;
     logic tage_provider_ok;
+    logic tage_pred_nt_w;
+    logic tage_strong_nt_w;
+    logic tage_useful_ok_w;
+    logic tage_nt_override_ok;
     logic tage_allow_override;
     logic sc_allow_override;
-    logic cond_override_nt;
 
     local_idx = bht_pc_index(cond_branch_pc_w);
     global_idx = bht_global_index(cond_branch_pc_w, spec_ghr_q);
@@ -777,20 +781,14 @@ module bpu #(
     cond_selected_taken_w = cond_taken_legacy_w;
 
     tage_provider_ok = (int'(tage_provider_w) >= int'(TAGE_OVERRIDE_MIN_PROVIDER));
-    tage_allow_override = USE_TAGE && tage_hit_w && tage_strong_w && tage_provider_ok;
-    if (TAGE_OVERRIDE_REQUIRE_LEGACY_WEAK && selected_legacy_strong) begin
-      tage_allow_override = 1'b0;
-    end
+    tage_pred_nt_w = !tage_taken_w;
+    tage_strong_nt_w = tage_strong_w && tage_pred_nt_w;
+    tage_useful_ok_w = |tage_useful_w;
+    // 净正区：3-bit signed strong-NT（ctr 饱和 -4）+ useful>0 + MIN_PROVIDER 门控。
+    tage_nt_override_ok = tage_strong_nt_w;
+    tage_allow_override = USE_TAGE && tage_hit_w && tage_nt_override_ok && tage_provider_ok &&
+                          tage_useful_ok_w;
     cond_tage_candidate_w = ftb_pick_is_cond_w && tage_allow_override;
-
-    // 方向-only override：已 pick 的 cond 分支必然是 taken-pick（FTB 只挑 taken 槽）。
-    // 当 TAGE 强命中且方向判为 not-taken 时，把该分支翻成 NT，重定向到它的另一个
-    // 出口（fall-through）。不重新挑选其它分支，只翻方向。
-    if (cond_tage_candidate_w && !tage_taken_w) begin
-      cond_tage_override_w = 1'b1;
-      cond_selected_provider_w = COND_PROVIDER_TAGE;
-      cond_selected_taken_w = tage_taken_w;
-    end
 
     sc_allow_override = USE_SC && sc_confident_w;
     if (selected_legacy_strong) begin
@@ -808,6 +806,22 @@ module bpu #(
     cond_sc_candidate_w = ftb_pick_is_cond_w && sc_allow_override;
     cond_loop_candidate_w = USE_LOOP && ftb_pick_is_cond_w && loop_confident_w;
 
+    // TAGE-SC-L 条件方向优先级：Loop > TAGE > SC > Legacy。
+    // FTB 只 pick legacy-taken 槽；override 在更高优先级 provider 与 legacy 不一致时生效。
+    if (cond_loop_candidate_w) begin
+      cond_loop_override_w = (loop_taken_w != cond_taken_legacy_w);
+      cond_selected_provider_w = COND_PROVIDER_LOOP;
+      cond_selected_taken_w = loop_taken_w;
+    end else if (cond_tage_candidate_w) begin
+      cond_tage_override_w = 1'b1;
+      cond_selected_provider_w = COND_PROVIDER_TAGE;
+      cond_selected_taken_w = tage_taken_w;
+    end else if (cond_sc_candidate_w) begin
+      cond_sc_override_w = (sc_taken_w != cond_taken_legacy_w);
+      cond_selected_provider_w = COND_PROVIDER_SC;
+      cond_selected_taken_w = sc_taken_w;
+    end
+
     ittage_hit_w = USE_ITTAGE && ftb_pick_is_indirect_w && ittage_raw_hit_w;
     predict_target = ftb_pick_target_w;
     if (ftb_pick_is_ret_w && spec_ras_has_entry_w) begin
@@ -817,9 +831,11 @@ module bpu #(
     end
 
     predict_hit = ftb_pick_valid_w;
-    // 已 pick 分支的有效方向：cond 命中 TAGE override 时翻成 not-taken，其余保持 taken。
-    cond_override_nt = cond_tage_override_w;
-    predict_taken = predict_hit && !cond_override_nt;
+    if (ftb_pick_is_cond_w && predict_hit) begin
+      predict_taken = cond_selected_taken_w;
+    end else begin
+      predict_taken = predict_hit;
+    end
     predict_is_cond = ftb_pick_is_cond_w;
     predict_is_call = ftb_pick_is_call_w;
     predict_is_ret = ftb_pick_is_ret_w;
