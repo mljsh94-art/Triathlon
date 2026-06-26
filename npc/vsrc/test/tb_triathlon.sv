@@ -269,6 +269,8 @@ module tb_triathlon #(
     output logic                               dbg_lsu_rs_head_is_store_o,
     output logic                               dbg_lsu_rs_head_is_load_o,
     output logic [SB_IDX_W-1:0]                dbg_lsu_rs_head_sb_id_o,
+    output logic                               dbg_lsu_head_block_store_o,
+    output logic [$clog2(Cfg.RS_DEPTH+1)-1:0]  dbg_lsu_rs_older_store_count_o,
 
     // Debug (Store buffer / D$ store path)
     output logic [3:0]                         dbg_sb_alloc_req_o,
@@ -751,6 +753,38 @@ module tb_triathlon #(
   assign dbg_lsu_rs_head_sb_id_o = lsu_rs_head_found
                                  ? dut.u_backend.u_issue_lsu.u_rs.sb_arr[lsu_rs_head_idx]
                                  : '0;
+
+  logic lsu_head_block_store_w;
+  logic [$clog2(Cfg.RS_DEPTH+1)-1:0] lsu_rs_older_store_count_w;
+
+  always_comb begin
+    logic [ROB_IDX_W-1:0] head_ptr;
+    logic [ROB_IDX_W-1:0] load_dst;
+    logic [ROB_IDX_W-1:0] load_age;
+
+    lsu_head_block_store_w = 1'b0;
+    lsu_rs_older_store_count_w = '0;
+    if (lsu_rs_head_found &&
+        dut.u_backend.u_issue_lsu.u_rs.op_arr[lsu_rs_head_idx].is_load) begin
+      head_ptr = dut.u_backend.rob_head_ptr;
+      load_dst = dut.u_backend.u_issue_lsu.u_rs.dst_arr[lsu_rs_head_idx];
+      load_age = load_dst - head_ptr;
+      for (int n = 0; n < Cfg.RS_DEPTH; n++) begin
+        if (dut.u_backend.u_issue_lsu.u_rs.busy[n] &&
+            dut.u_backend.u_issue_lsu.u_rs.op_arr[n].is_store) begin
+          logic [ROB_IDX_W-1:0] store_age;
+          store_age = dut.u_backend.u_issue_lsu.u_rs.dst_arr[n] - head_ptr;
+          if (store_age < load_age) begin
+            lsu_head_block_store_w = 1'b1;
+            lsu_rs_older_store_count_w = lsu_rs_older_store_count_w + 1'b1;
+          end
+        end
+      end
+    end
+  end
+
+  assign dbg_lsu_head_block_store_o = lsu_head_block_store_w;
+  assign dbg_lsu_rs_older_store_count_o = lsu_rs_older_store_count_w;
 
   // Debug: Store buffer / D$ store path
   assign dbg_sb_alloc_req_o = dut.u_backend.sb_alloc_req;

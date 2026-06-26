@@ -116,6 +116,68 @@ LsuHeadLaneSnapshot find_lsu_head_lane(const Vtb_triathlon *top) {
   return snap;
 }
 
+bool is_hol_load_no_lane(const Vtb_triathlon *top) {
+  if (static_cast<uint32_t>(top->dbg_rob_count_o) == 0u) return false;
+  if (top->dbg_rob_head_is_store_o) return false;
+  if (top->dbg_rob_head_complete_o) return false;
+  if (static_cast<uint32_t>(top->dbg_rob_head_fu_o) != 3u) return false;
+
+  const uint32_t head = static_cast<uint32_t>(top->dbg_rob_head_ptr_o);
+  if (find_lsu_head_lane(top).found) return false;
+  if (wb_selects_rob_head(top, head)) return false;
+  if (lsu_group_wb_selects_rob_head(top, head)) return false;
+  if (lsu_group_wb_any(top)) return false;
+  return true;
+}
+
+bool lsu_rs_head_ready(const Vtb_triathlon *top) {
+  if (!top->dbg_lsu_rs_head_valid_o) return false;
+  const int head_idx = static_cast<int>(top->dbg_lsu_rs_head_idx_o);
+  return bit_at(static_cast<uint32_t>(top->dbg_lsu_rs_ready_o), head_idx);
+}
+
+bool hol_issue_port_busy(const Vtb_triathlon *top) {
+  if (!top->dbg_lsu_rs_head_valid_o || !top->dbg_lsu_rs_head_is_load_o) return false;
+  if (!top->dbg_lsu_issue_valid_o) return false;
+  if (static_cast<uint32_t>(top->dbg_lsu_sel_dst_o) ==
+      static_cast<uint32_t>(top->dbg_rob_head_ptr_o)) {
+    return false;
+  }
+  return !lsu_rs_head_ready(top);
+}
+
+const char *classify_hol_load_sub_bucket(const Vtb_triathlon *top) {
+  if (!top->dbg_lsu_rs_head_valid_o || !top->dbg_lsu_rs_head_is_load_o) {
+    return "hol_not_in_rs";
+  }
+
+  const bool has_rs1 = top->dbg_lsu_rs_head_has_rs1_o;
+  const bool has_rs2 = top->dbg_lsu_rs_head_has_rs2_o;
+  const bool r1_ready = top->dbg_lsu_rs_head_r1_ready_o;
+  const bool r2_ready = top->dbg_lsu_rs_head_r2_ready_o;
+  if ((has_rs1 && !r1_ready) || (has_rs2 && !r2_ready)) {
+    return "hol_in_rs_operand_wait";
+  }
+
+  if (top->dbg_lsu_issue_valid_o &&
+      static_cast<uint32_t>(top->dbg_lsu_sel_dst_o) ==
+          static_cast<uint32_t>(top->dbg_rob_head_ptr_o)) {
+    return "hol_in_rs_issue_inflight";
+  }
+
+  if (lsu_rs_head_ready(top)) {
+    if (!top->dbg_lsu_issue_valid_o) {
+      return "hol_in_rs_ready_no_issue";
+    }
+    return "hol_residual";
+  }
+
+  if (top->dbg_lsu_head_block_store_o) {
+    return "hol_block_store";
+  }
+  return "hol_in_rs_not_ready_other";
+}
+
 const char *classify_lsu_head_lane_detail(const Vtb_triathlon *top, bool nonbp) {
   LsuHeadLaneSnapshot lane = find_lsu_head_lane(top);
   const uint32_t head = static_cast<uint32_t>(top->dbg_rob_head_ptr_o);
@@ -213,6 +275,17 @@ const char *classify_lsu_head_lane_detail(const Vtb_triathlon *top, bool nonbp) 
 }
 
 }  // namespace
+
+void ProfileCollector::record_hol_load_cycle(const Vtb_triathlon *top) {
+  if (!is_hol_load_no_lane(top)) return;
+
+  stall_hol_load_detail_hist_["hol_load_no_lane"]++;
+  stall_hol_load_detail_hist_[classify_hol_load_sub_bucket(top)]++;
+
+  if (hol_issue_port_busy(top)) {
+    stall_hol_load_detail_hist_["hol_issue_port_busy"]++;
+  }
+}
 
 void ProfileCollector::on_no_commit_cycle(uint64_t cycles,
                                           uint64_t no_commit_cycles,

@@ -112,6 +112,15 @@ module lsu_group #(
     output logic [LSU_WB_PORTS-1:0][     Cfg.PLEN-1:0]  wb_redirect_pc_o,
     input  logic [LSU_WB_PORTS-1:0]                     wb_ready_i,
 
+    // Combinational fast-complete assist for ROB (load writeback ports only).
+    output logic [LOAD_WB_PORTS-1:0]                     fast_lsu_valid_o,
+    output logic [LOAD_WB_PORTS-1:0][ROB_IDX_WIDTH-1:0] fast_lsu_rob_idx_o,
+    output logic [LOAD_WB_PORTS-1:0][     Cfg.XLEN-1:0] fast_lsu_data_o,
+    output logic [LOAD_WB_PORTS-1:0]                     fast_lsu_exception_o,
+    output logic [LOAD_WB_PORTS-1:0][ECAUSE_WIDTH-1:0]  fast_lsu_ecause_o,
+    output logic [LOAD_WB_PORTS-1:0]                     fast_lsu_is_mispred_o,
+    output logic [LOAD_WB_PORTS-1:0][     Cfg.PLEN-1:0] fast_lsu_redirect_pc_o,
+
     // =========================================================
     // 5) Debug visibility for queue skeleton
     // =========================================================
@@ -194,6 +203,14 @@ module lsu_group #(
   logic                [         N_LSU-1:0]                    lane_wb_is_mispred;
   logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_wb_redirect_pc;
   logic                [         N_LSU-1:0]                    lane_wb_ready;
+
+  logic                [         N_LSU-1:0]                    lane_fast_lsu_valid;
+  logic                [         N_LSU-1:0][ROB_IDX_WIDTH-1:0] lane_fast_lsu_rob_idx;
+  logic                [         N_LSU-1:0][     Cfg.XLEN-1:0] lane_fast_lsu_data;
+  logic                [         N_LSU-1:0]                    lane_fast_lsu_exception;
+  logic                [         N_LSU-1:0][ECAUSE_WIDTH-1:0] lane_fast_lsu_ecause;
+  logic                [         N_LSU-1:0]                    lane_fast_lsu_is_mispred;
+  logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_fast_lsu_redirect_pc;
 
   // Per-lane MMIO interface signals
   logic                [         N_LSU-1:0]                    lane_mmio_req_valid;
@@ -605,7 +622,15 @@ module lsu_group #(
           .wb_ecause_o(lane_wb_ecause[gi]),
           .wb_is_mispred_o(lane_wb_is_mispred[gi]),
           .wb_redirect_pc_o(lane_wb_redirect_pc[gi]),
-          .wb_ready_i(lane_wb_ready[gi])
+          .wb_ready_i(lane_wb_ready[gi]),
+
+          .fast_lsu_valid_o(lane_fast_lsu_valid[gi]),
+          .fast_lsu_rob_idx_o(lane_fast_lsu_rob_idx[gi]),
+          .fast_lsu_data_o(lane_fast_lsu_data[gi]),
+          .fast_lsu_exception_o(lane_fast_lsu_exception[gi]),
+          .fast_lsu_ecause_o(lane_fast_lsu_ecause[gi]),
+          .fast_lsu_is_mispred_o(lane_fast_lsu_is_mispred[gi]),
+          .fast_lsu_redirect_pc_o(lane_fast_lsu_redirect_pc[gi])
       );
 
       assign dbg_lane_busy[gi] = lane_ld_req_valid[gi] | lane_ld_rsp_ready[gi] | lane_wb_valid[gi] | lane_mmio_req_valid[gi];
@@ -855,6 +880,19 @@ module lsu_group #(
     wb_ecause_o[STORE_WB_PORT]      = store_wb_head_ecause;
     wb_is_mispred_o[STORE_WB_PORT]  = store_wb_head_is_mispred;
     wb_redirect_pc_o[STORE_WB_PORT] = store_wb_head_redirect_pc;
+  end
+
+  // Load writeback ports only; store-writeback head uses the slow ROB.complete path.
+  always_comb begin
+    for (int p = 0; p < LOAD_WB_PORTS; p++) begin
+      fast_lsu_valid_o[p]       = wb_grant_valid[p] && lane_fast_lsu_valid[wb_lane_idx[p]];
+      fast_lsu_rob_idx_o[p]     = lane_fast_lsu_rob_idx[wb_lane_idx[p]];
+      fast_lsu_data_o[p]        = lane_fast_lsu_data[wb_lane_idx[p]];
+      fast_lsu_exception_o[p]   = lane_fast_lsu_exception[wb_lane_idx[p]];
+      fast_lsu_ecause_o[p]      = lane_fast_lsu_ecause[wb_lane_idx[p]];
+      fast_lsu_is_mispred_o[p]  = lane_fast_lsu_is_mispred[wb_lane_idx[p]];
+      fast_lsu_redirect_pc_o[p] = lane_fast_lsu_redirect_pc[wb_lane_idx[p]];
+    end
   end
 
   // Per-port writeback fire + arbiter pointer-advance feedback.

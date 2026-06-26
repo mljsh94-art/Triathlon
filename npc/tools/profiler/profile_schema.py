@@ -92,7 +92,10 @@ def bench_stall_category(bench: dict) -> dict[str, int | float]:
 
 
 def bench_stall_detail(bench: dict, section: str) -> dict:
-    """section: decode_blocked | rob_backpressure | frontend_empty | pipeline_bubble"""
+    """section: decode_blocked | rob_backpressure | frontend_empty | pipeline_bubble | hol_load_detail"""
+    if section == "hol_load_detail":
+        detail = _dig(bench, "stall", "hol_load_detail", "detail")
+        return detail if isinstance(detail, dict) else {}
     detail = _dig(bench, "stall", section, "detail")
     if isinstance(detail, dict):
         return detail
@@ -106,6 +109,9 @@ def bench_stall_detail(bench: dict, section: str) -> dict:
 
 
 def bench_stall_section_total(bench: dict, section: str) -> int:
+    if section == "hol_load_detail":
+        detail = bench_stall_detail(bench, section)
+        return int(detail.get("hol_load_no_lane", 0) or 0)
     total = _dig(bench, "stall", section, "total")
     if total is not None:
         return int(total or 0)

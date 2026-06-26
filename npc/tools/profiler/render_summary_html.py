@@ -44,6 +44,7 @@ STALL_DETAIL_SECTIONS = (
     ("frontend_empty", "前端空取"),
     ("rob_backpressure", "ROB 背压"),
     ("pipeline_bubble", "流水线气泡"),
+    ("hol_load_detail", "队头Load无Lane"),
 )
 
 TRANSLATIONS = {
@@ -118,6 +119,15 @@ TRANSLATIONS = {
     "rob_head_lsu_incomplete_sm_req_unknown_nonbp": "ROB头LSU: 请求未知",
     "rob_head_lsu_incomplete_sm_rsp_unknown_nonbp": "ROB头LSU: 响应未知",
     "rob_head_lsu_incomplete_lane_not_found_nonbp": "ROB头LSU: 未找到对应 lane",
+    "hol_load_no_lane": "队头Load无Lane (分母)",
+    "hol_not_in_rs": "队头Load: 未进RS",
+    "hol_in_rs_operand_wait": "队头Load: RS等操作数",
+    "hol_in_rs_issue_inflight": "队头Load: 本拍正在issue",
+    "hol_in_rs_ready_no_issue": "队头Load: RS就绪未issue",
+    "hol_in_rs_not_ready_other": "队头Load: RS未就绪(非store-block)",
+    "hol_block_store": "队头Load: RS被更老store阻塞",
+    "hol_issue_port_busy": "队头Load: issue口被其他项占用",
+    "hol_residual": "队头Load: 未分类残余",
     "rob_head_lsu_incomplete_cdb_hit_no_lane_nonbp": "ROB头LSU: CDB 已命中但 lane 已不可见",
     "rob_head_lsu_incomplete_group_wb_hit_no_lane_nonbp": "ROB头LSU: group WB 命中但 lane 已不可见",
     "rob_head_lsu_incomplete_group_wb_not_ready_no_lane_nonbp": "ROB头LSU: group WB 命中但 CDB 未就绪",

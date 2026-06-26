@@ -237,6 +237,14 @@ module tb_lsu #(
       .wb_redirect_pc_o(dut_wb_redirect_pc),
       .wb_ready_i      ({TB_LSU_WB_PORTS{wb_ready_i}}),
 
+      .fast_lsu_valid_o(),
+      .fast_lsu_rob_idx_o(),
+      .fast_lsu_data_o(),
+      .fast_lsu_exception_o(),
+      .fast_lsu_ecause_o(),
+      .fast_lsu_is_mispred_o(),
+      .fast_lsu_redirect_pc_o(),
+
       .dbg_lq_count_o(),
       .dbg_lq_head_valid_o(),
       .dbg_lq_head_rob_tag_o(),

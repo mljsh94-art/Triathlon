@@ -966,15 +966,14 @@ module dcache #(
       end
     end
 
-    // On flush, suppress handshakes/responses.
+    // On flush, suppress new external handshakes. Keep the current load
+    // response purely state/data driven: ROB may derive the same-cycle flush
+    // from an LSU fast completion, so feeding that flush back into ld_rsp_*
+    // creates a combinational loop (rob_flush -> dcache -> LSU fast -> ROB).
     if (flush_i && !(state_q != S_IDLE && req_is_store_q)) begin
       miss_req_valid_o = 1'b0;
       refill_ready_o   = 1'b0;
       wb_req_valid_o   = 1'b0;
-      ld_rsp_valid_o   = 1'b0;
-      ld_rsp_data_o    = '0;
-      ld_rsp_err_o     = 1'b0;
-      ld_rsp_id_o      = '0;
     end
   end
 

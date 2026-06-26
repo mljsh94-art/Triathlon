@@ -70,7 +70,7 @@ module backend #(
   // ALU2,ALU3,CSR].
   localparam int unsigned LSU_LOAD_WB_PORTS = 2;
   localparam int unsigned LSU_WB_PORTS = LSU_LOAD_WB_PORTS + 1;  // 2 load + 1 store
-  localparam int unsigned WB_WIDTH = 6 + LSU_WB_PORTS;  // 1:1 CDB
+  localparam int unsigned WB_WIDTH = 6 + LSU_WB_PORTS;  // 1:1 CDB — fast_lsu depends on this
   localparam int unsigned NUM_FUS = 6 + LSU_WB_PORTS;
   localparam int unsigned LSU_GROUP_SIZE = (Cfg.LSU_GROUP_SIZE >= 1) ? Cfg.LSU_GROUP_SIZE : 1;
   localparam int unsigned LSU_LD_ID_WIDTH = (LSU_GROUP_SIZE <= 1) ? 1 : $clog2(LSU_GROUP_SIZE);
@@ -118,6 +118,12 @@ module backend #(
       initial begin
         $fatal(1, "backend config error: IBUFFER_DEPTH(%0d) < INSTR_PER_FETCH(%0d)",
                Cfg.IBUFFER_DEPTH, DISPATCH_WIDTH);
+      end
+    end
+    if (WB_WIDTH != NUM_FUS) begin : g_cfg_wb_fus_mismatch
+      initial begin
+        $fatal(1, "backend config error: WB_WIDTH(%0d) != NUM_FUS(%0d); fast_lsu requires 1:1 CDB",
+               WB_WIDTH, NUM_FUS);
       end
     end
   endgenerate
@@ -229,7 +235,8 @@ module backend #(
       .SB_DEPTH(SB_DEPTH),
       .MAX_COMMIT_BR(ROB_MAX_COMMIT_BR),
       .MAX_COMMIT_ST(ROB_MAX_COMMIT_ST),
-      .MAX_COMMIT_LD(ROB_MAX_COMMIT_LD)
+      .MAX_COMMIT_LD(ROB_MAX_COMMIT_LD),
+      .FAST_LSU_PORTS(LSU_LOAD_WB_PORTS)
   ) u_rob (
       .clk_i (clk_i),
       .rst_ni(rst_ni),
@@ -277,6 +284,13 @@ module backend #(
       .fast_bru_data_i(bru_wb_data),
       .fast_bru_redirect_pc_i(bru_redirect_pc),
       .fast_bru_can_commit_i(bru_wb_valid && !bru_mispred),
+      .fast_lsu_valid_i(lsu_fast_valid),
+      .fast_lsu_rob_idx_i(lsu_fast_rob_idx),
+      .fast_lsu_data_i(lsu_fast_data),
+      .fast_lsu_exception_i(lsu_fast_exception),
+      .fast_lsu_ecause_i(lsu_fast_ecause),
+      .fast_lsu_is_mispred_i(lsu_fast_is_mispred),
+      .fast_lsu_redirect_pc_i(lsu_fast_redirect_pc),
 
       .commit_valid_o     (commit_valid),
       .commit_pc_o        (commit_pc),
@@ -1637,6 +1651,13 @@ module backend #(
   logic [LSU_WB_PORTS-1:0][4:0] lsu_wb_ecause;
   logic [LSU_WB_PORTS-1:0] lsu_wb_is_mispred;
   logic [LSU_WB_PORTS-1:0][Cfg.PLEN-1:0] lsu_wb_redirect_pc;
+  logic [LSU_LOAD_WB_PORTS-1:0] lsu_fast_valid;
+  logic [LSU_LOAD_WB_PORTS-1:0][ROB_IDX_WIDTH-1:0] lsu_fast_rob_idx;
+  logic [LSU_LOAD_WB_PORTS-1:0][Cfg.XLEN-1:0] lsu_fast_data;
+  logic [LSU_LOAD_WB_PORTS-1:0] lsu_fast_exception;
+  logic [LSU_LOAD_WB_PORTS-1:0][4:0] lsu_fast_ecause;
+  logic [LSU_LOAD_WB_PORTS-1:0] lsu_fast_is_mispred;
+  logic [LSU_LOAD_WB_PORTS-1:0][Cfg.PLEN-1:0] lsu_fast_redirect_pc;
 
   // LSU <-> D$
   logic lsu_ld_req_valid;
@@ -1850,6 +1871,14 @@ module backend #(
       .wb_is_mispred_o (lsu_wb_is_mispred),
       .wb_redirect_pc_o(lsu_wb_redirect_pc),
       .wb_ready_i      ({LSU_WB_PORTS{1'b1}}),
+
+      .fast_lsu_valid_o(lsu_fast_valid),
+      .fast_lsu_rob_idx_o(lsu_fast_rob_idx),
+      .fast_lsu_data_o(lsu_fast_data),
+      .fast_lsu_exception_o(lsu_fast_exception),
+      .fast_lsu_ecause_o(lsu_fast_ecause),
+      .fast_lsu_is_mispred_o(lsu_fast_is_mispred),
+      .fast_lsu_redirect_pc_o(lsu_fast_redirect_pc),
 
       .dbg_lq_count_o(lsu_lq_count_dbg),
       .dbg_lq_head_valid_o(lsu_lq_head_valid_dbg),

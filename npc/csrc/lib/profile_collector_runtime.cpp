@@ -226,6 +226,7 @@ void ProfileCollector::observe_cycle(const Vtb_triathlon *top) {
   if (top->dbg_ifu_fq_deq_fire_o) ifu_fq_deq_++;
   if (top->dbg_ifu_fq_bypass_fire_o) ifu_fq_bypass_++;
   if (top->dbg_ifu_fq_enq_blocked_o) ifu_fq_enq_blocked_++;
+  record_hol_load_cycle(top);
 }
 
 void ProfileCollector::record_flush(uint64_t cycles,

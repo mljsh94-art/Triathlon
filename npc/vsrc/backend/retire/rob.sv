@@ -14,7 +14,8 @@ module rob #(
     parameter int unsigned SB_IDX_WIDTH = $clog2(SB_DEPTH),
     parameter int unsigned MAX_COMMIT_BR = 1,
     parameter int unsigned MAX_COMMIT_ST = 2,
-    parameter int unsigned MAX_COMMIT_LD = 2
+    parameter int unsigned MAX_COMMIT_LD = 2,
+    parameter int unsigned FAST_LSU_PORTS = 2
 ) (
     input logic clk_i,
     input logic rst_ni,
@@ -73,6 +74,14 @@ module rob #(
     input logic [Cfg.XLEN-1:0] fast_bru_data_i,
     input logic [Cfg.PLEN-1:0] fast_bru_redirect_pc_i,
     input logic fast_bru_can_commit_i,
+    // Fast-visible path for LSU load completion (combinational assist only).
+    input logic [FAST_LSU_PORTS-1:0] fast_lsu_valid_i,
+    input logic [FAST_LSU_PORTS-1:0][$clog2(ROB_DEPTH)-1:0] fast_lsu_rob_idx_i,
+    input logic [FAST_LSU_PORTS-1:0][Cfg.XLEN-1:0] fast_lsu_data_i,
+    input logic [FAST_LSU_PORTS-1:0] fast_lsu_exception_i,
+    input logic [FAST_LSU_PORTS-1:0][4:0] fast_lsu_ecause_i,
+    input logic [FAST_LSU_PORTS-1:0] fast_lsu_is_mispred_i,
+    input logic [FAST_LSU_PORTS-1:0][Cfg.PLEN-1:0] fast_lsu_redirect_pc_i,
 
     // =========================================================
     // 3. Commit 阶段 (To ARF & Controller & RAT & SB)
@@ -210,6 +219,9 @@ module rob #(
   logic [COMMIT_WIDTH-1:0] head_fast_complete;
   logic [COMMIT_WIDTH-1:0][Cfg.XLEN-1:0] head_fast_data;
   logic [COMMIT_WIDTH-1:0][Cfg.PLEN-1:0] head_fast_redirect_pc;
+  logic [COMMIT_WIDTH-1:0] head_fast_exception;
+  logic [COMMIT_WIDTH-1:0][4:0] head_fast_ecause;
+  logic [COMMIT_WIDTH-1:0] head_fast_is_mispred;
 
   always_comb begin
     for (int i = 0; i < COMMIT_WIDTH; i++) begin
@@ -218,6 +230,9 @@ module rob #(
       head_fast_complete[i] = rob_ram[idx].complete;
       head_fast_data[i] = rob_ram[idx].data;
       head_fast_redirect_pc[i] = rob_ram[idx].redirect_pc;
+      head_fast_exception[i] = rob_ram[idx].exception;
+      head_fast_ecause[i] = rob_ram[idx].ecause;
+      head_fast_is_mispred[i] = rob_ram[idx].is_mispred;
       if (rob_ram[idx].fu_type == decode_pkg::FU_ALU) begin
         for (int a = 0; a < DISPATCH_WIDTH; a++) begin
           if (fast_alu_valid_i[a] && (fast_alu_rob_idx_i[a] == idx)) begin
@@ -245,6 +260,17 @@ module rob #(
           head_fast_complete[i] = 1'b1;
           head_fast_data[i] = fast_bru_data_i;
           head_fast_redirect_pc[i] = fast_bru_redirect_pc_i;
+        end
+      end else if (rob_ram[idx].fu_type == decode_pkg::FU_LSU) begin
+        for (int p = 0; p < FAST_LSU_PORTS; p++) begin
+          if (fast_lsu_valid_i[p] && (fast_lsu_rob_idx_i[p] == idx)) begin
+            head_fast_complete[i] = 1'b1;
+            head_fast_data[i] = fast_lsu_data_i[p];
+            head_fast_redirect_pc[i] = fast_lsu_redirect_pc_i[p];
+            head_fast_exception[i] = fast_lsu_exception_i[p];
+            head_fast_ecause[i] = fast_lsu_ecause_i[p];
+            head_fast_is_mispred[i] = fast_lsu_is_mispred_i[p];
+          end
         end
       end
     end
@@ -338,14 +364,14 @@ module rob #(
 
         if ((count_q > i) && !stop_commit && commit_permitted_mask[i]) begin
           if (head_fast_complete[i]) begin
-            if (rob_ram[commit_rob_index_o[i]].exception) begin
+            if (head_fast_exception[i]) begin
               stop_commit   = 1'b1;
               // Precise sync exception is handled by CSR/trap path at commit head.
               sync_exception_valid_o = 1'b1;
-              sync_exception_cause_o = rob_ram[commit_rob_index_o[i]].ecause;
+              sync_exception_cause_o = head_fast_ecause[i];
               sync_exception_pc_o = rob_ram[commit_rob_index_o[i]].pc;
               sync_exception_tval_o = head_fast_data[i][Cfg.PLEN-1:0];
-            end else if (rob_ram[commit_rob_index_o[i]].is_mispred) begin
+            end else if (head_fast_is_mispred[i]) begin
               // 分支/跳转误预测：先退休该指令，再触发 flush
               commit_valid_o[i] = 1'b1;
               commit_pc_o[i]    = rob_ram[commit_rob_index_o[i]].pc;
@@ -436,6 +462,13 @@ module rob #(
       if (fast_bru_valid_i && fast_bru_can_commit_i && (fast_bru_rob_idx_i == query_rob_idx_i[q])) begin
         query_ready_o[q] = 1'b1;
         query_data_o[q] = fast_bru_data_i;
+      end
+      for (int p = 0; p < FAST_LSU_PORTS; p++) begin
+        if (fast_lsu_valid_i[p] && !fast_lsu_exception_i[p] &&
+            (fast_lsu_rob_idx_i[p] == query_rob_idx_i[q])) begin
+          query_ready_o[q] = 1'b1;
+          query_data_o[q] = fast_lsu_data_i[p];
+        end
       end
     end
   end
@@ -742,6 +775,8 @@ module rob #(
           if (commit_valid_o[i]) begin
             `NPC_ASSERT(head_fast_complete[i], "rob/commit_without_complete")
             `NPC_ASSERT(rob_ram[commit_rob_index_o[i]].valid, "rob/commit_invalid_entry")
+            `NPC_ASSERT(!(commit_valid_o[i] && head_fast_exception[i]),
+                       "rob/commit_with_fast_exception")
           end
           if (commit_we_o[i]) begin
             `NPC_ASSERT(commit_valid_o[i] &&
@@ -775,6 +810,12 @@ module rob #(
           if (fast_bru_valid_i && fast_bru_can_commit_i &&
               (fast_bru_rob_idx_i == query_rob_idx_i[q])) begin
             query_fast_hit = 1'b1;
+          end
+          for (int p = 0; p < FAST_LSU_PORTS; p++) begin
+            if (fast_lsu_valid_i[p] && !fast_lsu_exception_i[p] &&
+                (fast_lsu_rob_idx_i[p] == query_rob_idx_i[q])) begin
+              query_fast_hit = 1'b1;
+            end
           end
           if (query_ready_o[q] && !query_fast_hit) begin
             `NPC_ASSERT(rob_ram[query_rob_idx_i[q]].valid &&

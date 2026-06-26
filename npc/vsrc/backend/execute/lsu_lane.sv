@@ -86,7 +86,16 @@ module lsu_lane #(
     output logic [ECAUSE_WIDTH-1:0]  wb_ecause_o,
     output logic                     wb_is_mispred_o,
     output logic [     Cfg.PLEN-1:0] wb_redirect_pc_o,
-    input  logic                     wb_ready_i
+    input  logic                     wb_ready_i,
+
+    // Combinational fast-complete assist for ROB head load retire (gated clean loads only).
+    output logic                     fast_lsu_valid_o,
+    output logic [ROB_IDX_WIDTH-1:0] fast_lsu_rob_idx_o,
+    output logic [     Cfg.XLEN-1:0] fast_lsu_data_o,
+    output logic                     fast_lsu_exception_o,
+    output logic [ECAUSE_WIDTH-1:0] fast_lsu_ecause_o,
+    output logic                     fast_lsu_is_mispred_o,
+    output logic [     Cfg.PLEN-1:0] fast_lsu_redirect_pc_o
 );
 
   // ---------------------------------------------------------
@@ -159,6 +168,9 @@ module lsu_lane #(
   logic req_fire_w;
   logic is_amo;
   logic is_mmio;
+  logic inflight_is_load_q;
+  logic inflight_is_mmio_q;
+  logic inflight_is_amo_q;
 
   assign is_load       = uop_i.is_load;
   assign is_store      = uop_i.is_store;
@@ -287,6 +299,18 @@ module lsu_lane #(
   assign wb_is_mispred_o = 1'b0;
   assign wb_redirect_pc_o = '0;
 
+  // fast_lsu_valid: hit & tlb_ok & !fault & !mmio & ordering_ok (load lane only).
+  // tlb_ok/ordering_ok are structural (walk completes before lane accept; load WB
+  // never carries is_mispred). AMO and MMIO loads stay on the slow ROB.complete path.
+  assign fast_lsu_valid_o = wb_valid_o && inflight_is_load_q && !inflight_is_mmio_q &&
+                            !inflight_is_amo_q && !wb_exception_o && !wb_is_mispred_o;
+  assign fast_lsu_rob_idx_o = wb_rob_idx_o;
+  assign fast_lsu_data_o = wb_data_o;
+  assign fast_lsu_exception_o = wb_exception_o;
+  assign fast_lsu_ecause_o = wb_ecause_o;
+  assign fast_lsu_is_mispred_o = wb_is_mispred_o;
+  assign fast_lsu_redirect_pc_o = wb_redirect_pc_o;
+
   // ---------------------------------------------------------
   // Next-state logic
   // ---------------------------------------------------------
@@ -370,6 +394,9 @@ module lsu_lane #(
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       state_q       <= S_IDLE;
+      inflight_is_load_q <= 1'b0;
+      inflight_is_mmio_q <= 1'b0;
+      inflight_is_amo_q <= 1'b0;
 
       req_addr_q    <= '0;
       req_op_q      <= decode_pkg::LSU_LW;
@@ -383,6 +410,9 @@ module lsu_lane #(
       state_q <= state_d;
 
       if (flush_i) begin
+        inflight_is_load_q <= 1'b0;
+        inflight_is_mmio_q <= 1'b0;
+        inflight_is_amo_q <= 1'b0;
         resp_data_q   <= '0;
         resp_exc_q    <= 1'b0;
         resp_ecause_q <= '0;
@@ -390,6 +420,10 @@ module lsu_lane #(
       end else begin
         // Accept new request
         if (req_fire_w) begin
+          inflight_is_load_q <= is_load;
+          inflight_is_mmio_q <= is_load && is_mmio && !misaligned && !force_exception_i &&
+                                !sb_load_hit_i;
+          inflight_is_amo_q <= is_amo;
           if (is_load && !misaligned && !force_exception_i && !sb_load_hit_i) begin
             req_addr_q <= eff_addr;
             req_op_q   <= uop_i.lsu_op;

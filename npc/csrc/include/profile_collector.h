@@ -101,6 +101,7 @@ class ProfileCollector {
   const char *classify_decode_blocked_detail_cycle(const Vtb_triathlon *top) const;
   const char *classify_rob_backpressure_detail_cycle(const Vtb_triathlon *top) const;
   const char *classify_other_detail_cycle(const Vtb_triathlon *top) const;
+  void record_hol_load_cycle(const Vtb_triathlon *top);
 
   void emit_pred_summary(const Vtb_triathlon *top) const;
   void emit_ranked_summary(const char *tag,
@@ -200,6 +201,7 @@ class ProfileCollector {
   std::unordered_map<std::string, uint64_t> stall_decode_blocked_detail_hist_;
   std::unordered_map<std::string, uint64_t> stall_rob_backpressure_detail_hist_;
   std::unordered_map<std::string, uint64_t> stall_other_detail_hist_;
+  std::unordered_map<std::string, uint64_t> stall_hol_load_detail_hist_;
 
   uint64_t branch_ready_not_issued_cycles_ = 0;
   uint64_t alu_ready_not_issued_cycles_ = 0;

@@ -121,6 +121,10 @@ void ProfileCollector::emit_summary(uint64_t final_cycles, const Vtb_triathlon *
   emit_detail_summary("stallm4", "rob_backpressure_total", stall_cycle_hist_[kStallROBBackpressure],
                       stall_rob_backpressure_detail_hist_);
   emit_detail_summary("stallm5", "other_total", stall_cycle_hist_[kStallOther], stall_other_detail_hist_);
+  emit_detail_summary("stallm7", "hol_load_no_lane", stall_hol_load_detail_hist_.count("hol_load_no_lane")
+                          ? stall_hol_load_detail_hist_.at("hol_load_no_lane")
+                          : 0,
+                      stall_hol_load_detail_hist_);
   std::cout << "[stallm6] mode=cycle"
             << " branch_ready_not_issued=" << branch_ready_not_issued_cycles_
             << " alu_ready_not_issued=" << alu_ready_not_issued_cycles_

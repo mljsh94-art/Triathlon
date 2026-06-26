@@ -464,7 +464,11 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
   os << "\"branch_ready_not_issued\":" << branch_ready_not_issued_cycles_
      << ",\"alu_ready_not_issued\":" << alu_ready_not_issued_cycles_
      << ",\"complete_not_visible_to_rob\":" << complete_not_visible_cycles_;
-  os << "}}},";
+  os << "}},";
+  os << "\"hol_load_detail\":{";
+  os << "\"detail\":";
+  append_str_map(os, stall_hol_load_detail_hist_);
+  os << "}},";
 
   os << "\"frontend\":{";
   os << "\"ifu_fq\":{";
