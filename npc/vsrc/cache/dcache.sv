@@ -27,7 +27,7 @@ module dcache #(
     output logic [LD_PORT_ID_WIDTH-1:0] ld_rsp_id_o,
 
     // =============================================================
-    // 2) Committed store port (from Store Buffer)
+    // 2) Committed store port (from STQ)
     // =============================================================
     input  logic                               st_req_valid_i,
     output logic                               st_req_ready_o,
@@ -1011,7 +1011,7 @@ module dcache #(
             else                state_d = S_RESP;
           end
         end else if (req_is_store_q) begin
-          // Committed stores have already been dequeued from the Store Buffer.
+          // Committed stores have already been dequeued from the STQ.
           // Keep store misses blocking in D$ so exception flushes cannot drop
           // the only in-flight copy before refill+merge updates the cache line.
           if (mshr_req_line_hit) begin

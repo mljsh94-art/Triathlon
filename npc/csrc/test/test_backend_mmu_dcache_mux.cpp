@@ -34,10 +34,10 @@ void clear_inputs(Vtb_backend_mmu_dcache_mux *top) {
   top->ifu_pte_ld_req_valid_i = 0;
   top->ifu_pte_ld_req_paddr_i = 0;
 
-  top->sb_st_req_valid_i = 0;
-  top->sb_st_req_addr_i = 0;
-  top->sb_st_req_data_i = 0;
-  top->sb_st_req_op_i = 0;
+  top->st_dcache_req_valid_i = 0;
+  top->st_dcache_req_addr_i = 0;
+  top->st_dcache_req_data_i = 0;
+  top->st_dcache_req_op_i = 0;
 
   top->pte_st_req_valid_i = 0;
   top->pte_st_req_paddr_i = 0;
@@ -144,10 +144,10 @@ void test_lsu_load_path_and_rsp_route(Vtb_backend_mmu_dcache_mux *top) {
 void test_pte_store_priority(Vtb_backend_mmu_dcache_mux *top) {
   clear_inputs(top);
   top->dcache_st_req_ready_i = 1;
-  top->sb_st_req_valid_i = 1;
-  top->sb_st_req_addr_i = 0x80008000u;
-  top->sb_st_req_data_i = 0x11112222u;
-  top->sb_st_req_op_i = LSU_SW;
+  top->st_dcache_req_valid_i = 1;
+  top->st_dcache_req_addr_i = 0x80008000u;
+  top->st_dcache_req_data_i = 0x11112222u;
+  top->st_dcache_req_op_i = LSU_SW;
   top->pte_st_req_valid_i = 1;
   top->pte_st_req_paddr_i = 0x00103008u;
   top->pte_st_req_data_i = 0xA5A5C3C3u;
@@ -162,7 +162,7 @@ void test_pte_store_priority(Vtb_backend_mmu_dcache_mux *top) {
   expect(top->dcache_st_req_op_o == LSU_SW, "pte store priority: op is LSU_SW");
   expect(top->pte_st_req_ready_o == 1, "pte store priority: lsu pte ready asserted");
   expect(top->ifu_pte_st_req_ready_o == 0, "pte store priority: ifu pte blocked");
-  expect(top->sb_st_req_ready_o == 0, "pte store priority: sb not selected");
+  expect(top->st_dcache_req_ready_o == 0, "pte store priority: sb not selected");
 }
 
 void test_ifu_pte_load_path_and_rsp_route(Vtb_backend_mmu_dcache_mux *top) {

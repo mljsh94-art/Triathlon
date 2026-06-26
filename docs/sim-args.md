@@ -169,7 +169,7 @@ make -C npc sim SNAPSHOT=1 \
 | Tag | 触发 | 内容 |
 |-----|------|------|
 | `[commit]` | `--commit-trace` | ROB retire |
-| `[stwb]` | 同上 | Store Buffer 写 DCache |
+| `[stwb]` | 同上 | STQ 队头已提交 store 写 DCache（senior drain；与 store 完成上报 ROB 的专用 WB 口不同） |
 | `[ldreq]`/`[ldrsp]` | 同上 | LSU load |
 | `[flush]`/`[flushp]`/`[bru]` | commit-trace 或 `--bru-trace` | flush / 惩罚 / BRU |
 | `[bruwb]` | `--bru-trace` | BRU writeback |

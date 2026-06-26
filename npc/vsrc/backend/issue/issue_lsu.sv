@@ -7,7 +7,7 @@ module issue_lsu #(
     parameter DATA_W   = Cfg.XLEN,
     parameter TAG_W    = 6,
     parameter CDB_W    = 4,
-    parameter SB_W     = 4
+    parameter ST_W     = 4
 ) (
     input wire clk,
     input wire rst_n,
@@ -24,8 +24,8 @@ module issue_lsu #(
     input wire                   [DATA_W-1:0] dispatch_v2   [0:3],
     input wire                   [ TAG_W-1:0] dispatch_q2   [0:3],
     input wire                                dispatch_r2   [0:3],
-    // Store Buffer ID
-    input wire                   [  SB_W-1:0] dispatch_sb_id[0:3],
+    // STQ ID
+    input wire                   [  ST_W-1:0] dispatch_st_id[0:3],
 
     input wire                   [ TAG_W-1:0] rob_head_i,
     input wire                                mispred_block_i,
@@ -47,7 +47,7 @@ module issue_lsu #(
     output wire              [DATA_W-1:0] lsu_v1,
     output wire              [DATA_W-1:0] lsu_v2,
     output wire              [ TAG_W-1:0] lsu_dst,
-    output wire              [  SB_W-1:0] lsu_sb_id
+    output wire              [  ST_W-1:0] lsu_stq_id
 );
   wire full_stall;
   assign issue_ready = ~full_stall;
@@ -71,8 +71,8 @@ module issue_lsu #(
   wire [DATA_W-1:0] issue_v2_1;
   wire [ TAG_W-1:0] issue_dst_0;
   wire [ TAG_W-1:0] issue_dst_1;
-  wire [  SB_W-1:0] issue_sb_id_0;
-  wire [  SB_W-1:0] issue_sb_id_1;
+  wire [  ST_W-1:0] issue_st_id_0;
+  wire [  ST_W-1:0] issue_st_id_1;
   decode_pkg::uop_t issue_uop_0;
   decode_pkg::uop_t issue_uop_1;
   wire [DATA_W-1:0] issue_effective_addr_0;
@@ -146,7 +146,7 @@ module issue_lsu #(
   assign lsu_v1 = issue_pick_1 ? issue_v1_1 : issue_v1_0;
   assign lsu_v2 = issue_pick_1 ? issue_v2_1 : issue_v2_0;
   assign lsu_dst = issue_pick_1 ? issue_dst_1 : issue_dst_0;
-  assign lsu_sb_id = issue_pick_1 ? issue_sb_id_1 : issue_sb_id_0;
+  assign lsu_stq_id = issue_pick_1 ? issue_st_id_1 : issue_st_id_0;
 
   always_comb begin
     issue_grant_selected = '0;
@@ -169,7 +169,7 @@ module issue_lsu #(
   logic [DATA_W-1:0] rs_in_v2[0:RS_DEPTH-1];
   logic [TAG_W-1:0] rs_in_q2[0:RS_DEPTH-1];
   logic rs_in_r2[0:RS_DEPTH-1];
-  logic [SB_W-1:0] rs_in_sb_id[0:RS_DEPTH-1];
+  logic [ST_W-1:0] rs_in_st_id[0:RS_DEPTH-1];
 
   rs_allocator #(
       .Cfg(Cfg)
@@ -191,7 +191,7 @@ module issue_lsu #(
       rs_in_v2[k]    = 0;
       rs_in_q2[k]    = 0;
       rs_in_r2[k]    = 0;
-      rs_in_sb_id[k] = 0;
+      rs_in_st_id[k] = 0;
     end
 
     for (int i = 0; i < 4; i++) begin
@@ -204,7 +204,7 @@ module issue_lsu #(
         rs_in_v2[routing_idx[i]]    = dispatch_v2[i];
         rs_in_q2[routing_idx[i]]    = dispatch_q2[i];
         rs_in_r2[routing_idx[i]]    = dispatch_r2[i];
-        rs_in_sb_id[routing_idx[i]] = dispatch_sb_id[i];
+        rs_in_st_id[routing_idx[i]] = dispatch_st_id[i];
       end
     end
   end
@@ -214,7 +214,7 @@ module issue_lsu #(
       .DATA_W(DATA_W),
       .TAG_W (TAG_W),
       .CDB_W (CDB_W),
-      .SB_W  (SB_W)
+      .ST_W  (ST_W)
   ) u_rs (
       .clk  (clk),
       .rst_n(rst_n),
@@ -232,7 +232,7 @@ module issue_lsu #(
       .in_v2     (rs_in_v2),
       .in_q2     (rs_in_q2),
       .in_r2     (rs_in_r2),
-      .in_sb_id  (rs_in_sb_id),
+      .in_st_id  (rs_in_st_id),
 
       .cdb_valid(cdb_valid),
       .cdb_tag  (cdb_tag),
@@ -252,8 +252,8 @@ module issue_lsu #(
       .out_v2_1     (issue_v2_1),
       .out_dst_tag_0(issue_dst_0),
       .out_dst_tag_1(issue_dst_1),
-      .out_sb_id_0  (issue_sb_id_0),
-      .out_sb_id_1  (issue_sb_id_1),
+      .out_st_id_0  (issue_st_id_0),
+      .out_st_id_1  (issue_st_id_1),
       .dst_tag_o    (rs_dst_tag)
   );
 
@@ -334,13 +334,13 @@ module issue_lsu #(
           ((lsu_issue_trace_cnt_q + issue_trace_inc) < LSU_ISSUE_TRACE_BUDGET)) begin
         $display("[issue-lsu] pc=%h rs1=%h rs2=%h imm=%h lsu_op=%0d is_ld=%0d is_st=%0d dst=%0d sb=%0d ftq=%0d epoch=%0d rvc=%0d flush=%0d fu_ready=%0d issue0_raw=%0d issue1_raw=%0d pick0=%0d pick1=%0d",
                  lsu_uop.pc, lsu_v1, lsu_v2, lsu_uop.imm, lsu_uop.lsu_op, lsu_uop.is_load, lsu_uop.is_store,
-                 lsu_dst, lsu_sb_id, lsu_uop.ftq_id, lsu_uop.fetch_epoch, lsu_uop.is_rvc, flush_i, fu_ready_i,
+                 lsu_dst, lsu_stq_id, lsu_uop.ftq_id, lsu_uop.fetch_epoch, lsu_uop.is_rvc, flush_i, fu_ready_i,
                  issue_valid_raw[0], issue_valid_raw[1], issue_pick_0, issue_pick_1);
         issue_trace_inc = issue_trace_inc + 32'd1;
         if (flush_i &&
             ((lsu_issue_trace_cnt_q + issue_trace_inc) < LSU_ISSUE_TRACE_BUDGET)) begin
           $display("[issue-lsu-on-flush] pc=%h rs1=%h rs2=%h dst=%0d sb=%0d ftq=%0d epoch=%0d fu_ready=%0d issue0_raw=%0d issue1_raw=%0d",
-                   lsu_uop.pc, lsu_v1, lsu_v2, lsu_dst, lsu_sb_id, lsu_uop.ftq_id, lsu_uop.fetch_epoch, fu_ready_i,
+                   lsu_uop.pc, lsu_v1, lsu_v2, lsu_dst, lsu_stq_id, lsu_uop.ftq_id, lsu_uop.fetch_epoch, fu_ready_i,
                    issue_valid_raw[0], issue_valid_raw[1]);
           issue_trace_inc = issue_trace_inc + 32'd1;
         end

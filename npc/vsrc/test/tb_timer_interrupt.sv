@@ -61,11 +61,11 @@ module tb_timer_interrupt #(
     output logic [4:0]          dbg_rob_flush_cause_o,
     output logic                dbg_rob_flush_is_exception_o,
     output logic [Cfg.PLEN-1:0] dbg_rob_flush_src_pc_o,
-    output logic                dbg_sb_dcache_req_valid_o,
-    output logic                dbg_sb_dcache_req_ready_o,
-    output logic [Cfg.PLEN-1:0] dbg_sb_dcache_req_addr_o,
-    output logic [Cfg.XLEN-1:0] dbg_sb_dcache_req_data_o,
-    output logic [$bits(decode_pkg::lsu_op_e)-1:0] dbg_sb_dcache_req_op_o
+    output logic                dbg_st_dcache_req_valid_o,
+    output logic                dbg_st_dcache_req_ready_o,
+    output logic [Cfg.PLEN-1:0] dbg_st_dcache_req_addr_o,
+    output logic [Cfg.XLEN-1:0] dbg_st_dcache_req_data_o,
+    output logic [$bits(decode_pkg::lsu_op_e)-1:0] dbg_st_dcache_req_op_o
 );
 
   triathlon #(
@@ -129,10 +129,10 @@ module tb_timer_interrupt #(
   assign dbg_rob_flush_cause_o = dut.u_backend.rob_flush_cause;
   assign dbg_rob_flush_is_exception_o = dut.u_backend.rob_flush_is_exception;
   assign dbg_rob_flush_src_pc_o = dut.u_backend.rob_flush_src_pc;
-  assign dbg_sb_dcache_req_valid_o = dut.u_backend.sb_dcache_req_valid;
-  assign dbg_sb_dcache_req_ready_o = dut.u_backend.sb_dcache_req_ready;
-  assign dbg_sb_dcache_req_addr_o  = dut.u_backend.sb_dcache_req_addr;
-  assign dbg_sb_dcache_req_data_o  = dut.u_backend.sb_dcache_req_data;
-  assign dbg_sb_dcache_req_op_o    = dut.u_backend.sb_dcache_req_op;
+  assign dbg_st_dcache_req_valid_o = dut.u_backend.st_dcache_req_valid;
+  assign dbg_st_dcache_req_ready_o = dut.u_backend.st_dcache_req_ready;
+  assign dbg_st_dcache_req_addr_o  = dut.u_backend.st_dcache_req_addr;
+  assign dbg_st_dcache_req_data_o  = dut.u_backend.st_dcache_req_data;
+  assign dbg_st_dcache_req_op_o    = dut.u_backend.st_dcache_req_op;
 
 endmodule

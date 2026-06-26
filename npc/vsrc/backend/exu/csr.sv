@@ -1,4 +1,4 @@
-// vsrc/backend/execute/csr.sv
+// vsrc/backend/exu/csr.sv
 import config_pkg::*;
 import decode_pkg::*;
 

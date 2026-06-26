@@ -69,3 +69,17 @@ make -C npc sim DIFFTEST= IMG=../fw_combined.bin \
 详见 [sim-args.md](sim-args.md)：`--commit-trace`、`--bru-trace`、`--fe-trace`、`--stall-trace`、`--commit-ring`、`--snapshot-restore`。
 
 DiffTest mismatch 时默认 dump 最近 64 条 commit（`--commit-ring`）。
+
+## LSU / STQ 调试探针（`tb_triathlon`）
+
+stall trace / profile 通过 `tb_triathlon` 暴露的层级信号观察 LSU；store 完成上报已并入 **`stq`**（`lsu_group` 内不再有 `store_wb_q`）。
+
+| 探针 | 含义 |
+|------|------|
+| `dbg_lsu_store_wb_head_valid_o` | `stq` 最老「已准入、未上报 ROB」store 有待写回（≈ 原 store WB queue 非空） |
+| `dbg_lsu_store_wb_head_rob_idx_o` | 上述 store 的 ROB tag |
+| `dbg_lsu_sq_count_o` | `stq.st_unreported_count`（`executed && !reported` 条目数；名称保留自已删除的 SQ） |
+| `dbg_lsu_sq_alloc_ready_o` | store 准入反压：`st_unreported_count < SB_DEPTH` 或 store WB 口本拍可排空 |
+| `dbg_lsu_store_req_ready_o` | 同上，store 请求口 ready |
+
+层级路径示例：`dut.u_backend.u_lsu_group.store_wb_head_valid`（别名，数据源为 `u_stq.st_wb_valid_o`）。

@@ -1,4 +1,4 @@
-// vsrc/backend/execute/lsu_translate.sv
+// vsrc/backend/lsu/lsu_mmu.sv
 import config_pkg::*;
 import decode_pkg::*;
 
@@ -18,10 +18,10 @@ import decode_pkg::*;
 //
 // This removes the two-stage admission coupling (MMU FSM + pend buffering)
 // from lsu_group and makes translation the only owner of the MMU.
-module lsu_translate #(
+module lsu_mmu #(
     parameter config_pkg::cfg_t Cfg           = config_pkg::EmptyCfg,
     parameter int unsigned      ROB_IDX_WIDTH = 6,
-    parameter int unsigned      SB_IDX_WIDTH  = 5,
+    parameter int unsigned      ST_IDX_WIDTH  = 5,
     parameter int unsigned      ECAUSE_WIDTH  = 5
 ) (
     input logic clk_i,
@@ -36,7 +36,7 @@ module lsu_translate #(
     input  logic [     Cfg.XLEN-1:0] rs1_data_i,
     input  logic [     Cfg.XLEN-1:0] rs2_data_i,
     input  logic [ROB_IDX_WIDTH-1:0] rob_tag_i,
-    input  logic [ SB_IDX_WIDTH-1:0] sb_id_i,
+    input  logic [ ST_IDX_WIDTH-1:0] st_id_i,
     input  logic [     Cfg.PLEN-1:0] req_vaddr_i,
     input  logic                     req_is_load_i,
     input  logic                     req_is_store_i,
@@ -79,7 +79,7 @@ module lsu_translate #(
     output decode_pkg::uop_t         pend_uop_o,
     output logic [     Cfg.XLEN-1:0] pend_rs2_data_o,
     output logic [ROB_IDX_WIDTH-1:0] pend_rob_tag_o,
-    output logic [ SB_IDX_WIDTH-1:0] pend_sb_id_o,
+    output logic [ ST_IDX_WIDTH-1:0] pend_st_id_o,
     output logic [     Cfg.PLEN-1:0] pend_addr_o,
     output logic                     pend_force_fault_o,
     output logic [ ECAUSE_WIDTH-1:0] pend_force_ecause_o
@@ -102,7 +102,7 @@ module lsu_translate #(
   decode_pkg::uop_t         pend_uop_q;
   logic [     Cfg.XLEN-1:0] pend_rs2_data_q;
   logic [ROB_IDX_WIDTH-1:0] pend_rob_tag_q;
-  logic [ SB_IDX_WIDTH-1:0] pend_sb_id_q;
+  logic [ ST_IDX_WIDTH-1:0] pend_st_id_q;
   logic [     Cfg.PLEN-1:0] pend_addr_q;
   logic                     pend_force_fault_q;
   logic [ ECAUSE_WIDTH-1:0] pend_force_ecause_q;
@@ -114,7 +114,7 @@ module lsu_translate #(
   decode_pkg::uop_t        mmu_uop_q;
   logic [     Cfg.XLEN-1:0] mmu_rs2_data_q;
   logic [ROB_IDX_WIDTH-1:0] mmu_rob_tag_q;
-  logic [ SB_IDX_WIDTH-1:0] mmu_sb_id_q;
+  logic [ ST_IDX_WIDTH-1:0] mmu_stq_id_q;
   logic [     Cfg.PLEN-1:0] mmu_vaddr_q;
 
   logic        mmu_req_ready;
@@ -165,7 +165,7 @@ module lsu_translate #(
   assign pend_uop_o = pend_uop_q;
   assign pend_rs2_data_o = pend_rs2_data_q;
   assign pend_rob_tag_o = pend_rob_tag_q;
-  assign pend_sb_id_o = pend_sb_id_q;
+  assign pend_st_id_o = pend_st_id_q;
   assign pend_addr_o = pend_addr_q;
   assign pend_force_fault_o = pend_force_fault_q;
   assign pend_force_ecause_o = pend_force_ecause_q;
@@ -210,7 +210,7 @@ module lsu_translate #(
       pend_uop_q <= '0;
       pend_rs2_data_q <= '0;
       pend_rob_tag_q <= '0;
-      pend_sb_id_q <= '0;
+      pend_st_id_q <= '0;
       pend_addr_q <= '0;
       pend_force_fault_q <= 1'b0;
       pend_force_ecause_q <= '0;
@@ -218,7 +218,7 @@ module lsu_translate #(
       mmu_uop_q <= '0;
       mmu_rs2_data_q <= '0;
       mmu_rob_tag_q <= '0;
-      mmu_sb_id_q <= '0;
+      mmu_stq_id_q <= '0;
       mmu_vaddr_q <= '0;
 `ifndef SYNTHESIS
       lsu_pf_log_cnt_q <= '0;
@@ -230,7 +230,7 @@ module lsu_translate #(
       pend_uop_q <= '0;
       pend_rs2_data_q <= '0;
       pend_rob_tag_q <= '0;
-      pend_sb_id_q <= '0;
+      pend_st_id_q <= '0;
       pend_addr_q <= '0;
       pend_force_fault_q <= 1'b0;
       pend_force_ecause_q <= '0;
@@ -238,7 +238,7 @@ module lsu_translate #(
       mmu_uop_q <= '0;
       mmu_rs2_data_q <= '0;
       mmu_rob_tag_q <= '0;
-      mmu_sb_id_q <= '0;
+      mmu_stq_id_q <= '0;
       mmu_vaddr_q <= '0;
     end else begin
       if (accept_fire) begin
@@ -248,7 +248,7 @@ module lsu_translate #(
             lsu_diag_watch_pc(uop_i.pc)) begin
           $display("[lsu-req] pc=%h rs1=%h rs2=%h imm=%h eff=%h need_mmu=%0d is_ld=%0d is_st=%0d rob=%0d sb=%0d ftq=%0d epoch=%0d",
                    uop_i.pc, rs1_data_i, rs2_data_i, uop_i.imm, req_vaddr_i, need_walk,
-                   uop_i.is_load, uop_i.is_store, rob_tag_i, sb_id_i, uop_i.ftq_id, uop_i.fetch_epoch);
+                   uop_i.is_load, uop_i.is_store, rob_tag_i, st_id_i, uop_i.ftq_id, uop_i.fetch_epoch);
           lsu_req_trace_log_cnt_q <= lsu_req_trace_log_cnt_q + 1'b1;
         end
 `endif
@@ -257,7 +257,7 @@ module lsu_translate #(
         mmu_uop_q <= uop_i;
         mmu_rs2_data_q <= rs2_data_i;
         mmu_rob_tag_q <= rob_tag_i;
-        mmu_sb_id_q <= sb_id_i;
+        mmu_stq_id_q <= st_id_i;
         mmu_vaddr_q <= req_vaddr_i;
       end
 
@@ -271,7 +271,7 @@ module lsu_translate #(
         pend_uop_q <= mmu_uop_q;
         pend_rs2_data_q <= mmu_rs2_data_q;
         pend_rob_tag_q <= mmu_rob_tag_q;
-        pend_sb_id_q <= mmu_sb_id_q;
+        pend_st_id_q <= mmu_stq_id_q;
         pend_addr_q <= mmu_resp_page_fault ? mmu_vaddr_q[Cfg.PLEN-1:0] :
                                              mmu_resp_paddr[Cfg.PLEN-1:0];
         pend_force_fault_q <= mmu_resp_page_fault;
@@ -288,7 +288,7 @@ module lsu_translate #(
             lsu_diag_watch_pc(mmu_uop_q.pc)) begin
           $display("[lsu-mmu-rsp] pc=%h vaddr=%h paddr=%h pf=%0d satp=%h priv=%0d rob=%0d sb=%0d epoch=%0d flush=%0d",
                    mmu_uop_q.pc, mmu_vaddr_q, mmu_resp_paddr, mmu_resp_page_fault, mmu_satp_i, mmu_priv_i,
-                   mmu_rob_tag_q, mmu_sb_id_q, mmu_uop_q.fetch_epoch, flush_i);
+                   mmu_rob_tag_q, mmu_stq_id_q, mmu_uop_q.fetch_epoch, flush_i);
           lsu_mmu_trace_log_cnt_q <= lsu_mmu_trace_log_cnt_q + 1'b1;
         end
         if (lsu_trace_en_q && mmu_resp_page_fault) begin
@@ -296,7 +296,7 @@ module lsu_translate #(
             $display("[lsu-mmu-pf] pc=%h vaddr=%h satp=%h priv=%0d access=%0d sum=%0d mxr=%0d rob=%0d sb=%0d epoch=%0d flush=%0d",
                      mmu_uop_q.pc, mmu_vaddr_q, mmu_satp_i, mmu_priv_i,
                      mmu_uop_q.is_store ? MMU_ACCESS_STORE : MMU_ACCESS_LOAD,
-                     mmu_sum_i, mmu_mxr_i, mmu_rob_tag_q, mmu_sb_id_q, mmu_uop_q.fetch_epoch, flush_i);
+                     mmu_sum_i, mmu_mxr_i, mmu_rob_tag_q, mmu_stq_id_q, mmu_uop_q.fetch_epoch, flush_i);
             lsu_pf_log_cnt_q <= lsu_pf_log_cnt_q + 1'b1;
           end
         end

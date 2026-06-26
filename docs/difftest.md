@@ -49,7 +49,7 @@ Triathlon 使用 Spike `rv32imac` / MSU / Sv32 lockstep 参考模型。共享库
 ### RTL 探针
 
 - CSR：`dbg_csr_*_o`（`u_backend.u_csr`）
-- Store：`commit_store_*`、`commit_sb_id_o`
+- Store：`commit_store_*`、`commit_st_id_o`
 - Trap：`dbg_csr_irq_trap_o`、`dbg_csr_irq_redirect_pc_o`
 
 ### 失败输出

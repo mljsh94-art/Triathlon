@@ -1,6 +1,6 @@
-// vsrc/backend/execute/lq.sv
+// vsrc/backend/lsu/ldq.sv
 //
-// Load Queue (LQ): set of in-flight loads used for memory disambiguation.
+// Load Disambiguation Queue (LDQ): set of in-flight loads used for memory disambiguation.
 // Each entry tracks the load's ROB tag, PC, translated physical address and
 // byte-enable mask plus an `executed` flag that marks when the load has
 // produced its value via writeback.
@@ -17,7 +17,7 @@
 // free-list: alloc takes any free slot, free clears the slot whose rob_tag
 // matches a committing rob_idx, and the executed update / violation CAM are
 // associative (content addressed by ROB tag / physical address).
-module lq #(
+module ldq #(
     parameter int unsigned ROB_IDX_WIDTH = 6,
     parameter int unsigned DEPTH         = 16,
     parameter int unsigned PLEN          = 32,
@@ -47,7 +47,7 @@ module lq #(
     // ---------------------------------------------------------------
     // Commit free (load retired). The ROB commit ports are broadcast here;
     // any entry whose rob_tag matches a valid committing slot is freed. Only
-    // loads live in the LQ, so non-load commits never match.
+    // loads live in the LDQ, so non-load commits never match.
     // ---------------------------------------------------------------
     input logic [COMMIT_WIDTH-1:0]                    commit_valid_i,
     input logic [COMMIT_WIDTH-1:0][ROB_IDX_WIDTH-1:0] commit_rob_idx_i,
@@ -274,7 +274,7 @@ module lq #(
 
   initial begin
     assert (DEPTH > 0)
-    else $fatal(1, "lq DEPTH must be > 0");
+    else $fatal(1, "ldq DEPTH must be > 0");
   end
 
 `ifndef SYNTHESIS
@@ -284,7 +284,7 @@ module lq #(
     if (rst_ni && !flush_i) begin
       if (alloc_fire) begin
         assert (free_found)
-        else $fatal(1, "lq: alloc_fire without a free slot");
+        else $fatal(1, "ldq: alloc_fire without a free slot");
       end
     end
   end

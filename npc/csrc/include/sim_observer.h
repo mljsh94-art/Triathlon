@@ -35,7 +35,7 @@ class SimObserver {
 
   void configure_mem_watch(MemSystem &mem, uint32_t firmware_base, bool boot_handoff);
 
-  void service_store_buffer(uint64_t cycle, Vtb_triathlon *top, MemSystem &mem);
+  void service_stq(uint64_t cycle, Vtb_triathlon *top, MemSystem &mem);
   void after_flush(uint64_t cycle, Vtb_triathlon *top, MemSystem &mem,
                    const std::array<uint32_t, 32> &rf);
   void after_bru_writeback(uint64_t cycle, Vtb_triathlon *top);

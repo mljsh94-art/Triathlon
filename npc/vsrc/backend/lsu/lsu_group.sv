@@ -1,4 +1,4 @@
-// vsrc/backend/execute/lsu_group.sv
+// vsrc/backend/lsu/lsu_group.sv
 import config_pkg::*;
 import decode_pkg::*;
 
@@ -6,8 +6,8 @@ module lsu_group #(
     parameter config_pkg::cfg_t Cfg           = config_pkg::EmptyCfg,
     parameter int unsigned      ROB_IDX_WIDTH = 6,
     parameter int unsigned      SB_DEPTH      = 32,
-    parameter int unsigned      SB_IDX_WIDTH  = $clog2(SB_DEPTH),
-    parameter int unsigned      LQ_DEPTH      = 16,
+    parameter int unsigned      ST_IDX_WIDTH  = $clog2(SB_DEPTH),
+    parameter int unsigned      LDQ_DEPTH      = 16,
     parameter int unsigned      SQ_DEPTH      = 16,
     parameter int unsigned      N_LSU         = 1,
     parameter int unsigned      COMMIT_WIDTH  = 4,
@@ -23,7 +23,7 @@ module lsu_group #(
     input logic rst_ni,
     input logic flush_i,
 
-    // ROB commit broadcast: used to free LQ entries (loads live until retire).
+    // ROB commit broadcast: used to free LDQ entries (loads live until retire).
     input logic [COMMIT_WIDTH-1:0]                    commit_valid_i,
     input logic [COMMIT_WIDTH-1:0][ROB_IDX_WIDTH-1:0] commit_rob_idx_i,
 
@@ -37,7 +37,7 @@ module lsu_group #(
     input  logic             [     Cfg.XLEN-1:0] rs2_data_i,
     input  logic             [ROB_IDX_WIDTH-1:0] rob_tag_i,
     input  logic             [ROB_IDX_WIDTH-1:0] rob_head_i,
-    input  logic             [ SB_IDX_WIDTH-1:0] sb_id_i,
+    input  logic             [ ST_IDX_WIDTH-1:0] st_id_i,
     input  logic             [            31:0]   mmu_satp_i,
     input  logic             [             1:0]   mmu_priv_i,
     input  logic                                 mmu_sum_i,
@@ -45,24 +45,47 @@ module lsu_group #(
     input  logic                                 mmu_sfence_vma_i,
 
     // =========================================================
-    // 2) Store Buffer interface (execute fill)
+    // 2) STQ interface (execute fill)
     // =========================================================
-    output logic                                    sb_ex_valid_o,
-    output logic                [ SB_IDX_WIDTH-1:0] sb_ex_sb_id_o,
-    output logic                [     Cfg.PLEN-1:0] sb_ex_addr_o,
-    output logic                [     Cfg.XLEN-1:0] sb_ex_data_o,
-    output decode_pkg::lsu_op_e                     sb_ex_op_o,
-    output logic                [ROB_IDX_WIDTH-1:0] sb_ex_rob_idx_o,
+    output logic                                    st_ex_valid_o,
+    output logic                [ ST_IDX_WIDTH-1:0] st_ex_st_id_o,
+    output logic                [     Cfg.PLEN-1:0] st_ex_addr_o,
+    output logic                [     Cfg.XLEN-1:0] st_ex_data_o,
+    output decode_pkg::lsu_op_e                     st_ex_op_o,
+    output logic                [ROB_IDX_WIDTH-1:0] st_ex_rob_idx_o,
 
-    // Store-to-Load Forwarding (query) — store_buffer 为唯一转发源
-    output logic [     Cfg.PLEN-1:0] sb_load_addr_o,
-    output logic [   Cfg.XLEN/8-1:0] sb_load_be_o,
-    output logic [ROB_IDX_WIDTH-1:0] sb_load_rob_idx_o,
-    input  logic                     sb_load_hit_i,
-    input  logic [     Cfg.XLEN-1:0] sb_load_data_i,
-    output logic                     sb_order_query_valid_o,
-    output logic [ SB_IDX_WIDTH-1:0] sb_order_query_sb_id_o,
-    input  logic                     sb_order_query_clear_i,
+    // Store-to-Load Forwarding (query) — stq 为唯一转发源
+    output logic [     Cfg.PLEN-1:0] stq_fwd_addr_o,
+    output logic [   Cfg.XLEN/8-1:0] stq_fwd_be_o,
+    output logic [ROB_IDX_WIDTH-1:0] stq_fwd_rob_idx_o,
+    input  logic                     stq_fwd_hit_i,
+    input  logic [     Cfg.XLEN-1:0] stq_fwd_data_i,
+    output logic                     st_order_query_valid_o,
+    output logic [ ST_IDX_WIDTH-1:0] st_order_query_st_id_o,
+    input  logic                     st_order_query_clear_i,
+
+    // Store 完成上报 (store_wb_q 已并入 stq)：lsu_group 在 store 准入时把完成
+    // 字段填入 stq 条目；stq 反向给出最老未上报 store 的写回内容，由本模块的
+    // 专用 store 写回口 (STORE_WB_PORT) 上报 ROB。
+    output logic                       st_complete_valid_o,
+    output logic [ ST_IDX_WIDTH-1:0]   st_complete_id_o,
+    output logic [ROB_IDX_WIDTH-1:0]   st_complete_rob_idx_o,
+    output logic [     Cfg.XLEN-1:0]   st_complete_data_o,
+    output logic                       st_complete_exception_o,
+    output logic [ ECAUSE_WIDTH-1:0]   st_complete_ecause_o,
+    output logic                       st_complete_is_mispred_o,
+    output logic [     Cfg.PLEN-1:0]   st_complete_redirect_pc_o,
+    output logic [     Cfg.PLEN-1:0]   st_complete_pc_o,
+    output logic                       st_wb_fire_o,
+
+    input  logic                       st_wb_valid_i,
+    input  logic [ROB_IDX_WIDTH-1:0]   st_wb_rob_idx_i,
+    input  logic [     Cfg.XLEN-1:0]   st_wb_data_i,
+    input  logic                       st_wb_exception_i,
+    input  logic [ ECAUSE_WIDTH-1:0]   st_wb_ecause_i,
+    input  logic                       st_wb_is_mispred_i,
+    input  logic [     Cfg.PLEN-1:0]   st_wb_redirect_pc_i,
+    input  logic [$clog2(SB_DEPTH+1)-1:0] st_unreported_count_i,
 
     // =========================================================
     // 3) D-Cache Load interface
@@ -124,9 +147,9 @@ module lsu_group #(
     // =========================================================
     // 5) Debug visibility for queue skeleton
     // =========================================================
-    output logic [$clog2(LQ_DEPTH + 1)-1:0] dbg_lq_count_o,
-    output logic                            dbg_lq_head_valid_o,
-    output logic [       ROB_IDX_WIDTH-1:0] dbg_lq_head_rob_tag_o,
+    output logic [$clog2(LDQ_DEPTH + 1)-1:0] dbg_ldq_count_o,
+    output logic                            dbg_ldq_head_valid_o,
+    output logic [       ROB_IDX_WIDTH-1:0] dbg_ldq_head_rob_tag_o,
     output logic [$clog2(SQ_DEPTH + 1)-1:0] dbg_sq_count_o,
     output logic                            dbg_sq_head_valid_o,
     output logic [       ROB_IDX_WIDTH-1:0] dbg_sq_head_rob_tag_o
@@ -137,8 +160,6 @@ module lsu_group #(
   localparam int unsigned DBG_SEL_WIDTH = (N_LSU <= 1) ? 1 : $clog2(N_LSU + 1);
   localparam int unsigned SQ_BE_WIDTH = Cfg.XLEN / 8;
   localparam int unsigned SQ_BYTE_OFF_W = (SQ_BE_WIDTH <= 1) ? 1 : $clog2(SQ_BE_WIDTH);
-  localparam int unsigned STORE_WB_Q_DEPTH = (N_LSU < 2) ? 2 : N_LSU;
-  localparam int unsigned STORE_WB_Q_IDX_W = (STORE_WB_Q_DEPTH <= 1) ? 1 : $clog2(STORE_WB_Q_DEPTH);
   localparam logic [ECAUSE_WIDTH-1:0] EXC_ST_ADDR_MISALIGNED = ECAUSE_WIDTH'(6);
   localparam logic [ECAUSE_WIDTH-1:0] EXC_LD_PAGE_FAULT = ECAUSE_WIDTH'(13);
   localparam logic [ECAUSE_WIDTH-1:0] EXC_ST_PAGE_FAULT = ECAUSE_WIDTH'(15);
@@ -177,15 +198,15 @@ module lsu_group #(
   logic                [         N_LSU-1:0]                    lane_req_valid;
   logic                [         N_LSU-1:0]                    lane_req_ready;
 
-  logic                [         N_LSU-1:0]                    lane_sb_ex_valid;
-  logic                [         N_LSU-1:0][ SB_IDX_WIDTH-1:0] lane_sb_ex_sb_id;
-  logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_sb_ex_addr;
-  logic                [         N_LSU-1:0][     Cfg.XLEN-1:0] lane_sb_ex_data;
-  decode_pkg::lsu_op_e                                         lane_sb_ex_op        [N_LSU];
-  logic                [         N_LSU-1:0][ROB_IDX_WIDTH-1:0] lane_sb_ex_rob_idx;
+  logic                [         N_LSU-1:0]                    lane_st_ex_valid;
+  logic                [         N_LSU-1:0][ ST_IDX_WIDTH-1:0] lane_st_ex_st_id;
+  logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_st_ex_addr;
+  logic                [         N_LSU-1:0][     Cfg.XLEN-1:0] lane_st_ex_data;
+  decode_pkg::lsu_op_e                                         lane_st_ex_op        [N_LSU];
+  logic                [         N_LSU-1:0][ROB_IDX_WIDTH-1:0] lane_st_ex_rob_idx;
 
-  logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_sb_load_addr;
-  logic                [         N_LSU-1:0][ROB_IDX_WIDTH-1:0] lane_sb_load_rob_idx;
+  logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_stq_fwd_addr;
+  logic                [         N_LSU-1:0][ROB_IDX_WIDTH-1:0] lane_stq_fwd_rob_idx;
 
   logic                [         N_LSU-1:0]                    lane_ld_req_valid;
   logic                [         N_LSU-1:0]                    lane_ld_req_ready;
@@ -235,23 +256,23 @@ module lsu_group #(
   logic                                                        amo_wb_fire;
   logic                [LANE_SEL_WIDTH-1:0]                    amo_wb_lane;
 
-  logic                                                        lq_alloc_valid;
-  logic                                                        lq_alloc_ready;
-  logic                                                        lq_full;
-  logic                                                        lq_empty;
-  logic                                                        lq_inflight_empty;
-  logic                [LOAD_WB_PORTS-1:0]                     lq_exec_valid;
-  logic                [LOAD_WB_PORTS-1:0][ROB_IDX_WIDTH-1:0] lq_exec_rob_tag;
-  logic                                                        lq_st_query_valid;
-  logic                [      Cfg.PLEN-1:0]                   lq_st_paddr;
-  logic                [     SQ_BE_WIDTH-1:0]                 lq_st_be;
-  logic                [ ROB_IDX_WIDTH-1:0]                   lq_st_rob_tag;
-  logic                                                        lq_violation_valid;
-  logic                [      Cfg.PLEN-1:0]                   lq_violation_pc;
+  logic                                                        ldq_alloc_valid;
+  logic                                                        ldq_alloc_ready;
+  logic                                                        ldq_full;
+  logic                                                        ldq_empty;
+  logic                                                        ldq_inflight_empty;
+  logic                [LOAD_WB_PORTS-1:0]                     ldq_exec_valid;
+  logic                [LOAD_WB_PORTS-1:0][ROB_IDX_WIDTH-1:0] ldq_exec_rob_tag;
+  logic                                                        ldq_st_query_valid;
+  logic                [      Cfg.PLEN-1:0]                   ldq_st_paddr;
+  logic                [     SQ_BE_WIDTH-1:0]                 ldq_st_be;
+  logic                [ ROB_IDX_WIDTH-1:0]                   ldq_st_rob_tag;
+  logic                                                        ldq_violation_valid;
+  logic                [      Cfg.PLEN-1:0]                   ldq_violation_pc;
   logic                [ ROB_IDX_WIDTH-1:0]                   lq_violation_rob_idx;
 
   // Store-queue debug/ordering remnants: the dedicated `sq` structure was
-  // removed (forwarding now lives solely in store_buffer). These signals are
+  // removed (forwarding now lives solely in stq). These signals are
   // kept as store_wb-derived debug/diag aliases so existing hierarchical
   // probes (tb/profiler) keep resolving.
   logic                                                        sq_alloc_ready;
@@ -288,7 +309,7 @@ module lsu_group #(
   decode_pkg::uop_t                                            pend_uop_q;
   logic                [      Cfg.XLEN-1:0]                   pend_rs2_data_q;
   logic                [ ROB_IDX_WIDTH-1:0]                   pend_rob_tag_q;
-  logic                [  SB_IDX_WIDTH-1:0]                   pend_sb_id_q;
+  logic                [  ST_IDX_WIDTH-1:0]                   pend_st_id_q;
   logic                [      Cfg.PLEN-1:0]                   pend_addr_q;
   logic                                                        pend_force_fault_q;
   logic                [ECAUSE_WIDTH-1:0]                    pend_force_ecause_q;
@@ -300,48 +321,18 @@ module lsu_group #(
   logic                                                        lsu_diag_stall_cond_w;
 `endif
 
-  logic [STORE_WB_Q_DEPTH-1:0] store_wb_valid_q;
-  logic [STORE_WB_Q_DEPTH-1:0][ROB_IDX_WIDTH-1:0] store_wb_rob_idx_q;
-  logic [STORE_WB_Q_DEPTH-1:0][Cfg.XLEN-1:0] store_wb_data_q;
-  logic [STORE_WB_Q_DEPTH-1:0] store_wb_exception_q;
-  logic [STORE_WB_Q_DEPTH-1:0][ECAUSE_WIDTH-1:0] store_wb_ecause_q;
-  logic [STORE_WB_Q_DEPTH-1:0] store_wb_is_mispred_q;
-  logic [STORE_WB_Q_DEPTH-1:0][Cfg.PLEN-1:0] store_wb_redirect_pc_q;
-  logic [STORE_WB_Q_DEPTH-1:0] store_wb_has_sq_q;
-  logic [STORE_WB_Q_DEPTH-1:0][Cfg.PLEN-1:0] store_wb_pc_q;
-  logic [STORE_WB_Q_IDX_W-1:0] store_wb_head_q, store_wb_tail_q;
-  logic [$clog2(STORE_WB_Q_DEPTH+1)-1:0] store_wb_count_q;
+  // store_wb_q 已并入 stq：下列 head 别名直接由 stq 的 store 写回口驱动，
+  // 保留命名以便 tb_triathlon 的层级探针 (store_wb_head_valid / _rob_idx) 解析。
   logic store_wb_head_valid;
   logic [ROB_IDX_WIDTH-1:0] store_wb_head_rob_idx;
-  logic [Cfg.XLEN-1:0] store_wb_head_data;
-  logic store_wb_head_exception;
-  logic [ECAUSE_WIDTH-1:0] store_wb_head_ecause;
-  logic store_wb_head_is_mispred;
-  logic [Cfg.PLEN-1:0] store_wb_head_redirect_pc;
-  logic store_wb_head_has_sq;
-  logic [Cfg.PLEN-1:0] store_wb_head_pc;
 
   logic rsp_id_in_range;  // dbg-only: load response id within lane range
   logic [N_LSU-1:0] lane_amo_valid_q;
   decode_pkg::amo_op_e lane_amo_op_q[N_LSU];
   logic [N_LSU-1:0][Cfg.XLEN-1:0] lane_amo_rs2_q;
-  logic [N_LSU-1:0][SB_IDX_WIDTH-1:0] lane_amo_sb_id_q;
+  logic [N_LSU-1:0][ST_IDX_WIDTH-1:0] lane_amo_st_id_q;
   logic [N_LSU-1:0][Cfg.PLEN-1:0] lane_amo_addr_q;
   logic [Cfg.XLEN-1:0] amo_wb_new_data;
-
-  function automatic logic [STORE_WB_Q_IDX_W-1:0] store_wbq_next_idx(
-      input logic [STORE_WB_Q_IDX_W-1:0] idx
-  );
-    begin
-      if (STORE_WB_Q_DEPTH <= 1) begin
-        store_wbq_next_idx = '0;
-      end else if (idx == STORE_WB_Q_IDX_W'(STORE_WB_Q_DEPTH - 1)) begin
-        store_wbq_next_idx = '0;
-      end else begin
-        store_wbq_next_idx = idx + STORE_WB_Q_IDX_W'(1);
-      end
-    end
-  endfunction
 
   function automatic logic [SQ_BE_WIDTH-1:0] load_be_mask(input decode_pkg::lsu_op_e op,
                                                            input logic [Cfg.PLEN-1:0] addr);
@@ -382,7 +373,7 @@ module lsu_group #(
   endfunction
 
   // Byte-enable mask of a resolving store, relative to its containing word.
-  // Mirrors store_buffer's store_be_mask: used to drive the LQ violation CAM
+  // Mirrors stq's store_be_mask: used to drive the LDQ violation CAM
   // (overlap = same word address AND intersecting byte mask). SC_FAIL / non
   // store ops return 0 so they never trigger a violation.
   function automatic logic [SQ_BE_WIDTH-1:0] store_be_mask(input decode_pkg::lsu_op_e op,
@@ -508,12 +499,12 @@ module lsu_group #(
   // wrapper FSM + pend buffering that used to be inlined here. A walk-needing
   // request is latched and resolved through req -> pend handshake; non-walk
   // requests are reported via need_walk=0 and handled on the dispatch bypass.
-  lsu_translate #(
+  lsu_mmu #(
       .Cfg(Cfg),
       .ROB_IDX_WIDTH(ROB_IDX_WIDTH),
-      .SB_IDX_WIDTH(SB_IDX_WIDTH),
+      .ST_IDX_WIDTH(ST_IDX_WIDTH),
       .ECAUSE_WIDTH(ECAUSE_WIDTH)
-  ) u_translate (
+  ) u_lsu_mmu (
       .clk_i,
       .rst_ni,
       .flush_i,
@@ -523,7 +514,7 @@ module lsu_group #(
       .rs1_data_i(rs1_data_i),
       .rs2_data_i(rs2_data_i),
       .rob_tag_i(rob_tag_i),
-      .sb_id_i(sb_id_i),
+      .st_id_i(st_id_i),
       .req_vaddr_i(req_in_eff_addr),
       .req_is_load_i(agu_is_load),
       .req_is_store_i(agu_is_store),
@@ -554,21 +545,21 @@ module lsu_group #(
       .pend_uop_o(pend_uop_q),
       .pend_rs2_data_o(pend_rs2_data_q),
       .pend_rob_tag_o(pend_rob_tag_q),
-      .pend_sb_id_o(pend_sb_id_q),
+      .pend_st_id_o(pend_st_id_q),
       .pend_addr_o(pend_addr_q),
       .pend_force_fault_o(pend_force_fault_q),
       .pend_force_ecause_o(pend_force_ecause_q)
   );
 
   generate
-    for (genvar gi = 0; gi < N_LSU; gi++) begin : g_lanes
-      lsu_lane #(
+    for (genvar gi = 0; gi < N_LSU; gi++) begin : g_ld_pipes
+      ld_pipe #(
           .Cfg(Cfg),
           .ROB_IDX_WIDTH(ROB_IDX_WIDTH),
           .SB_DEPTH(SB_DEPTH),
-          .SB_IDX_WIDTH(SB_IDX_WIDTH),
+          .ST_IDX_WIDTH(ST_IDX_WIDTH),
           .ECAUSE_WIDTH(ECAUSE_WIDTH)
-      ) u_lane (
+      ) u_ld_pipe (
           .clk_i,
           .rst_ni,
           .flush_i,
@@ -582,19 +573,19 @@ module lsu_group #(
           .force_exception_i(req_has_force_fault),
           .force_ecause_i(req_force_ecause),
           .rob_tag_i(pend_valid_q ? pend_rob_tag_q : rob_tag_i),
-          .sb_id_i(pend_valid_q ? pend_sb_id_q : sb_id_i),
+          .st_id_i(pend_valid_q ? pend_st_id_q : st_id_i),
 
-          .sb_ex_valid_o(lane_sb_ex_valid[gi]),
-          .sb_ex_sb_id_o(lane_sb_ex_sb_id[gi]),
-          .sb_ex_addr_o(lane_sb_ex_addr[gi]),
-          .sb_ex_data_o(lane_sb_ex_data[gi]),
-          .sb_ex_op_o(lane_sb_ex_op[gi]),
-          .sb_ex_rob_idx_o(lane_sb_ex_rob_idx[gi]),
+          .st_ex_valid_o(lane_st_ex_valid[gi]),
+          .st_ex_st_id_o(lane_st_ex_st_id[gi]),
+          .st_ex_addr_o(lane_st_ex_addr[gi]),
+          .st_ex_data_o(lane_st_ex_data[gi]),
+          .st_ex_op_o(lane_st_ex_op[gi]),
+          .st_ex_rob_idx_o(lane_st_ex_rob_idx[gi]),
 
-          .sb_load_addr_o(lane_sb_load_addr[gi]),
-          .sb_load_rob_idx_o(lane_sb_load_rob_idx[gi]),
-          .sb_load_hit_i(sb_load_hit_i),
-          .sb_load_data_i(sb_load_data_i),
+          .stq_fwd_addr_o(lane_stq_fwd_addr[gi]),
+          .stq_fwd_rob_idx_o(lane_stq_fwd_rob_idx[gi]),
+          .stq_fwd_hit_i(stq_fwd_hit_i),
+          .stq_fwd_data_i(stq_fwd_data_i),
 
           .ld_req_valid_o(lane_ld_req_valid[gi]),
           .ld_req_ready_i(lane_ld_req_ready[gi]),
@@ -682,9 +673,9 @@ module lsu_group #(
       .wb_lane_idx_o(wb_lane_idx)
   );
 
-  assign state_q    = g_lanes[0].u_lane.state_q;
-  assign req_tag_q  = g_lanes[0].u_lane.req_tag_q;
-  assign req_addr_q = g_lanes[0].u_lane.req_addr_q;
+  assign state_q    = g_ld_pipes[0].u_ld_pipe.state_q;
+  assign req_tag_q  = g_ld_pipes[0].u_ld_pipe.req_tag_q;
+  assign req_addr_q = g_ld_pipes[0].u_ld_pipe.req_addr_q;
   assign req_eff_addr_xlen = pend_valid_q ? {{(Cfg.XLEN-Cfg.PLEN){1'b0}}, pend_addr_q} : req_in_eff_addr_xlen;
   assign req_eff_addr = pend_valid_q ? pend_addr_q : req_in_eff_addr;
   // Alignment for the address actually handed to the lane (selected/pend path).
@@ -705,52 +696,46 @@ module lsu_group #(
   assign store_page_fault = pend_valid_q ? (req_is_store && req_has_force_fault &&
                                             (req_force_ecause == EXC_ST_PAGE_FAULT)) : 1'b0;
   assign amo_inflight = |lane_amo_valid_q;
-  // store_wb_count_q==0 蕴含所有已准入 store 已写回 (sq_empty 等价项已去除)。
-  // LQ 现持有 load 到提交，AMO 排序只需所有更老 load 已执行 (读完内存)，
+  // stq 的「未上报 store 计数」==0 蕴含所有已准入 store 已上报 ROB。
+  // LDQ 现持有 load 到提交，AMO 排序只需所有更老 load 已执行 (读完内存)，
   // 故用 inflight_empty（无未写回 load）而非 empty（无任何在飞 load）。
-  assign amo_order_clear = (dbg_lane_busy == '0) && lq_inflight_empty &&
-                           (store_wb_count_q == '0) && sb_order_query_clear_i;
-  assign store_wb_head_valid = (store_wb_count_q != 0);
-  assign store_wb_head_rob_idx = store_wb_rob_idx_q[store_wb_head_q];
-  assign store_wb_head_data = store_wb_data_q[store_wb_head_q];
-  assign store_wb_head_exception = store_wb_exception_q[store_wb_head_q];
-  assign store_wb_head_ecause = store_wb_ecause_q[store_wb_head_q];
-  assign store_wb_head_is_mispred = store_wb_is_mispred_q[store_wb_head_q];
-  assign store_wb_head_redirect_pc = store_wb_redirect_pc_q[store_wb_head_q];
-  assign store_wb_head_has_sq = store_wb_has_sq_q[store_wb_head_q];
-  assign store_wb_head_pc = store_wb_pc_q[store_wb_head_q];
-  // 转发的字节掩码：交给 store_buffer 做 byte-merge，命中即返回对齐到字节 0 的数据。
-  // 仅在本周期有 load 准入时驱动 (否则 be=0，store_buffer 自然不命中)。
+  assign amo_order_clear = (dbg_lane_busy == '0) && ldq_inflight_empty &&
+                           (st_unreported_count_i == '0) && st_order_query_clear_i;
+  // store 写回 head 别名：直接由 stq 的 store 写回口驱动。
+  assign store_wb_head_valid = st_wb_valid_i;
+  assign store_wb_head_rob_idx = st_wb_rob_idx_i;
+  // 转发的字节掩码：交给 stq 做 byte-merge，命中即返回对齐到字节 0 的数据。
+  // 仅在本周期有 load 准入时驱动 (否则 be=0，stq 自然不命中)。
   assign load_fwd_be = load_be_mask(pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op, req_eff_addr);
-  assign sb_load_be_o = (load_alloc_fire && req_is_load) ? load_fwd_be : '0;
-  assign sb_order_query_valid_o = req_is_amo;
-  assign sb_order_query_sb_id_o = pend_valid_q ? pend_sb_id_q : sb_id_i;
+  assign stq_fwd_be_o = (load_alloc_fire && req_is_load) ? load_fwd_be : '0;
+  assign st_order_query_valid_o = req_is_amo;
+  assign st_order_query_st_id_o = pend_valid_q ? pend_st_id_q : st_id_i;
 
-  assign lq_alloc_valid = load_alloc_fire && req_is_load;
+  assign ldq_alloc_valid = load_alloc_fire && req_is_load;
 
-  // B2: load writeback marks the matching LQ entry executed (no longer pops).
+  // B2: load writeback marks the matching LDQ entry executed (no longer pops).
   // The entry is freed later, when the ROB commits the load (commit_*_i).
-  // One exec port per granted load-writeback port; the LQ observes all of them
+  // One exec port per granted load-writeback port; the LDQ observes all of them
   // so the disambiguation CAM never misses a same-cycle retiring load.
   always_comb begin
     for (int p = 0; p < LOAD_WB_PORTS; p++) begin
-      lq_exec_valid[p]   = wb_port_fire[p];
-      lq_exec_rob_tag[p] = lane_wb_rob_idx[wb_lane_idx[p]];
+      ldq_exec_valid[p]   = wb_port_fire[p];
+      ldq_exec_rob_tag[p] = lane_wb_rob_idx[wb_lane_idx[p]];
     end
   end
 
-  // B3: drive the LQ store->load violation CAM the cycle a store resolves its
+  // B3: drive the LDQ store->load violation CAM the cycle a store resolves its
   // physical address (store_req_fire). Only stores that actually write memory
   // can alias a younger load: skip faulting stores and a failed SC (which
   // commits a dummy store writing no bytes). AMO is serialized on the single
   // lane (amo_inflight blocks younger loads from executing concurrently), so
   // its store side needs no CAM here.
-  assign lq_st_query_valid = store_req_fire && req_is_store &&
+  assign ldq_st_query_valid = store_req_fire && req_is_store &&
                              !store_misaligned && !store_page_fault &&
                              !(is_sc && sc_fail);
-  assign lq_st_paddr       = req_eff_addr;
-  assign lq_st_be          = store_be_mask(selected_uop.lsu_op, req_eff_addr);
-  assign lq_st_rob_tag     = pend_valid_q ? pend_rob_tag_q : rob_tag_i;
+  assign ldq_st_paddr       = req_eff_addr;
+  assign ldq_st_be          = store_be_mask(selected_uop.lsu_op, req_eff_addr);
+  assign ldq_st_rob_tag     = pend_valid_q ? pend_rob_tag_q : rob_tag_i;
 
   logic res_valid_q;
   logic [Cfg.PLEN-1:0] res_addr_q;
@@ -770,7 +755,7 @@ module lsu_group #(
     alloc_grant = '0;
     alloc_lane_idx = '0;
     for (int i = 0; i < N_LSU; i++) begin
-      if (!load_req_ready && lane_req_ready[i] && lq_alloc_ready) begin
+      if (!load_req_ready && lane_req_ready[i] && ldq_alloc_ready) begin
         if ((!req_ordered_load || amo_order_clear) && (!req_is_amo || !amo_inflight)) begin
           load_req_ready = 1'b1;
           alloc_grant[i] = 1'b1;
@@ -782,13 +767,13 @@ module lsu_group #(
 
   // Keep store admission independent from selected-uop decode details to avoid
   // combinational feedback with issue selection. Admission now gated solely by
-  // the store writeback queue (the deep `sq` backpressure was never binding).
-  assign store_req_ready = (store_wb_count_q < STORE_WB_Q_DEPTH) ||
-                           (store_wb_head_valid && wb_ready_i[STORE_WB_PORT]);
-  // Debug/diag aliases for the removed `sq` (store_wb-derived).
+  // stq 的未上报 store 计数（专用上报口每拍排空 1 个，恒可推进）。
+  assign store_req_ready = (st_unreported_count_i < ($clog2(SB_DEPTH+1))'(SB_DEPTH)) ||
+                           (st_wb_valid_i && wb_ready_i[STORE_WB_PORT]);
+  // Debug/diag aliases for the removed `sq` (stq store-wb derived).
   assign sq_alloc_ready = store_req_ready;
   assign sq_full = !store_req_ready;
-  assign sq_empty = (store_wb_count_q == '0);
+  assign sq_empty = (st_unreported_count_i == '0);
   always_comb begin
     req_ready_o = 1'b0;
     if (pend_valid_q || (mmu_state_q != MMU_ST_IDLE) || amo_inflight) begin
@@ -816,36 +801,36 @@ module lsu_group #(
   end
 
   always_comb begin
-    sb_ex_valid_o = store_req_fire && !store_misaligned && !store_page_fault;
-    sb_ex_sb_id_o = pend_valid_q ? pend_sb_id_q : sb_id_i;
-    sb_ex_addr_o = req_eff_addr;
-    sb_ex_data_o = selected_rs2_data;
-    sb_ex_op_o = sc_fail ? decode_pkg::LSU_SC_FAIL :
+    st_ex_valid_o = store_req_fire && !store_misaligned && !store_page_fault;
+    st_ex_st_id_o = pend_valid_q ? pend_st_id_q : st_id_i;
+    st_ex_addr_o = req_eff_addr;
+    st_ex_data_o = selected_rs2_data;
+    st_ex_op_o = sc_fail ? decode_pkg::LSU_SC_FAIL :
                  is_sc ? decode_pkg::LSU_SW : 
                  selected_uop.lsu_op;
-    sb_ex_rob_idx_o = pend_valid_q ? pend_rob_tag_q : rob_tag_i;
-    sb_load_addr_o = '0;
-    sb_load_rob_idx_o = '0;
+    st_ex_rob_idx_o = pend_valid_q ? pend_rob_tag_q : rob_tag_i;
+    stq_fwd_addr_o = '0;
+    stq_fwd_rob_idx_o = '0;
     if (amo_wb_fire && !lane_wb_exception[amo_wb_lane]) begin
-      sb_ex_valid_o = 1'b1;
-      sb_ex_sb_id_o = lane_amo_sb_id_q[amo_wb_lane];
-      sb_ex_addr_o = lane_amo_addr_q[amo_wb_lane];
-      sb_ex_data_o = amo_wb_new_data;
-      sb_ex_op_o = decode_pkg::LSU_SW;
-      sb_ex_rob_idx_o = lane_wb_rob_idx[amo_wb_lane];
+      st_ex_valid_o = 1'b1;
+      st_ex_st_id_o = lane_amo_st_id_q[amo_wb_lane];
+      st_ex_addr_o = lane_amo_addr_q[amo_wb_lane];
+      st_ex_data_o = amo_wb_new_data;
+      st_ex_op_o = decode_pkg::LSU_SW;
+      st_ex_rob_idx_o = lane_wb_rob_idx[amo_wb_lane];
     end
     for (int i = 0; i < N_LSU; i++) begin
-      if (lane_sb_ex_valid[i] && !sb_ex_valid_o) begin
-        sb_ex_valid_o = 1'b1;
-        sb_ex_sb_id_o = lane_sb_ex_sb_id[i];
-        sb_ex_addr_o = lane_sb_ex_addr[i];
-        sb_ex_data_o = lane_sb_ex_data[i];
-        sb_ex_op_o = lane_sb_ex_op[i];
-        sb_ex_rob_idx_o = lane_sb_ex_rob_idx[i];
+      if (lane_st_ex_valid[i] && !st_ex_valid_o) begin
+        st_ex_valid_o = 1'b1;
+        st_ex_st_id_o = lane_st_ex_st_id[i];
+        st_ex_addr_o = lane_st_ex_addr[i];
+        st_ex_data_o = lane_st_ex_data[i];
+        st_ex_op_o = lane_st_ex_op[i];
+        st_ex_rob_idx_o = lane_st_ex_rob_idx[i];
       end
       if (lane_req_valid[i]) begin
-        sb_load_addr_o = lane_sb_load_addr[i];
-        sb_load_rob_idx_o = lane_sb_load_rob_idx[i];
+        stq_fwd_addr_o = lane_stq_fwd_addr[i];
+        stq_fwd_rob_idx_o = lane_stq_fwd_rob_idx[i];
       end
     end
   end
@@ -872,14 +857,15 @@ module lsu_group #(
       end
     end
 
-    // Dedicated store writeback port [STORE_WB_PORT].
-    wb_valid_o[STORE_WB_PORT]       = store_wb_head_valid;
-    wb_rob_idx_o[STORE_WB_PORT]     = store_wb_head_rob_idx;
-    wb_data_o[STORE_WB_PORT]        = store_wb_head_data;
-    wb_exception_o[STORE_WB_PORT]   = store_wb_head_exception;
-    wb_ecause_o[STORE_WB_PORT]      = store_wb_head_ecause;
-    wb_is_mispred_o[STORE_WB_PORT]  = store_wb_head_is_mispred;
-    wb_redirect_pc_o[STORE_WB_PORT] = store_wb_head_redirect_pc;
+    // Dedicated store writeback port [STORE_WB_PORT]: sourced from stq's
+    // oldest-unreported store completion (store_wb_q merged into stq).
+    wb_valid_o[STORE_WB_PORT]       = st_wb_valid_i;
+    wb_rob_idx_o[STORE_WB_PORT]     = st_wb_rob_idx_i;
+    wb_data_o[STORE_WB_PORT]        = st_wb_data_i;
+    wb_exception_o[STORE_WB_PORT]   = st_wb_exception_i;
+    wb_ecause_o[STORE_WB_PORT]      = st_wb_ecause_i;
+    wb_is_mispred_o[STORE_WB_PORT]  = st_wb_is_mispred_i;
+    wb_redirect_pc_o[STORE_WB_PORT] = st_wb_redirect_pc_i;
   end
 
   // Load writeback ports only; store-writeback head uses the slow ROB.complete path.
@@ -903,6 +889,25 @@ module lsu_group #(
     end
   end
   assign store_wb_fire = wb_valid_o[STORE_WB_PORT] && wb_ready_i[STORE_WB_PORT];
+  assign st_wb_fire_o  = store_wb_fire;
+
+  // Store 完成上报 fill：在 store 准入 (store_req_fire，纯 store) 当拍把完成
+  // 字段填入对应 stq 条目，等价于原 store_wb_q 的 push。faulting store 也在此
+  // 上报（携带异常 ecause + 故障地址作为 tval）。
+  assign st_complete_valid_o     = store_req_fire;
+  assign st_complete_id_o        = pend_valid_q ? pend_st_id_q : st_id_i;
+  assign st_complete_rob_idx_o   = pend_valid_q ? pend_rob_tag_q : rob_tag_i;
+  assign st_complete_data_o      = (store_misaligned || store_page_fault) ?
+                                   Cfg.XLEN'(req_eff_addr) :
+                                   (is_sc && sc_fail) ? Cfg.XLEN'(1) : '0;
+  assign st_complete_exception_o = store_misaligned || store_page_fault;
+  assign st_complete_ecause_o    = store_misaligned ? EXC_ST_ADDR_MISALIGNED :
+                                   (store_page_fault ? EXC_ST_PAGE_FAULT : '0);
+  // load-store 违例：年轻 load 已乱序执行并别名该 store，记在完成上报里；store
+  // 退休时 ROB 按 is_mispred 处理（提交该 store 后冲刷并重定向到违例 load PC）。
+  assign st_complete_is_mispred_o   = ldq_violation_valid;
+  assign st_complete_redirect_pc_o  = ldq_violation_pc;
+  assign st_complete_pc_o           = pend_valid_q ? pend_uop_q.pc : uop_i.pc;
 
   // AMO completes on whichever granted load port carries the (single, due to
   // amo_inflight serialization) in-flight AMO lane.
@@ -922,23 +927,11 @@ module lsu_group #(
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      store_wb_valid_q <= '0;
-      store_wb_rob_idx_q <= '0;
-      store_wb_data_q <= '0;
-      store_wb_exception_q <= '0;
-      store_wb_ecause_q <= '0;
-      store_wb_is_mispred_q <= '0;
-      store_wb_redirect_pc_q <= '0;
-      store_wb_has_sq_q <= '0;
-      store_wb_pc_q <= '0;
-      store_wb_head_q <= '0;
-      store_wb_tail_q <= '0;
-      store_wb_count_q <= '0;
       lane_amo_valid_q <= '0;
       for (int i = 0; i < N_LSU; i++) begin
         lane_amo_op_q[i] <= decode_pkg::AMO_NONE;
         lane_amo_rs2_q[i] <= '0;
-        lane_amo_sb_id_q[i] <= '0;
+        lane_amo_st_id_q[i] <= '0;
         lane_amo_addr_q[i] <= '0;
       end
 `ifndef SYNTHESIS
@@ -947,25 +940,13 @@ module lsu_group #(
       lsu_stall_streak_q <= '0;
 `endif
     end else if (flush_i) begin
-      store_wb_valid_q <= '0;
-      store_wb_rob_idx_q <= '0;
-      store_wb_data_q <= '0;
-      store_wb_exception_q <= '0;
-      store_wb_ecause_q <= '0;
-      store_wb_is_mispred_q <= '0;
-      store_wb_redirect_pc_q <= '0;
-      store_wb_has_sq_q <= '0;
-      store_wb_pc_q <= '0;
-      store_wb_head_q <= '0;
-      store_wb_tail_q <= '0;
-      store_wb_count_q <= '0;
       res_valid_q <= 1'b0;
       res_addr_q <= '0;
       lane_amo_valid_q <= '0;
       for (int i = 0; i < N_LSU; i++) begin
         lane_amo_op_q[i] <= decode_pkg::AMO_NONE;
         lane_amo_rs2_q[i] <= '0;
-        lane_amo_sb_id_q[i] <= '0;
+        lane_amo_st_id_q[i] <= '0;
         lane_amo_addr_q[i] <= '0;
       end
     end else begin
@@ -983,7 +964,7 @@ module lsu_group #(
         lane_amo_valid_q[alloc_lane_idx] <= 1'b1;
         lane_amo_op_q[alloc_lane_idx] <= selected_uop.amo_op;
         lane_amo_rs2_q[alloc_lane_idx] <= selected_rs2_data;
-        lane_amo_sb_id_q[alloc_lane_idx] <= pend_valid_q ? pend_sb_id_q : sb_id_i;
+        lane_amo_st_id_q[alloc_lane_idx] <= pend_valid_q ? pend_st_id_q : st_id_i;
         lane_amo_addr_q[alloc_lane_idx] <= req_eff_addr;
       end
 
@@ -1007,35 +988,9 @@ module lsu_group #(
       end
 `endif
 
-      if (store_req_fire) begin
-        store_wb_valid_q[store_wb_tail_q] <= 1'b1;
-        store_wb_rob_idx_q[store_wb_tail_q] <= pend_valid_q ? pend_rob_tag_q : rob_tag_i;
-        store_wb_data_q[store_wb_tail_q] <= (store_misaligned || store_page_fault) ?
-                                            Cfg.XLEN'(pend_valid_q ? pend_addr_q : req_in_eff_addr) :
-                                            (is_sc && sc_fail) ? Cfg.XLEN'(1) : '0;
-        store_wb_exception_q[store_wb_tail_q] <= store_misaligned || store_page_fault;
-        store_wb_ecause_q[store_wb_tail_q] <= store_misaligned ? EXC_ST_ADDR_MISALIGNED :
-                                              (store_page_fault ? EXC_ST_PAGE_FAULT : '0);
-        // B3: a store->load ordering violation (younger executed load aliased
-        // this store) is recorded on the store's writeback. When the store
-        // retires, the ROB treats is_mispred generically: it commits the store
-        // then flushes younger entries and redirects fetch to the violating
-        // load's PC so it (and everything after) re-executes.
-        store_wb_is_mispred_q[store_wb_tail_q] <= lq_violation_valid;
-        store_wb_redirect_pc_q[store_wb_tail_q] <= lq_violation_pc;
-        store_wb_has_sq_q[store_wb_tail_q] <= !store_misaligned && !store_page_fault;
-        store_wb_pc_q[store_wb_tail_q] <= pend_valid_q ? pend_uop_q.pc : uop_i.pc;
-        store_wb_tail_q <= store_wbq_next_idx(store_wb_tail_q);
-      end
-      if (store_wb_fire) begin
-        store_wb_valid_q[store_wb_head_q] <= 1'b0;
-        store_wb_head_q <= store_wbq_next_idx(store_wb_head_q);
-      end
-      if (store_req_fire && !store_wb_fire) begin
-        store_wb_count_q <= store_wb_count_q + 1'b1;
-      end else if (!store_req_fire && store_wb_fire) begin
-        store_wb_count_q <= store_wb_count_q - 1'b1;
-      end
+      // store_wb_q 已并入 stq：store 准入的完成上报通过 st_complete_* 输出在
+      // 当拍写入 stq 条目（见上方 assign），无需在此维护 FIFO。
+
 `ifndef SYNTHESIS
       for (int p = 0; p < LSU_WB_PORTS; p++) begin
         if (lsu_trace_en_q && wb_valid_o[p] && wb_ready_i[p] && wb_exception_o[p] &&
@@ -1067,11 +1022,11 @@ module lsu_group #(
       should_log = (next_streak == 16'd1) || (next_streak[9:0] == 10'd0);
       lsu_stall_streak_q <= next_streak;
       if ((lsu_stall_trace_log_cnt_q < LSU_STALL_TRACE_LOG_BUDGET) && should_log) begin
-        $display("[lsu-stall] pc=%h streak=%0d pend=%0d mmu_state=%0d req(v/r)=%0d/%0d need_mmu=%0d req_is(ld/st)=%0d/%0d load_rdy=%0d store_rdy=%0d lq_alloc=%0d sq_alloc=%0d lq(cnt/full)=%0d/%0d sq(cnt/full)=%0d/%0d wb_cnt=%0d lane_req_ready=0x%h lane_ld_req_valid=0x%h lane_ld_rsp_ready=0x%h ld_rsp(v/r)=%0d/%0d",
+        $display("[lsu-stall] pc=%h streak=%0d pend=%0d mmu_state=%0d req(v/r)=%0d/%0d need_mmu=%0d req_is(ld/st)=%0d/%0d load_rdy=%0d store_rdy=%0d ldq_alloc=%0d stq_alloc=%0d ldq(cnt/full)=%0d/%0d stq(cnt/full)=%0d/%0d wb_cnt=%0d ld_pipe_req_ready=0x%h ld_pipe_ld_req_valid=0x%h ld_pipe_ld_rsp_ready=0x%h ld_rsp(v/r)=%0d/%0d",
                  lsu_diag_pc_w, next_streak, pend_valid_q, mmu_state_q,
                  req_valid_i, req_ready_o, req_need_mmu_walk, req_is_load, req_is_store,
-                 load_req_ready, store_req_ready, lq_alloc_ready, sq_alloc_ready,
-                 dbg_lq_count_o, lq_full, dbg_sq_count_o, sq_full, store_wb_count_q,
+                 load_req_ready, store_req_ready, ldq_alloc_ready, sq_alloc_ready,
+                 dbg_ldq_count_o, ldq_full, dbg_sq_count_o, sq_full, st_unreported_count_i,
                  lane_req_ready, lane_ld_req_valid, lane_ld_rsp_ready,
                  ld_rsp_valid_i, ld_rsp_ready_o);
         lsu_stall_trace_log_cnt_q <= lsu_stall_trace_log_cnt_q + 1'b1;
@@ -1082,47 +1037,48 @@ module lsu_group #(
   end
 `endif
 
-  lq #(
+  ldq #(
       .ROB_IDX_WIDTH(ROB_IDX_WIDTH),
-      .DEPTH(LQ_DEPTH),
+      .DEPTH(LDQ_DEPTH),
       .PLEN(Cfg.PLEN),
       .BE_WIDTH(SQ_BE_WIDTH),
       .COMMIT_WIDTH(COMMIT_WIDTH),
       .N_EXEC(LOAD_WB_PORTS)
-  ) u_lq (
+  ) u_ldq (
       .clk_i,
       .rst_ni,
       .flush_i,
-      .alloc_valid_i(lq_alloc_valid),
-      .alloc_ready_o(lq_alloc_ready),
+      .alloc_valid_i(ldq_alloc_valid),
+      .alloc_ready_o(ldq_alloc_ready),
       .alloc_rob_tag_i(pend_valid_q ? pend_rob_tag_q : rob_tag_i),
       .alloc_pc_i(pend_valid_q ? pend_uop_q.pc : uop_i.pc),
       .alloc_paddr_i(req_eff_addr),
       .alloc_be_i(load_fwd_be),
       .commit_valid_i(commit_valid_i),
       .commit_rob_idx_i(commit_rob_idx_i),
-      .exec_valid_i(lq_exec_valid),
-      .exec_rob_tag_i(lq_exec_rob_tag),
-      .st_query_valid_i(lq_st_query_valid),
-      .st_paddr_i(lq_st_paddr),
-      .st_be_i(lq_st_be),
-      .st_rob_tag_i(lq_st_rob_tag),
+      .exec_valid_i(ldq_exec_valid),
+      .exec_rob_tag_i(ldq_exec_rob_tag),
+      .st_query_valid_i(ldq_st_query_valid),
+      .st_paddr_i(ldq_st_paddr),
+      .st_be_i(ldq_st_be),
+      .st_rob_tag_i(ldq_st_rob_tag),
       .rob_head_i(rob_head_i),
-      .violation_valid_o(lq_violation_valid),
-      .violation_pc_o(lq_violation_pc),
+      .violation_valid_o(ldq_violation_valid),
+      .violation_pc_o(ldq_violation_pc),
       .violation_rob_idx_o(lq_violation_rob_idx),
-      .head_valid_o(dbg_lq_head_valid_o),
-      .head_rob_tag_o(dbg_lq_head_rob_tag_o),
-      .count_o(dbg_lq_count_o),
-      .full_o(lq_full),
-      .empty_o(lq_empty),
-      .inflight_empty_o(lq_inflight_empty)
+      .head_valid_o(dbg_ldq_head_valid_o),
+      .head_rob_tag_o(dbg_ldq_head_rob_tag_o),
+      .count_o(dbg_ldq_count_o),
+      .full_o(ldq_full),
+      .empty_o(ldq_empty),
+      .inflight_empty_o(ldq_inflight_empty)
   );
 
   // The dedicated `sq` was removed: store-to-load forwarding now lives solely
-  // in store_buffer, and AMO ordering / store admission rely on store_wb_q.
-  // Debug ports are driven from store_wb_q so existing probes stay meaningful.
-  assign dbg_sq_count_o = ($clog2(SQ_DEPTH + 1))'(store_wb_count_q);
+  // in stq, and AMO ordering / store admission rely on stq 的未上报 store 计数。
+  // Debug ports are derived from stq's store-wb interface so existing probes
+  // stay meaningful.
+  assign dbg_sq_count_o = ($clog2(SQ_DEPTH + 1))'(st_unreported_count_i);
   assign dbg_sq_head_valid_o = store_wb_head_valid;
   assign dbg_sq_head_rob_tag_o = store_wb_head_rob_idx;
 

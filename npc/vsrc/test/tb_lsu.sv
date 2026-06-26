@@ -5,11 +5,11 @@ import global_config_pkg::*;
 
 module tb_lsu #(
     parameter int unsigned TB_ROB_IDX_WIDTH = 6,
-    parameter int unsigned TB_SB_DEPTH = 32,
-    parameter int unsigned TB_SB_IDX_WIDTH = $clog2(TB_SB_DEPTH),
+    parameter int unsigned TB_STQ_DEPTH = 32,
+    parameter int unsigned TB_ST_IDX_WIDTH = $clog2(TB_STQ_DEPTH),
     parameter int unsigned TB_LSU_GROUP_SIZE = 2,
     parameter int unsigned TB_LD_ID_WIDTH = (TB_LSU_GROUP_SIZE <= 1) ? 1 : $clog2(TB_LSU_GROUP_SIZE),
-    parameter int unsigned TB_LQ_DEPTH = 8,
+    parameter int unsigned TB_LDQ_DEPTH = 8,
     parameter int unsigned TB_SQ_DEPTH = 8
 ) (
     input logic clk_i,
@@ -27,7 +27,7 @@ module tb_lsu #(
     input  logic [global_config_pkg::Cfg.XLEN-1:0] rs1_data_i,
     input  logic [global_config_pkg::Cfg.XLEN-1:0] rs2_data_i,
     input  logic [TB_ROB_IDX_WIDTH-1:0] rob_tag_i,
-    input  logic [TB_SB_IDX_WIDTH-1:0] sb_id_i,
+    input  logic [TB_ST_IDX_WIDTH-1:0] st_id_i,
     input  logic [31:0]                 mmu_satp_i,
     input  logic [1:0]                  mmu_priv_i,
     input  logic                        mmu_sum_i,
@@ -35,16 +35,16 @@ module tb_lsu #(
     input  logic                        mmu_sfence_vma_i,
 
     // Store buffer execute write
-    output logic                        sb_ex_valid_o,
-    output logic [TB_SB_IDX_WIDTH-1:0]  sb_ex_sb_id_o,
-    output logic [global_config_pkg::Cfg.PLEN-1:0] sb_ex_addr_o,
-    output logic [global_config_pkg::Cfg.XLEN-1:0] sb_ex_data_o,
-    output decode_pkg::lsu_op_e         sb_ex_op_o,
+    output logic                        st_ex_valid_o,
+    output logic [TB_ST_IDX_WIDTH-1:0]  st_ex_st_id_o,
+    output logic [global_config_pkg::Cfg.PLEN-1:0] st_ex_addr_o,
+    output logic [global_config_pkg::Cfg.XLEN-1:0] st_ex_data_o,
+    output decode_pkg::lsu_op_e         st_ex_op_o,
 
     // Store-to-load forwarding
-    output logic [global_config_pkg::Cfg.PLEN-1:0] sb_load_addr_o,
-    input  logic                       sb_load_hit_i,
-    input  logic [global_config_pkg::Cfg.XLEN-1:0] sb_load_data_i,
+    output logic [global_config_pkg::Cfg.PLEN-1:0] stq_fwd_addr_o,
+    input  logic                       stq_fwd_hit_i,
+    input  logic [global_config_pkg::Cfg.XLEN-1:0] stq_fwd_data_i,
 
     // DCache load port
     output logic                       ld_req_valid_o,
@@ -85,7 +85,7 @@ module tb_lsu #(
     // B2: free is associative by committing rob_idx (no head pop).
     input  logic                          lq_test_commit_valid_i,
     input  logic [TB_ROB_IDX_WIDTH-1:0]   lq_test_commit_rob_idx_i,
-    output logic [$clog2(TB_LQ_DEPTH + 1)-1:0] lq_test_count_o,
+    output logic [$clog2(TB_LDQ_DEPTH + 1)-1:0] lq_test_count_o,
     output logic                          lq_test_head_valid_o,
     output logic [TB_ROB_IDX_WIDTH-1:0]   lq_test_head_rob_tag_o
 );
@@ -139,7 +139,7 @@ module tb_lsu #(
     end
   end
 
-  // The unit testbench has no ROB; free each LQ entry as soon as its load
+  // The unit testbench has no ROB; free each LDQ entry as soon as its load
   // writes back so the datapath tests keep their original occupancy behavior.
   localparam int unsigned TB_COMMIT_WIDTH = 4;
   logic [TB_COMMIT_WIDTH-1:0]                    dut_commit_valid;
@@ -153,11 +153,84 @@ module tb_lsu #(
     end
   end
 
+  // --- Store 完成上报 FIFO（test-only，复刻原 lsu_group 内 store_wb_q）---
+  // 真实设计里 store_wb_q 已并入 stq；本单元 tb 没有 stq（C++ 建模 STQ/转发），
+  // 这里用一个等深 FIFO 接住 dut 的 st_complete_* 并喂回 st_wb_*，保持 store
+  // 写回时序/行为与重构前一致。
+  logic tb_st_complete_valid;
+  logic [TB_ROB_IDX_WIDTH-1:0] tb_st_complete_rob_idx;
+  logic [global_config_pkg::Cfg.XLEN-1:0] tb_st_complete_data;
+  logic tb_st_complete_exception;
+  logic [4:0] tb_st_complete_ecause;
+  logic tb_st_complete_is_mispred;
+  logic [global_config_pkg::Cfg.PLEN-1:0] tb_st_complete_redirect_pc;
+  logic tb_st_wb_fire;
+  logic tb_st_wb_valid;
+  logic [TB_ROB_IDX_WIDTH-1:0] tb_st_wb_rob_idx;
+  logic [global_config_pkg::Cfg.XLEN-1:0] tb_st_wb_data;
+  logic tb_st_wb_exception;
+  logic [4:0] tb_st_wb_ecause;
+  logic tb_st_wb_is_mispred;
+  logic [global_config_pkg::Cfg.PLEN-1:0] tb_st_wb_redirect_pc;
+  logic [$clog2(TB_STQ_DEPTH+1)-1:0] tb_st_unreported_count;
+
+  localparam int unsigned TB_SWBQ_DEPTH = TB_STQ_DEPTH;
+  localparam int unsigned TB_SWBQ_IDX_W = $clog2(TB_SWBQ_DEPTH);
+  logic [TB_SWBQ_DEPTH-1:0][TB_ROB_IDX_WIDTH-1:0] swbq_rob_idx;
+  logic [TB_SWBQ_DEPTH-1:0][global_config_pkg::Cfg.XLEN-1:0] swbq_data;
+  logic [TB_SWBQ_DEPTH-1:0] swbq_exception;
+  logic [TB_SWBQ_DEPTH-1:0][4:0] swbq_ecause;
+  logic [TB_SWBQ_DEPTH-1:0] swbq_is_mispred;
+  logic [TB_SWBQ_DEPTH-1:0][global_config_pkg::Cfg.PLEN-1:0] swbq_redirect_pc;
+  logic [TB_SWBQ_IDX_W-1:0] swbq_head, swbq_tail;
+  logic [$clog2(TB_SWBQ_DEPTH+1)-1:0] swbq_count;
+
+  assign tb_st_wb_valid       = (swbq_count != 0);
+  assign tb_st_wb_rob_idx     = swbq_rob_idx[swbq_head];
+  assign tb_st_wb_data        = swbq_data[swbq_head];
+  assign tb_st_wb_exception   = swbq_exception[swbq_head];
+  assign tb_st_wb_ecause      = swbq_ecause[swbq_head];
+  assign tb_st_wb_is_mispred  = swbq_is_mispred[swbq_head];
+  assign tb_st_wb_redirect_pc = swbq_redirect_pc[swbq_head];
+  assign tb_st_unreported_count = ($clog2(TB_STQ_DEPTH+1))'(swbq_count);
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      swbq_head <= '0;
+      swbq_tail <= '0;
+      swbq_count <= '0;
+    end else if (flush_i) begin
+      swbq_head <= '0;
+      swbq_tail <= '0;
+      swbq_count <= '0;
+    end else begin
+      if (tb_st_complete_valid) begin
+        swbq_rob_idx[swbq_tail] <= tb_st_complete_rob_idx;
+        swbq_data[swbq_tail] <= tb_st_complete_data;
+        swbq_exception[swbq_tail] <= tb_st_complete_exception;
+        swbq_ecause[swbq_tail] <= tb_st_complete_ecause;
+        swbq_is_mispred[swbq_tail] <= tb_st_complete_is_mispred;
+        swbq_redirect_pc[swbq_tail] <= tb_st_complete_redirect_pc;
+        swbq_tail <= (swbq_tail == TB_SWBQ_IDX_W'(TB_SWBQ_DEPTH - 1)) ? '0 :
+                     (swbq_tail + TB_SWBQ_IDX_W'(1));
+      end
+      if (tb_st_wb_fire) begin
+        swbq_head <= (swbq_head == TB_SWBQ_IDX_W'(TB_SWBQ_DEPTH - 1)) ? '0 :
+                     (swbq_head + TB_SWBQ_IDX_W'(1));
+      end
+      if (tb_st_complete_valid && !tb_st_wb_fire) begin
+        swbq_count <= swbq_count + 1'b1;
+      end else if (!tb_st_complete_valid && tb_st_wb_fire) begin
+        swbq_count <= swbq_count - 1'b1;
+      end
+    end
+  end
+
   lsu_group #(
       .Cfg(global_config_pkg::Cfg),
       .ROB_IDX_WIDTH(TB_ROB_IDX_WIDTH),
-      .SB_DEPTH(TB_SB_DEPTH),
-      .LQ_DEPTH(TB_LQ_DEPTH),
+      .SB_DEPTH(TB_STQ_DEPTH),
+      .LDQ_DEPTH(TB_LDQ_DEPTH),
       .SQ_DEPTH(TB_SQ_DEPTH),
       .N_LSU(TB_LSU_GROUP_SIZE),
       .COMMIT_WIDTH(TB_COMMIT_WIDTH),
@@ -178,28 +251,49 @@ module tb_lsu #(
       .rs2_data_i,
       .rob_tag_i,
       .rob_head_i('0),
-      .sb_id_i,
+      .st_id_i,
       .mmu_satp_i,
       .mmu_priv_i,
       .mmu_sum_i,
       .mmu_mxr_i,
       .mmu_sfence_vma_i,
 
-      .sb_ex_valid_o,
-      .sb_ex_sb_id_o,
-      .sb_ex_addr_o,
-      .sb_ex_data_o,
-      .sb_ex_op_o,
-      .sb_ex_rob_idx_o(),
+      .st_ex_valid_o,
+      .st_ex_st_id_o,
+      .st_ex_addr_o,
+      .st_ex_data_o,
+      .st_ex_op_o,
+      .st_ex_rob_idx_o(),
 
-      .sb_load_addr_o,
-      .sb_load_be_o(),
-      .sb_load_rob_idx_o(),
-      .sb_load_hit_i,
-      .sb_load_data_i,
-      .sb_order_query_valid_o(),
-      .sb_order_query_sb_id_o(),
-      .sb_order_query_clear_i(1'b1),
+      .stq_fwd_addr_o,
+      .stq_fwd_be_o(),
+      .stq_fwd_rob_idx_o(),
+      .stq_fwd_hit_i,
+      .stq_fwd_data_i,
+      .st_order_query_valid_o(),
+      .st_order_query_st_id_o(),
+      .st_order_query_clear_i(1'b1),
+
+      // store_wb_q 已并入 stq；本 tb 无 stq，用下方小型完成上报 FIFO 复刻其
+      // 可观测行为，喂回 st_wb_*。
+      .st_complete_valid_o(tb_st_complete_valid),
+      .st_complete_id_o(),
+      .st_complete_rob_idx_o(tb_st_complete_rob_idx),
+      .st_complete_data_o(tb_st_complete_data),
+      .st_complete_exception_o(tb_st_complete_exception),
+      .st_complete_ecause_o(tb_st_complete_ecause),
+      .st_complete_is_mispred_o(tb_st_complete_is_mispred),
+      .st_complete_redirect_pc_o(tb_st_complete_redirect_pc),
+      .st_complete_pc_o(),
+      .st_wb_fire_o(tb_st_wb_fire),
+      .st_wb_valid_i(tb_st_wb_valid),
+      .st_wb_rob_idx_i(tb_st_wb_rob_idx),
+      .st_wb_data_i(tb_st_wb_data),
+      .st_wb_exception_i(tb_st_wb_exception),
+      .st_wb_ecause_i(tb_st_wb_ecause),
+      .st_wb_is_mispred_i(tb_st_wb_is_mispred),
+      .st_wb_redirect_pc_i(tb_st_wb_redirect_pc),
+      .st_unreported_count_i(tb_st_unreported_count),
 
       .ld_req_valid_o,
       .ld_req_ready_i,
@@ -245,19 +339,19 @@ module tb_lsu #(
       .fast_lsu_is_mispred_o(),
       .fast_lsu_redirect_pc_o(),
 
-      .dbg_lq_count_o(),
-      .dbg_lq_head_valid_o(),
-      .dbg_lq_head_rob_tag_o(),
+      .dbg_ldq_count_o(),
+      .dbg_ldq_head_valid_o(),
+      .dbg_ldq_head_rob_tag_o(),
       .dbg_sq_count_o(),
       .dbg_sq_head_valid_o(),
       .dbg_sq_head_rob_tag_o()
   );
 
-  lq #(
+  ldq #(
       .ROB_IDX_WIDTH(TB_ROB_IDX_WIDTH),
-      .DEPTH(TB_LQ_DEPTH),
+      .DEPTH(TB_LDQ_DEPTH),
       .COMMIT_WIDTH(1)
-  ) u_lq_test (
+  ) u_ldq_test (
       .clk_i,
       .rst_ni,
       .flush_i,

@@ -44,12 +44,12 @@ class ProfileSchemaTest(unittest.TestCase):
             "commits": 90,
             "stall_total": 50,
             "stall_category": {"other": 30, "decode_blocked": 20},
-            "stall_decode_blocked_detail": {"sb_alloc_blocked": 20},
+            "stall_decode_blocked_detail": {"st_alloc_blocked": 20},
             "predict": {"cond_miss_rate": 0.05},
         }
         self.assertFalse(schema.is_v2_bench(bench))
         self.assertAlmostEqual(schema.bench_ipc(bench), 0.9)
-        self.assertEqual(schema.bench_stall_detail(bench, "decode_blocked")["sb_alloc_blocked"], 20)
+        self.assertEqual(schema.bench_stall_detail(bench, "decode_blocked")["st_alloc_blocked"], 20)
 
 
 if __name__ == "__main__":

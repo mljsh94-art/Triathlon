@@ -40,15 +40,15 @@ static void set_defaults(Vtb_lsu *top) {
   top->rs1_data_i = 0;
   top->rs2_data_i = 0;
   top->rob_tag_i = 0;
-  top->sb_id_i = 0;
+  top->st_id_i = 0;
   top->mmu_satp_i = 0;
   top->mmu_priv_i = 1;
   top->mmu_sum_i = 0;
   top->mmu_mxr_i = 0;
   top->mmu_sfence_vma_i = 0;
 
-  top->sb_load_hit_i = 0;
-  top->sb_load_data_i = 0;
+  top->stq_fwd_hit_i = 0;
+  top->stq_fwd_data_i = 0;
 
   top->ld_req_ready_i = 0;
   top->ld_rsp_valid_i = 0;
@@ -164,15 +164,15 @@ static void test_store_aligned(Vtb_lsu *top) {
   top->imm_i = 4;
   top->rs2_data_i = 0xA5A5A5A5;
   top->rob_tag_i = 0x3;
-  top->sb_id_i = 0x5;
+  top->st_id_i = 0x5;
   top->req_valid_i = 1;
 
   eval_comb(top);
   expect(top->req_ready_o == 1, "Store aligned: req_ready");
-  expect(top->sb_ex_valid_o == 1, "Store aligned: sb_ex_valid");
-  expect(top->sb_ex_addr_o == 0x1004, "Store aligned: sb_ex_addr");
-  expect(top->sb_ex_data_o == 0xA5A5A5A5, "Store aligned: sb_ex_data");
-  expect(top->sb_ex_sb_id_o == 0x5, "Store aligned: sb_ex_sb_id");
+  expect(top->st_ex_valid_o == 1, "Store aligned: st_ex_valid");
+  expect(top->st_ex_addr_o == 0x1004, "Store aligned: st_ex_addr");
+  expect(top->st_ex_data_o == 0xA5A5A5A5, "Store aligned: st_ex_data");
+  expect(top->st_ex_st_id_o == 0x5, "Store aligned: st_ex_st_id");
 
   tick(top);
   top->req_valid_i = 0;
@@ -197,7 +197,7 @@ static void test_store_misaligned(Vtb_lsu *top) {
 
   eval_comb(top);
   expect(top->req_ready_o == 1, "Store misaligned: req_ready");
-  expect(top->sb_ex_valid_o == 0, "Store misaligned: sb_ex_valid should be 0");
+  expect(top->st_ex_valid_o == 0, "Store misaligned: st_ex_valid should be 0");
 
   tick(top);
   top->req_valid_i = 0;
@@ -217,13 +217,13 @@ static void test_load_forward_lb(Vtb_lsu *top) {
   top->rs1_data_i = pmem_addr(0x2000);
   top->imm_i = 0;
   top->rob_tag_i = 0x7;
-  top->sb_load_hit_i = 1;
-  top->sb_load_data_i = 0x00000080; // sign-extend to 0xFFFFFF80
+  top->stq_fwd_hit_i = 1;
+  top->stq_fwd_data_i = 0x00000080; // sign-extend to 0xFFFFFF80
   top->req_valid_i = 1;
 
   eval_comb(top);
   expect(top->req_ready_o == 1, "Load fwd LB: req_ready");
-  expect(top->sb_load_addr_o == pmem_addr(0x2000), "Load fwd LB: sb_load_addr");
+  expect(top->stq_fwd_addr_o == pmem_addr(0x2000), "Load fwd LB: stq_fwd_addr");
 
   tick(top);
   top->req_valid_i = 0;
@@ -395,7 +395,7 @@ static void test_mmu_store_page_fault(Vtb_lsu *top) {
   top->imm_i = 0;
   top->rs2_data_i = 0x44556677;
   top->rob_tag_i = 0x27;
-  top->sb_id_i = 0x2;
+  top->st_id_i = 0x2;
   top->req_valid_i = 1;
   eval_comb(top);
   expect(top->req_ready_o == 1, "MMU store pf: req accepted");
@@ -409,7 +409,7 @@ static void test_mmu_store_page_fault(Vtb_lsu *top) {
 
   for (int i = 0; i < 20; i++) {
     eval_comb(top);
-    if (top->sb_ex_valid_o) saw_sb_ex = true;
+    if (top->st_ex_valid_o) saw_sb_ex = true;
     if (top->wb_valid_o) {
       expect(!saw_sb_ex, "MMU store pf: no store-buffer enqueue");
       expect(top->wb_exception_o == 1, "MMU store pf: wb exception");
@@ -598,12 +598,12 @@ static void test_group_allows_store_when_load_lanes_wait_dcache(Vtb_lsu *top) {
   top->imm_i = 8;
   top->rs2_data_i = 0xA1B2C3D4;
   top->rob_tag_i = 0x1C;
-  top->sb_id_i = 0x6;
+  top->st_id_i = 0x6;
   eval_comb(top);
   expect(top->req_ready_o == 1, "LSU ls/st decouple: store accepted while loads wait dcache");
-  expect(top->sb_ex_valid_o == 1, "LSU ls/st decouple: store writes SB without waiting load lane");
-  expect(top->sb_ex_addr_o == 0x5408, "LSU ls/st decouple: store address");
-  expect(top->sb_ex_data_o == 0xA1B2C3D4, "LSU ls/st decouple: store data");
+  expect(top->st_ex_valid_o == 1, "LSU ls/st decouple: store writes STQ without waiting load lane");
+  expect(top->st_ex_addr_o == 0x5408, "LSU ls/st decouple: store address");
+  expect(top->st_ex_data_o == 0xA1B2C3D4, "LSU ls/st decouple: store data");
   tick(top);
 
   // Let store and both loads drain for clean test exit.
@@ -636,12 +636,12 @@ static void test_store_can_complete_without_dcache_roundtrip(Vtb_lsu *top) {
   top->imm_i = 8;
   top->rs2_data_i = 0x11223344;
   top->rob_tag_i = 0xF;
-  top->sb_id_i = 0x3;
+  top->st_id_i = 0x3;
   top->req_valid_i = 1;
 
   eval_comb(top);
   expect(top->req_ready_o == 1, "Store no dcache roundtrip: req_ready");
-  expect(top->sb_ex_valid_o == 1, "Store no dcache roundtrip: sb_ex_valid");
+  expect(top->st_ex_valid_o == 1, "Store no dcache roundtrip: st_ex_valid");
   expect(top->ld_req_valid_o == 0, "Store no dcache roundtrip: no ld_req on accept cycle");
 
   tick(top); // S_RESP
@@ -972,8 +972,8 @@ static void test_group_supports_two_outstanding_with_rsp_id(Vtb_lsu *top) {
 }
 
 // NOTE: Store-to-load forwarding (incl. byte-merge / age ordering) moved out of
-// lsu_group into store_buffer (A3). tb_lsu instantiates lsu_group in isolation
-// (no store_buffer), so the former internal-forwarding "SQ fwd" tests were
+// lsu_group into stq (A3). tb_lsu instantiates lsu_group in isolation
+// (no stq), so the former internal-forwarding "SQ fwd" tests were
 // removed; that behavior is now covered end-to-end by difftest.
 
 static void test_group_wb_round_robin_prevents_lane_starvation(Vtb_lsu *top) {
@@ -1206,13 +1206,13 @@ static void run_amo_forward_case(Vtb_lsu *top, uint32_t amo_op, uint32_t old_val
   top->imm_i = 0;
   top->rs2_data_i = operand;
   top->rob_tag_i = 0x2A;
-  top->sb_id_i = 0x4;
-  top->sb_load_hit_i = 1;
-  top->sb_load_data_i = old_val;
+  top->st_id_i = 0x4;
+  top->stq_fwd_hit_i = 1;
+  top->stq_fwd_data_i = old_val;
 
   eval_comb(top);
   expect(top->req_ready_o == 1, msg);
-  expect(top->sb_load_addr_o == pmem_addr(0xF000), "AMO fwd: queries forwarding at AMO address");
+  expect(top->stq_fwd_addr_o == pmem_addr(0xF000), "AMO fwd: queries forwarding at AMO address");
   tick(top);
   top->req_valid_i = 0;
 
@@ -1220,10 +1220,10 @@ static void run_amo_forward_case(Vtb_lsu *top, uint32_t amo_op, uint32_t old_val
   expect(top->wb_valid_o == 1, "AMO fwd: writeback valid");
   expect(top->wb_rob_idx_o == 0x2A, "AMO fwd: writeback tag");
   expect(top->wb_data_o == old_val, "AMO fwd: writeback returns old value");
-  expect(top->sb_ex_valid_o == 1, "AMO fwd: store buffer write valid");
-  expect(top->sb_ex_sb_id_o == 0x4, "AMO fwd: store buffer id");
-  expect(top->sb_ex_op_o == LSU_SW, "AMO fwd: store buffer op is SW");
-  expect(top->sb_ex_data_o == amo_expected(amo_op, old_val, operand),
+  expect(top->st_ex_valid_o == 1, "AMO fwd: store buffer write valid");
+  expect(top->st_ex_st_id_o == 0x4, "AMO fwd: store buffer id");
+  expect(top->st_ex_op_o == LSU_SW, "AMO fwd: store buffer op is SW");
+  expect(top->st_ex_data_o == amo_expected(amo_op, old_val, operand),
          "AMO fwd: store buffer receives computed new value");
   tick(top);
 }
@@ -1252,7 +1252,7 @@ static void test_amo_dcache_rmw_path(Vtb_lsu *top) {
   top->imm_i = 4;
   top->rs2_data_i = 0x00000007;
   top->rob_tag_i = 0x2B;
-  top->sb_id_i = 0x5;
+  top->st_id_i = 0x5;
 
   eval_comb(top);
   expect(top->req_ready_o == 1, "AMO dcache: accepted");
@@ -1275,10 +1275,10 @@ static void test_amo_dcache_rmw_path(Vtb_lsu *top) {
   expect(top->wb_valid_o == 1, "AMO dcache: writeback valid on response");
   expect(top->wb_rob_idx_o == 0x2B, "AMO dcache: writeback tag");
   expect(top->wb_data_o == 0x00000020, "AMO dcache: writeback old value");
-  expect(top->sb_ex_valid_o == 1, "AMO dcache: store buffer write valid");
-  expect(top->sb_ex_addr_o == pmem_addr(0xF104), "AMO dcache: store address");
-  expect(top->sb_ex_data_o == 0x00000027, "AMO dcache: store new value");
-  expect(top->sb_ex_op_o == LSU_SW, "AMO dcache: store op is SW");
+  expect(top->st_ex_valid_o == 1, "AMO dcache: store buffer write valid");
+  expect(top->st_ex_addr_o == pmem_addr(0xF104), "AMO dcache: store address");
+  expect(top->st_ex_data_o == 0x00000027, "AMO dcache: store new value");
+  expect(top->st_ex_op_o == LSU_SW, "AMO dcache: store op is SW");
   tick(top);
   top->ld_rsp_valid_i = 0;
 }
@@ -1305,7 +1305,7 @@ static void test_amo_misaligned_reports_store_exception(Vtb_lsu *top) {
   expect(top->wb_valid_o == 1, "AMO misaligned: writeback valid");
   expect(top->wb_exception_o == 1, "AMO misaligned: exception");
   expect(top->wb_ecause_o == 6, "AMO misaligned: store/AMO address misaligned");
-  expect(top->sb_ex_valid_o == 0, "AMO misaligned: no store buffer write");
+  expect(top->st_ex_valid_o == 0, "AMO misaligned: no store buffer write");
   tick(top);
 }
 
@@ -1321,7 +1321,7 @@ static void test_amo_blocks_younger_lsu_until_rmw_finishes(Vtb_lsu *top) {
   top->imm_i = 0;
   top->rs2_data_i = 0x10;
   top->rob_tag_i = 0x2D;
-  top->sb_id_i = 0x6;
+  top->st_id_i = 0x6;
   eval_comb(top);
   expect(top->req_ready_o == 1, "AMO ordering: AMO accepted");
   tick(top);

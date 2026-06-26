@@ -6,8 +6,8 @@ module rename #(
     parameter config_pkg::cfg_t Cfg           = config_pkg::EmptyCfg,
     parameter int unsigned      ROB_DEPTH     = 64,
     parameter int unsigned      ROB_IDX_WIDTH = $clog2(ROB_DEPTH),
-    parameter int unsigned      SB_DEPTH      = 32,                    // Store Buffer 深度
-    parameter int unsigned      SB_IDX_WIDTH  = $clog2(SB_DEPTH)
+    parameter int unsigned      SB_DEPTH      = 32,                    // STQ 深度
+    parameter int unsigned      ST_IDX_WIDTH  = $clog2(SB_DEPTH)
 ) (
     input logic clk_i,
     input logic rst_ni,
@@ -36,16 +36,16 @@ module rename #(
 
     // [新增] 傳遞 Store 信息給 ROB
     output logic [Cfg.INSTR_PER_FETCH-1:0]                   rob_dispatch_is_store_o,
-    output logic [Cfg.INSTR_PER_FETCH-1:0][SB_IDX_WIDTH-1:0] rob_dispatch_sb_id_o,
+    output logic [Cfg.INSTR_PER_FETCH-1:0][ST_IDX_WIDTH-1:0] rob_dispatch_st_id_o,
 
     // 輸入 ROB 的狀態
     input logic rob_ready_i,
     input logic [ROB_IDX_WIDTH-1:0] rob_tail_ptr_i,
 
-    // --- To Store Buffer (Allocation Interface) [新增] ---
-    output logic [Cfg.INSTR_PER_FETCH-1:0] sb_alloc_req_o,  // 請求分配 SB Entry (每条store一项)
-    input logic sb_alloc_ready_i,  // SB 是否可接受本周期所有请求
-    input logic [Cfg.INSTR_PER_FETCH-1:0][SB_IDX_WIDTH-1:0] sb_alloc_id_i,  // 每条store对应的 SB ID
+    // --- To STQ (Allocation Interface) [新增] ---
+    output logic [Cfg.INSTR_PER_FETCH-1:0] st_alloc_req_o,  // 請求分配 STQ Entry (每条store一项)
+    input logic st_alloc_ready_i,  // STQ 是否可接受本周期所有请求
+    input logic [Cfg.INSTR_PER_FETCH-1:0][ST_IDX_WIDTH-1:0] st_alloc_id_i,  // 每条store对应的 STQ ID
 
     // --- To Issue Queue / Operand Read Logic ---
     output logic [Cfg.INSTR_PER_FETCH-1:0] issue_valid_o,
@@ -86,7 +86,7 @@ module rename #(
       // 如果發生 Flush，屏蔽當前週期的輸入，防止錯誤指令進入 ROB
       dec_valid_masked[i] = dec_valid_i[i] && !flush_i;
 
-      // 檢查是否有有效的 Store 指令需要分配 SB
+      // 檢查是否有有效的 Store 指令需要分配 STQ
       if (dec_valid_masked[i] && dec_uops_i[i].is_store) begin
         has_store = 1'b1;
         store_mask[i] = 1'b1;
@@ -95,15 +95,15 @@ module rename #(
   end
 
   // ---------------------------------------------------------
-  // 1. Ready & Handshake Logic (支持 Store Buffer 反壓)
+  // 1. Ready & Handshake Logic (支持 STQ 反壓)
   // ---------------------------------------------------------
   // 發射條件：ROB 未滿 AND (沒有 Store指令 OR StoreBuffer 有空位)
   // 注意：這裡簡化假設一週期只能處理 1 條 Store。如果 decode 發來多條 store，
-  // sb_alloc 接口需要支持多寬度分配，否則這裡需要更復雜的串行化邏輯。
-  assign rename_ready_o = rob_ready_i && (!has_store || sb_alloc_ready_i);
+  // st_alloc 接口需要支持多寬度分配，否則這裡需要更復雜的串行化邏輯。
+  assign rename_ready_o = rob_ready_i && (!has_store || st_alloc_ready_i);
 
-  // 向 Store Buffer 發起分配請求（每条 store 一项）
-  assign sb_alloc_req_o = store_mask;
+  // 向 STQ 發起分配請求（每条 store 一项）
+  assign st_alloc_req_o = store_mask;
 
   // ---------------------------------------------------------
   // 2. 生成新的 Tags (ROB ID 作為物理寄存器號)
@@ -221,11 +221,11 @@ module rename #(
 
         // Store 信息傳遞
         rob_dispatch_is_store_o[i] = dec_uops_i[i].is_store;
-        // 如果是 Store，攜帶分配到的 SB ID；否則為 0
+        // 如果是 Store，攜帶分配到的 STQ ID；否則為 0
         if (dec_uops_i[i].is_store) begin
-          rob_dispatch_sb_id_o[i] = sb_alloc_id_i[i];
+          rob_dispatch_st_id_o[i] = st_alloc_id_i[i];
         end else begin
-          rob_dispatch_sb_id_o[i] = '0;
+          rob_dispatch_st_id_o[i] = '0;
         end
 
         // --- To Issue Queue / Backend Top ---
@@ -262,7 +262,7 @@ module rename #(
         rob_dispatch_ftq_id_o[i] = '0;
         rob_dispatch_fetch_epoch_o[i] = '0;
         rob_dispatch_is_store_o[i] = 1'b0;
-        rob_dispatch_sb_id_o[i]    = '0;
+        rob_dispatch_st_id_o[i]    = '0;
 
         issue_valid_o[i]           = 0;
         issue_rs1_in_rob_o[i]      = 0;

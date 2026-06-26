@@ -1,4 +1,4 @@
-// vsrc/backend/execute/alu.sv
+// vsrc/backend/exu/alu.sv
 import config_pkg::*;
 import decode_pkg::*;
 

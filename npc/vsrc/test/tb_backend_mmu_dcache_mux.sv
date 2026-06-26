@@ -29,11 +29,11 @@ module tb_backend_mmu_dcache_mux (
     output logic ifu_pte_ld_rsp_valid_o,
     output logic [31:0] ifu_pte_ld_rsp_data_o,
 
-    input logic sb_st_req_valid_i,
-    output logic sb_st_req_ready_o,
-    input logic [31:0] sb_st_req_addr_i,
-    input logic [31:0] sb_st_req_data_i,
-    input decode_pkg::lsu_op_e sb_st_req_op_i,
+    input logic st_dcache_req_valid_i,
+    output logic st_dcache_req_ready_o,
+    input logic [31:0] st_dcache_req_addr_i,
+    input logic [31:0] st_dcache_req_data_i,
+    input decode_pkg::lsu_op_e st_dcache_req_op_i,
 
     input logic pte_st_req_valid_i,
     output logic pte_st_req_ready_o,
@@ -96,11 +96,11 @@ module tb_backend_mmu_dcache_mux (
       .ifu_pte_ld_rsp_valid_o,
       .ifu_pte_ld_rsp_data_o,
 
-      .sb_st_req_valid_i,
-      .sb_st_req_ready_o,
-      .sb_st_req_addr_i,
-      .sb_st_req_data_i,
-      .sb_st_req_op_i,
+      .st_dcache_req_valid_i,
+      .st_dcache_req_ready_o,
+      .st_dcache_req_addr_i,
+      .st_dcache_req_data_i,
+      .st_dcache_req_op_i,
 
       .pte_st_req_valid_i,
       .pte_st_req_ready_o,

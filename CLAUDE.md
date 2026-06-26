@@ -16,7 +16,9 @@ Triathlon is a **4-wide superscalar out-of-order RISC-V RV32IMAC processor** (To
 |------|------|
 | `npc/vsrc/` | RTL: `triathlon.sv`, frontend, backend, cache, mmu, platform, testbenches |
 | `npc/vsrc/frontend/` | IFU, BPU, ICache hookup, instr aligner, ibuffer, FTQ |
-| `npc/vsrc/backend/` | Decode, rename, issue, execute (ALU/BRU/LSU/CSR), ROB, store buffer |
+| `npc/vsrc/backend/` | Decode, rename, issue, exu (ALU/CSR), lsu, retire (ROB) |
+| `npc/vsrc/backend/exu/` | ALU, CSR |
+| `npc/vsrc/backend/lsu/` | `lsu_group`, agu/mmu/arbiter, `ld_pipe`, `ldq`, `stq` |
 | `npc/vsrc/cache/` | I/D cache, AXI wrappers, SRAM primitives |
 | `npc/vsrc/include/` | Packages (`decode_pkg`, `test_config_pkg`, `sim_assert.sv`, …) |
 | `npc/csrc/` | Verilator host: `npc_main.cpp`, args, DiffTest client, sim observer |
@@ -28,7 +30,7 @@ Triathlon is a **4-wide superscalar out-of-order RISC-V RV32IMAC processor** (To
 | `linux_workspace/` | Linux build scripts, `merge.py` |
 | `fw_combined.bin` | Prebuilt full-system image @ `0x80000000` |
 
-Key RTL tops: `frontend.sv`, `backend.sv`, `ifu.sv`, `bpu.sv`, `instr_aligner.sv`, `ibuffer.sv`, `rob.sv`, `lsu_group.sv`, `lsu_agu.sv`, `lsu_translate.sv`, `lsu_arbiter.sv`, `lq.sv`, `store_buffer.sv`, `csr.sv`, `icache.sv`, `dcache.sv`.
+Key RTL tops: `frontend.sv`, `backend.sv`, `ifu.sv`, `bpu.sv`, `instr_aligner.sv`, `ibuffer.sv`, `rob.sv`, `alu.sv`, `csr.sv`, `lsu_group.sv`, `lsu_agu.sv`, `lsu_mmu.sv`, `lsu_arbiter.sv`, `ldq.sv`, `ld_pipe.sv`, `stq.sv`, `icache.sv`, `dcache.sv`.
 
 ## Configuration (`test_config_pkg`)
 
@@ -38,7 +40,7 @@ Key RTL tops: `frontend.sv`, `backend.sv`, `ifu.sv`, `bpu.sv`, `instr_aligner.sv
 | PLEN | 32 | Physical address width |
 | INSTR_PER_FETCH | 4 | Fetch/decode/dispatch width |
 | NRET | 4 | Retire width |
-| SB_DEPTH | 32 | Store buffer entries |
+| SB_DEPTH | 32 | STQ entries |
 | ROB_MAX_COMMIT_ST | 2 | Max store commits per cycle |
 | RS_DEPTH | 16 | Reservation station entries per FU queue |
 | ALU_COUNT | 2 | Config value (4 ALUs instantiated) |
@@ -73,31 +75,40 @@ Fetch -> Decode -> Rename -> Dispatch -> Issue -> Execute -> Writeback -> Commit
 | Stage | Role |
 |-------|------|
 | **Decode** | 4-wide; illegal ops → CSR FU for precise trap. |
-| **Rename** | ROB + RAT + store buffer alloc; stall if RS full. |
+| **Rename** | ROB + RAT + stq alloc; stall if RS full. |
 | **Issue** | ALU RS (4-way), BRU/CSR single, LSU single (ROB-head CSR ordering). |
-| **Execute** | 4× ALU, BRU, LSU group (see below), CSR (delegation, PLIC/SEIP path, counters, `satp`). |
-| **Writeback** | 7 FU → 4 CDB ports. |
+| **Execute** | 4× ALU + CSR (`exu/`), LSU group (`lsu/`); see below. |
+| **Writeback** | 7 FU → 4 CDB ports; LSU exposes `LOAD_WB_PORTS` load ports + 1 dedicated store port (`stq` completion report). |
 | **Commit** | 64-entry ROB, up to 4/cycle (stores 2, branches 1, loads 2 max). Mispredict → flush + FE redirect. |
-| **Store buffer** | 32 entries; sole store-to-load forwarding source; commit → DCache or MMIO hook. |
+| **stq** | 32-entry STQ in `backend.sv`: rename alloc, execute fill, store-to-load forwarding, completion report to ROB, senior commit → DCache drain. |
 
-#### LSU (`lsu_group.sv`)
+#### EXU (`exu/`)
+
+| Block | Role |
+|-------|------|
+| **alu ×4** | Integer ALU / BRU execute. |
+| **csr** | CSR access, traps, delegation, PLIC/SEIP, counters, `satp`. |
+
+#### LSU (`lsu/`, top `lsu_group.sv`)
 
 | Block | Role |
 |-------|------|
 | **lsu_agu** | Combinational effective address, alignment, load/store/AMO classify. |
-| **lsu_translate** | SV32 D-MMU + DTLB; req/resp handshake isolated from dispatch. |
-| **Dispatch** | Unified admission/backpressure (replaces pend/load_alloc_fire scatter). |
-| **lsu_lane ×N** | Pure execute FSM: issue request → wait response → writeback. |
-| **store_buffer** | Store lifecycle + store-to-load forwarding (no separate SQ). |
-| **lsu_arbiter** | DCache load RR, MMIO, and writeback lane arbitration. |
-| **LQ** | In-flight load queue (depth = ROB depth); holds `{pc, paddr, be, executed}` until commit. Store address resolution CAM detects load–store ordering violations; violation → store WB `is_mispred` + ROB flush redirect to violating load PC. |
+| **lsu_mmu** | SV32 D-MMU + DTLB; req/resp handshake isolated from dispatch. |
+| **Dispatch** | Unified admission/backpressure (single `req_valid`/`req_ready`; load/store mutually exclusive per cycle). |
+| **ld_pipe ×N** | Pure execute FSM: issue request → wait response → writeback (load/AMO/LR). |
+| **stq** | **Single store structure** (instantiated in `backend.sv`, not inside `lsu_group`): rename alloc → execute fill (`ex_*`, addr/data for forwarding + DCache drain) → **completion report** (`st_complete_*` on store admission sets `executed` + trap/violation fields; program-order scan from `head_ptr` drives dedicated store WB port; `st_wb_fire` sets `reported`) → senior `commit_*` → head drain to DCache. Sole store-to-load forwarding source (byte-merge). No separate SQ or internal `store_wb_q`. |
+| **lsu_arbiter** | DCache load RR, MMIO, and load writeback lane RR (`LOAD_WB_PORTS`). |
+| **ldq** | In-flight load disambiguation queue (depth = ROB depth); holds `{pc, paddr, be, executed}` until commit. Store address resolution CAM detects load–store ordering violations; violation → `st_complete_is_mispred` on the completing store → ROB flush redirect to violating load PC. |
+
+**Store completion path:** `lsu_group` `store_req_fire` → `st_complete_*` into `stq[st_id]` (faulting stores skip `ex_valid` but still complete-report) → `stq` selects oldest `valid && executed && !reported` entry → LSU `STORE_WB_PORT` → ROB/CDB. AMO store side still uses `ex_*` after load-lane AMO completes.
 
 ### Cache & Memory
 
 | Component | Notes |
 |-----------|-------|
 | **ICache** | Tag 19 / index 8 / offset 5; IFU port + refill. |
-| **DCache** | Same geometry; LSU load + store buffer; blocking committed store miss path. |
+| **DCache** | Same geometry; LSU load + stq; blocking committed store miss path. |
 | **PMA** | Outside `0x80000000`–`0x87FFFFFF` → uncacheable MMIO (UART @ `0xA0000000`, PLIC, VirtIO, …). |
 | **C++ platform** | `memory_models.h`: latched UART TX-empty IRQ, PLIC claim/complete; MMIO store pre-tick hook. |
 | **Peripherals** | `plic.sv`, `virtio_blk.sv` in RTL; CLINT/timer via C++ → `timer_irq_i`. |

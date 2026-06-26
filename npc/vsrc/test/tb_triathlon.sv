@@ -9,7 +9,7 @@ module tb_triathlon #(
     parameter int unsigned ROB_DEPTH = 64,
     parameter int unsigned ROB_IDX_W = $clog2(ROB_DEPTH),
     parameter int unsigned SB_DEPTH  = 16,
-    parameter int unsigned SB_IDX_W  = $clog2(SB_DEPTH)
+    parameter int unsigned ST_IDX_W  = $clog2(SB_DEPTH)
 ) (
     input logic clk_i,
     input logic rst_ni,
@@ -74,7 +74,7 @@ module tb_triathlon #(
     output logic [Cfg.NRET-1:0][FTQ_ID_W-1:0]  commit_ftq_id_o,
     output logic [Cfg.NRET-1:0][FETCH_EPOCH_W-1:0] commit_fetch_epoch_o,
     output logic [Cfg.NRET-1:0]                commit_is_store_o,
-    output logic [Cfg.NRET-1:0][SB_IDX_W-1:0]  commit_sb_id_o,
+    output logic [Cfg.NRET-1:0][ST_IDX_W-1:0]  commit_st_id_o,
     output logic [Cfg.NRET-1:0]                commit_store_valid_o,
     output logic [Cfg.NRET-1:0][Cfg.PLEN-1:0]  commit_store_addr_o,
     output logic [Cfg.NRET-1:0][Cfg.XLEN-1:0]  commit_store_data_o,
@@ -212,12 +212,12 @@ module tb_triathlon #(
     output logic                               dbg_lsu_rsp_fire_o,
     output logic [ROB_IDX_W-1:0]               dbg_lsu_inflight_tag_o,
     output logic [Cfg.PLEN-1:0]                dbg_lsu_inflight_addr_o,
-    output logic [3:0][2:0]                    dbg_lsu_lane_state_o,
-    output logic [3:0][ROB_IDX_W-1:0]          dbg_lsu_lane_req_tag_o,
-    output logic [3:0]                         dbg_lsu_lane_ld_req_valid_o,
-    output logic [3:0]                         dbg_lsu_lane_ld_rsp_ready_o,
-    output logic [3:0]                         dbg_lsu_lane_wb_valid_o,
-    output logic [3:0][ROB_IDX_W-1:0]          dbg_lsu_lane_wb_rob_idx_o,
+    output logic [3:0][2:0]                    dbg_lsu_ld_pipe_state_o,
+    output logic [3:0][ROB_IDX_W-1:0]          dbg_lsu_ld_pipe_req_tag_o,
+    output logic [3:0]                         dbg_lsu_ld_pipe_ld_req_valid_o,
+    output logic [3:0]                         dbg_lsu_ld_pipe_ld_rsp_ready_o,
+    output logic [3:0]                         dbg_lsu_ld_pipe_wb_valid_o,
+    output logic [3:0][ROB_IDX_W-1:0]          dbg_lsu_ld_pipe_wb_rob_idx_o,
     // LSU writeback experiment: LSU exposes 3 CDB ports (2 load + 1 store) and
     // the total CDB width is 9 (6 non-LSU FUs + 3 LSU ports).
     output logic [2:0]                         dbg_lsu_wb_valid_o,
@@ -250,9 +250,9 @@ module tb_triathlon #(
     output logic [1:0]                         dbg_lsu_mmu_state_o,
     output logic                               dbg_lsu_load_req_ready_o,
     output logic                               dbg_lsu_store_req_ready_o,
-    output logic                               dbg_lsu_lq_alloc_ready_o,
+    output logic                               dbg_lsu_ldq_alloc_ready_o,
     output logic                               dbg_lsu_sq_alloc_ready_o,
-    output logic [7:0]                         dbg_lsu_lq_count_o,
+    output logic [7:0]                         dbg_lsu_ldq_count_o,
     output logic [7:0]                         dbg_lsu_sq_count_o,
     output logic [Cfg.RS_DEPTH-1:0]            dbg_lsu_rs_busy_o,
     output logic [Cfg.RS_DEPTH-1:0]            dbg_lsu_rs_ready_o,
@@ -268,19 +268,19 @@ module tb_triathlon #(
     output logic                               dbg_lsu_rs_head_has_rs2_o,
     output logic                               dbg_lsu_rs_head_is_store_o,
     output logic                               dbg_lsu_rs_head_is_load_o,
-    output logic [SB_IDX_W-1:0]                dbg_lsu_rs_head_sb_id_o,
+    output logic [ST_IDX_W-1:0]                dbg_lsu_rs_head_st_id_o,
     output logic                               dbg_lsu_head_block_store_o,
     output logic [$clog2(Cfg.RS_DEPTH+1)-1:0]  dbg_lsu_rs_older_store_count_o,
 
     // Debug (Store buffer / D$ store path)
-    output logic [3:0]                         dbg_sb_alloc_req_o,
-    output logic                               dbg_sb_alloc_ready_o,
-    output logic                               dbg_sb_alloc_fire_o,
-    output logic                               dbg_sb_dcache_req_valid_o,
-    output logic                               dbg_sb_dcache_req_ready_o,
-    output logic [Cfg.PLEN-1:0]                dbg_sb_dcache_req_addr_o,
-    output logic [Cfg.XLEN-1:0]                dbg_sb_dcache_req_data_o,
-    output logic [$bits(decode_pkg::lsu_op_e)-1:0] dbg_sb_dcache_req_op_o,
+    output logic [3:0]                         dbg_st_alloc_req_o,
+    output logic                               dbg_st_alloc_ready_o,
+    output logic                               dbg_st_alloc_fire_o,
+    output logic                               dbg_st_dcache_req_valid_o,
+    output logic                               dbg_st_dcache_req_ready_o,
+    output logic [Cfg.PLEN-1:0]                dbg_st_dcache_req_addr_o,
+    output logic [Cfg.XLEN-1:0]                dbg_st_dcache_req_data_o,
+    output logic [$bits(decode_pkg::lsu_op_e)-1:0] dbg_st_dcache_req_op_o,
     // Debug (D$ load/store arbitration)
     output logic [2:0]                         dbg_dcache_state_o,
     output logic                               dbg_dcache_refill_valid_o,
@@ -312,15 +312,15 @@ module tb_triathlon #(
     output logic                               dbg_rob_q2_is_store_o,
     output logic [Cfg.PLEN-1:0]                dbg_rob_q2_pc_o,
 
-    // Debug (Store Buffer head / count)
-    output logic [4:0]                         dbg_sb_count_o,
-    output logic [3:0]                         dbg_sb_head_ptr_o,
-    output logic [3:0]                         dbg_sb_tail_ptr_o,
-    output logic                               dbg_sb_head_valid_o,
-    output logic                               dbg_sb_head_committed_o,
-    output logic                               dbg_sb_head_addr_valid_o,
-    output logic                               dbg_sb_head_data_valid_o,
-    output logic [Cfg.PLEN-1:0]                dbg_sb_head_addr_o,
+    // Debug (STQ head / count)
+    output logic [4:0]                         dbg_st_count_o,
+    output logic [3:0]                         dbg_st_head_ptr_o,
+    output logic [3:0]                         dbg_st_tail_ptr_o,
+    output logic                               dbg_st_head_valid_o,
+    output logic                               dbg_st_head_committed_o,
+    output logic                               dbg_st_head_addr_valid_o,
+    output logic                               dbg_st_head_data_valid_o,
+    output logic [Cfg.PLEN-1:0]                dbg_st_head_addr_o,
     // Debug (BPU RAS)
     output logic [7:0]                         dbg_bpu_arch_ras_count_o,
     output logic [7:0]                         dbg_bpu_spec_ras_count_o,
@@ -469,7 +469,7 @@ module tb_triathlon #(
   assign commit_ftq_id_o = dut.u_backend.commit_ftq_id;
   assign commit_fetch_epoch_o = dut.u_backend.commit_fetch_epoch;
   assign commit_is_store_o = dut.u_backend.commit_is_store;
-  assign commit_sb_id_o = dut.u_backend.commit_sb_id;
+  assign commit_st_id_o = dut.u_backend.commit_st_id;
   assign dbg_csr_mtvec_o   = dut.u_backend.u_csr.csr_mtvec;
   assign dbg_csr_mepc_o    = dut.u_backend.u_csr.csr_mepc;
   assign dbg_csr_mstatus_o = dut.u_backend.u_csr.csr_mstatus;
@@ -646,18 +646,18 @@ module tb_triathlon #(
   assign dbg_lsu_rsp_fire_o     = dut.u_backend.lsu_ld_rsp_valid & dut.u_backend.lsu_ld_rsp_ready;
   assign dbg_lsu_inflight_tag_o = dut.u_backend.u_lsu_group.req_tag_q;
   assign dbg_lsu_inflight_addr_o = dut.u_backend.u_lsu_group.req_addr_q;
-  assign dbg_lsu_lane_state_o[0] = dut.u_backend.u_lsu_group.g_lanes[0].u_lane.state_q;
-  assign dbg_lsu_lane_state_o[1] = dut.u_backend.u_lsu_group.g_lanes[1].u_lane.state_q;
-  assign dbg_lsu_lane_state_o[2] = dut.u_backend.u_lsu_group.g_lanes[2].u_lane.state_q;
-  assign dbg_lsu_lane_state_o[3] = dut.u_backend.u_lsu_group.g_lanes[3].u_lane.state_q;
-  assign dbg_lsu_lane_req_tag_o[0] = dut.u_backend.u_lsu_group.g_lanes[0].u_lane.req_tag_q;
-  assign dbg_lsu_lane_req_tag_o[1] = dut.u_backend.u_lsu_group.g_lanes[1].u_lane.req_tag_q;
-  assign dbg_lsu_lane_req_tag_o[2] = dut.u_backend.u_lsu_group.g_lanes[2].u_lane.req_tag_q;
-  assign dbg_lsu_lane_req_tag_o[3] = dut.u_backend.u_lsu_group.g_lanes[3].u_lane.req_tag_q;
-  assign dbg_lsu_lane_ld_req_valid_o = dut.u_backend.u_lsu_group.lane_ld_req_valid;
-  assign dbg_lsu_lane_ld_rsp_ready_o = dut.u_backend.u_lsu_group.lane_ld_rsp_ready;
-  assign dbg_lsu_lane_wb_valid_o = dut.u_backend.u_lsu_group.lane_wb_valid;
-  assign dbg_lsu_lane_wb_rob_idx_o = dut.u_backend.u_lsu_group.lane_wb_rob_idx;
+  assign dbg_lsu_ld_pipe_state_o[0] = dut.u_backend.u_lsu_group.g_ld_pipes[0].u_ld_pipe.state_q;
+  assign dbg_lsu_ld_pipe_state_o[1] = dut.u_backend.u_lsu_group.g_ld_pipes[1].u_ld_pipe.state_q;
+  assign dbg_lsu_ld_pipe_state_o[2] = dut.u_backend.u_lsu_group.g_ld_pipes[2].u_ld_pipe.state_q;
+  assign dbg_lsu_ld_pipe_state_o[3] = dut.u_backend.u_lsu_group.g_ld_pipes[3].u_ld_pipe.state_q;
+  assign dbg_lsu_ld_pipe_req_tag_o[0] = dut.u_backend.u_lsu_group.g_ld_pipes[0].u_ld_pipe.req_tag_q;
+  assign dbg_lsu_ld_pipe_req_tag_o[1] = dut.u_backend.u_lsu_group.g_ld_pipes[1].u_ld_pipe.req_tag_q;
+  assign dbg_lsu_ld_pipe_req_tag_o[2] = dut.u_backend.u_lsu_group.g_ld_pipes[2].u_ld_pipe.req_tag_q;
+  assign dbg_lsu_ld_pipe_req_tag_o[3] = dut.u_backend.u_lsu_group.g_ld_pipes[3].u_ld_pipe.req_tag_q;
+  assign dbg_lsu_ld_pipe_ld_req_valid_o = dut.u_backend.u_lsu_group.lane_ld_req_valid;
+  assign dbg_lsu_ld_pipe_ld_rsp_ready_o = dut.u_backend.u_lsu_group.lane_ld_rsp_ready;
+  assign dbg_lsu_ld_pipe_wb_valid_o = dut.u_backend.u_lsu_group.lane_wb_valid;
+  assign dbg_lsu_ld_pipe_wb_rob_idx_o = dut.u_backend.u_lsu_group.lane_wb_rob_idx;
   assign dbg_lsu_wb_valid_o = dut.u_backend.lsu_wb_valid;
   assign dbg_lsu_wb_rob_idx_o = dut.u_backend.lsu_wb_tag;
   assign dbg_lsu_store_wb_head_valid_o = dut.u_backend.u_lsu_group.store_wb_head_valid;
@@ -688,9 +688,9 @@ module tb_triathlon #(
   assign dbg_lsu_mmu_state_o = dut.u_backend.u_lsu_group.mmu_state_q;
   assign dbg_lsu_load_req_ready_o = dut.u_backend.u_lsu_group.load_req_ready;
   assign dbg_lsu_store_req_ready_o = dut.u_backend.u_lsu_group.store_req_ready;
-  assign dbg_lsu_lq_alloc_ready_o = dut.u_backend.u_lsu_group.lq_alloc_ready;
+  assign dbg_lsu_ldq_alloc_ready_o = dut.u_backend.u_lsu_group.ldq_alloc_ready;
   assign dbg_lsu_sq_alloc_ready_o = dut.u_backend.u_lsu_group.sq_alloc_ready;
-  assign dbg_lsu_lq_count_o = dut.u_backend.u_lsu_group.dbg_lq_count_o;
+  assign dbg_lsu_ldq_count_o = dut.u_backend.u_lsu_group.dbg_ldq_count_o;
   assign dbg_lsu_sq_count_o = dut.u_backend.u_lsu_group.dbg_sq_count_o;
   assign dbg_lsu_rs_busy_o      = dut.u_backend.u_issue_lsu.u_rs.busy;
   assign dbg_lsu_rs_ready_o     = dut.u_backend.u_issue_lsu.u_rs.ready_mask;
@@ -750,8 +750,8 @@ module tb_triathlon #(
   assign dbg_lsu_rs_head_is_load_o = lsu_rs_head_found
                                    ? dut.u_backend.u_issue_lsu.u_rs.op_arr[lsu_rs_head_idx].is_load
                                    : 1'b0;
-  assign dbg_lsu_rs_head_sb_id_o = lsu_rs_head_found
-                                 ? dut.u_backend.u_issue_lsu.u_rs.sb_arr[lsu_rs_head_idx]
+  assign dbg_lsu_rs_head_st_id_o = lsu_rs_head_found
+                                 ? dut.u_backend.u_issue_lsu.u_rs.st_arr[lsu_rs_head_idx]
                                  : '0;
 
   logic lsu_head_block_store_w;
@@ -787,14 +787,14 @@ module tb_triathlon #(
   assign dbg_lsu_rs_older_store_count_o = lsu_rs_older_store_count_w;
 
   // Debug: Store buffer / D$ store path
-  assign dbg_sb_alloc_req_o = dut.u_backend.sb_alloc_req;
-  assign dbg_sb_alloc_ready_o = dut.u_backend.sb_alloc_ready;
-  assign dbg_sb_alloc_fire_o  = dut.u_backend.sb_alloc_fire;
-  assign dbg_sb_dcache_req_valid_o = dut.u_backend.sb_dcache_req_valid;
-  assign dbg_sb_dcache_req_ready_o = dut.u_backend.sb_dcache_req_ready;
-  assign dbg_sb_dcache_req_addr_o  = dut.u_backend.sb_dcache_req_addr;
-  assign dbg_sb_dcache_req_data_o  = dut.u_backend.sb_dcache_req_data;
-  assign dbg_sb_dcache_req_op_o    = dut.u_backend.sb_dcache_req_op;
+  assign dbg_st_alloc_req_o = dut.u_backend.st_alloc_req;
+  assign dbg_st_alloc_ready_o = dut.u_backend.st_alloc_ready;
+  assign dbg_st_alloc_fire_o  = dut.u_backend.st_alloc_fire;
+  assign dbg_st_dcache_req_valid_o = dut.u_backend.st_dcache_req_valid;
+  assign dbg_st_dcache_req_ready_o = dut.u_backend.st_dcache_req_ready;
+  assign dbg_st_dcache_req_addr_o  = dut.u_backend.st_dcache_req_addr;
+  assign dbg_st_dcache_req_data_o  = dut.u_backend.st_dcache_req_data;
+  assign dbg_st_dcache_req_op_o    = dut.u_backend.st_dcache_req_op;
   assign dbg_dcache_state_o = dut.u_backend.u_dcache.state_q;
   assign dbg_dcache_refill_valid_o = dcache_refill_valid_i;
   assign dbg_dcache_refill_ready_o = dcache_refill_ready_o;
@@ -809,11 +809,11 @@ module tb_triathlon #(
     for (int i = 0; i < Cfg.NRET; i++) begin
       if (dut.u_backend.commit_valid[i] && dut.u_backend.commit_is_store[i]) begin
         commit_store_valid_o[i] =
-            dut.u_backend.u_sb.mem[dut.u_backend.commit_sb_id[i]].addr_valid &&
-            dut.u_backend.u_sb.mem[dut.u_backend.commit_sb_id[i]].data_valid;
-        commit_store_addr_o[i] = dut.u_backend.u_sb.mem[dut.u_backend.commit_sb_id[i]].addr;
-        commit_store_data_o[i] = dut.u_backend.u_sb.mem[dut.u_backend.commit_sb_id[i]].data;
-        commit_store_op_o[i]   = dut.u_backend.u_sb.mem[dut.u_backend.commit_sb_id[i]].op;
+            dut.u_backend.u_stq.mem[dut.u_backend.commit_st_id[i]].addr_valid &&
+            dut.u_backend.u_stq.mem[dut.u_backend.commit_st_id[i]].data_valid;
+        commit_store_addr_o[i] = dut.u_backend.u_stq.mem[dut.u_backend.commit_st_id[i]].addr;
+        commit_store_data_o[i] = dut.u_backend.u_stq.mem[dut.u_backend.commit_st_id[i]].data;
+        commit_store_op_o[i]   = dut.u_backend.u_stq.mem[dut.u_backend.commit_st_id[i]].op;
       end
     end
   end
@@ -823,12 +823,12 @@ module tb_triathlon #(
   assign dbg_dc_mshr_alloc_ready_o = dut.u_backend.u_dcache.mshr_alloc_ready;
   assign dbg_dc_mshr_req_line_hit_o = dut.u_backend.u_dcache.mshr_req_line_hit;
   assign dbg_dc_store_wait_same_line_o =
-      dut.u_backend.sb_dcache_req_valid &&
-      !dut.u_backend.sb_dcache_req_ready &&
+      dut.u_backend.st_dcache_req_valid &&
+      !dut.u_backend.st_dcache_req_ready &&
       dut.u_backend.u_dcache.mshr_req_line_hit;
   assign dbg_dc_store_wait_mshr_full_o =
-      dut.u_backend.sb_dcache_req_valid &&
-      !dut.u_backend.sb_dcache_req_ready &&
+      dut.u_backend.st_dcache_req_valid &&
+      !dut.u_backend.st_dcache_req_ready &&
       !dut.u_backend.u_dcache.mshr_alloc_ready;
 
   // Debug: ROB head state
@@ -864,15 +864,15 @@ module tb_triathlon #(
                                 ? dut.u_backend.u_rob.rob_ram[rob_q2_idx].pc
                                 : '0;
 
-  // Debug: Store Buffer head state
-  assign dbg_sb_count_o          = dut.u_backend.u_sb.count;
-  assign dbg_sb_head_ptr_o       = dut.u_backend.u_sb.head_ptr;
-  assign dbg_sb_tail_ptr_o       = dut.u_backend.u_sb.tail_ptr;
-  assign dbg_sb_head_valid_o     = dut.u_backend.u_sb.mem[dut.u_backend.u_sb.head_ptr].valid;
-  assign dbg_sb_head_committed_o = dut.u_backend.u_sb.mem[dut.u_backend.u_sb.head_ptr].committed;
-  assign dbg_sb_head_addr_valid_o = dut.u_backend.u_sb.mem[dut.u_backend.u_sb.head_ptr].addr_valid;
-  assign dbg_sb_head_data_valid_o = dut.u_backend.u_sb.mem[dut.u_backend.u_sb.head_ptr].data_valid;
-  assign dbg_sb_head_addr_o      = dut.u_backend.u_sb.mem[dut.u_backend.u_sb.head_ptr].addr;
+  // Debug: STQ head state
+  assign dbg_st_count_o          = dut.u_backend.u_stq.count;
+  assign dbg_st_head_ptr_o       = dut.u_backend.u_stq.head_ptr;
+  assign dbg_st_tail_ptr_o       = dut.u_backend.u_stq.tail_ptr;
+  assign dbg_st_head_valid_o     = dut.u_backend.u_stq.mem[dut.u_backend.u_stq.head_ptr].valid;
+  assign dbg_st_head_committed_o = dut.u_backend.u_stq.mem[dut.u_backend.u_stq.head_ptr].committed;
+  assign dbg_st_head_addr_valid_o = dut.u_backend.u_stq.mem[dut.u_backend.u_stq.head_ptr].addr_valid;
+  assign dbg_st_head_data_valid_o = dut.u_backend.u_stq.mem[dut.u_backend.u_stq.head_ptr].data_valid;
+  assign dbg_st_head_addr_o      = dut.u_backend.u_stq.mem[dut.u_backend.u_stq.head_ptr].addr;
   assign dbg_bpu_arch_ras_count_o = {3'b0, dut.u_frontend.i_bpu.arch_ras_count_q};
   assign dbg_bpu_spec_ras_count_o = {3'b0, dut.u_frontend.i_bpu.spec_ras_count_q};
   assign dbg_bpu_arch_ras_top_o = dut.u_frontend.i_bpu.arch_ras_top_w;

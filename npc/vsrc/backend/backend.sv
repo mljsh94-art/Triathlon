@@ -61,7 +61,7 @@ module backend #(
   localparam int unsigned ROB_DEPTH = (Cfg.ROB_DEPTH >= DISPATCH_WIDTH) ? Cfg.ROB_DEPTH : 64;
   localparam int unsigned ROB_IDX_WIDTH = $clog2(ROB_DEPTH);
   localparam int unsigned SB_DEPTH = (Cfg.SB_DEPTH >= 4) ? Cfg.SB_DEPTH : 32;
-  localparam int unsigned SB_IDX_WIDTH = $clog2(SB_DEPTH);
+  localparam int unsigned ST_IDX_WIDTH = $clog2(SB_DEPTH);
   localparam int unsigned RS_DEPTH = Cfg.RS_DEPTH;
   // LSU writeback experiment: widen LSU completion to LSU_WB_PORTS CDB ports
   // (LOAD_WB_PORTS load-lane ports + 1 dedicated store port). Non-LSU FUs are
@@ -87,11 +87,11 @@ module backend #(
   localparam int unsigned ROB_MAX_COMMIT_BR = (Cfg.ROB_MAX_COMMIT_BR >= 1) ? Cfg.ROB_MAX_COMMIT_BR : 1;
   localparam int unsigned ROB_MAX_COMMIT_ST = (Cfg.ROB_MAX_COMMIT_ST >= 1) ? Cfg.ROB_MAX_COMMIT_ST : 2;
   localparam int unsigned ROB_MAX_COMMIT_LD = (Cfg.ROB_MAX_COMMIT_LD >= 1) ? Cfg.ROB_MAX_COMMIT_LD : 2;
-  // B2: the LQ holds each load until it commits, so an in-flight load must
+  // B2: the LDQ holds each load until it commits, so an in-flight load must
   // always be able to claim a slot to avoid starving the ROB head. Sizing the
-  // LQ to the full ROB depth makes allocation deadlock-free by construction:
-  // #in-flight loads <= #ROB entries <= ROB_DEPTH == LQ depth.
-  localparam int unsigned LSU_LQ_DEPTH = ROB_DEPTH;
+  // LDQ to the full ROB depth makes allocation deadlock-free by construction:
+  // #in-flight loads <= #ROB entries <= ROB_DEPTH == LDQ depth.
+  localparam int unsigned LSU_LDQ_DEPTH = ROB_DEPTH;
   localparam int unsigned LSU_SQ_DEPTH = (Cfg.SB_DEPTH >= 16) ? 16 : Cfg.SB_DEPTH;
   localparam int unsigned COMPLETION_Q_DEPTH = 32;
   // A2.2: 开启 commit-time call/ret 更新，配合 BPU speculative RAS 降低 return miss。
@@ -176,7 +176,7 @@ module backend #(
   logic [    COMMIT_WIDTH-1:0][     Cfg.XLEN-1:0] commit_wdata;
   logic [    COMMIT_WIDTH-1:0][ROB_IDX_WIDTH-1:0] commit_rob_index;
   logic [    COMMIT_WIDTH-1:0]                    commit_is_store;
-  logic [    COMMIT_WIDTH-1:0][ SB_IDX_WIDTH-1:0] commit_sb_id;
+  logic [    COMMIT_WIDTH-1:0][ ST_IDX_WIDTH-1:0] commit_st_id;
   logic [    COMMIT_WIDTH-1:0]                    commit_is_branch;
   logic [    COMMIT_WIDTH-1:0]                    commit_is_jump;
   logic [    COMMIT_WIDTH-1:0]                    commit_is_call;
@@ -258,7 +258,7 @@ module backend #(
       .dispatch_ftq_id_i(rob_dispatch_ftq_id),
       .dispatch_fetch_epoch_i(rob_dispatch_fetch_epoch),
       .dispatch_is_store_i(rob_dispatch_is_store),
-      .dispatch_sb_id_i(rob_dispatch_sb_id),
+      .dispatch_st_id_i(rob_dispatch_st_id),
 
       .rob_ready_o(rob_ready),
       .dispatch_rob_index_o(rob_dispatch_rob_index),
@@ -301,7 +301,7 @@ module backend #(
       .commit_wdata_o     (commit_wdata),
       .commit_rob_index_o (commit_rob_index),
       .commit_is_store_o  (commit_is_store),
-      .commit_sb_id_o     (commit_sb_id),
+      .commit_st_id_o     (commit_st_id),
       .commit_is_branch_o (commit_is_branch),
       .commit_is_jump_o   (commit_is_jump),
       .commit_is_call_o   (commit_is_call),
@@ -480,86 +480,127 @@ module backend #(
 `endif
 
   // =========================================================
-  // Store Buffer (allocation + commit + forwarding)
+  // STQ (allocation + commit + forwarding)
   // =========================================================
-  logic [DISPATCH_WIDTH-1:0] sb_alloc_req;
-  logic sb_alloc_ready;
-  logic [DISPATCH_WIDTH-1:0][SB_IDX_WIDTH-1:0] sb_alloc_id;
-  logic sb_alloc_fire;
+  logic [DISPATCH_WIDTH-1:0] st_alloc_req;
+  logic st_alloc_ready;
+  logic [DISPATCH_WIDTH-1:0][ST_IDX_WIDTH-1:0] st_alloc_id;
+  logic st_alloc_fire;
 
   // Store buffer -> D$ store port
-  logic sb_dcache_req_valid;
-  logic sb_dcache_req_ready;
-  logic [Cfg.PLEN-1:0] sb_dcache_req_addr;
-  logic [Cfg.XLEN-1:0] sb_dcache_req_data;
-  decode_pkg::lsu_op_e sb_dcache_req_op;
+  logic st_dcache_req_valid;
+  logic st_dcache_req_ready;
+  logic [Cfg.PLEN-1:0] st_dcache_req_addr;
+  logic [Cfg.XLEN-1:0] st_dcache_req_data;
+  decode_pkg::lsu_op_e st_dcache_req_op;
 
-  logic [COMMIT_WIDTH-1:0] sb_commit_valid;
-  logic [COMMIT_WIDTH-1:0][SB_IDX_WIDTH-1:0] sb_commit_id;
+  logic [COMMIT_WIDTH-1:0] st_commit_valid;
+  logic [COMMIT_WIDTH-1:0][ST_IDX_WIDTH-1:0] st_commit_id;
 
   always_comb begin
     for (int i = 0; i < COMMIT_WIDTH; i++) begin
-      sb_commit_valid[i] = commit_valid[i] && commit_is_store[i];
-      sb_commit_id[i]    = commit_sb_id[i];
+      st_commit_valid[i] = commit_valid[i] && commit_is_store[i];
+      st_commit_id[i]    = commit_st_id[i];
     end
   end
 
-  // LSU <-> Store Buffer
-  logic sb_ex_valid;
-  logic [SB_IDX_WIDTH-1:0] sb_ex_sb_id;
-  logic [Cfg.PLEN-1:0] sb_ex_addr;
-  logic [Cfg.XLEN-1:0] sb_ex_data;
-  decode_pkg::lsu_op_e sb_ex_op;
-  logic [ROB_IDX_WIDTH-1:0] sb_ex_rob_idx;
+  // LSU <-> STQ
+  logic st_ex_valid;
+  logic [ST_IDX_WIDTH-1:0] st_ex_st_id;
+  logic [Cfg.PLEN-1:0] st_ex_addr;
+  logic [Cfg.XLEN-1:0] st_ex_data;
+  decode_pkg::lsu_op_e st_ex_op;
+  logic [ROB_IDX_WIDTH-1:0] st_ex_rob_idx;
 
-  logic [Cfg.PLEN-1:0] sb_load_addr;
-  logic [Cfg.XLEN/8-1:0] sb_load_be;
-  logic [ROB_IDX_WIDTH-1:0] sb_load_rob_idx;
-  logic sb_load_hit;
-  logic [Cfg.XLEN-1:0] sb_load_data;
-  logic sb_order_query_valid;
-  logic [SB_IDX_WIDTH-1:0] sb_order_query_sb_id;
-  logic sb_order_query_clear;
+  logic [Cfg.PLEN-1:0] stq_fwd_addr;
+  logic [Cfg.XLEN/8-1:0] stq_fwd_be;
+  logic [ROB_IDX_WIDTH-1:0] stq_fwd_rob_idx;
+  logic stq_fwd_hit;
+  logic [Cfg.XLEN-1:0] stq_fwd_data;
+  logic st_order_query_valid;
+  logic [ST_IDX_WIDTH-1:0] st_order_query_st_id;
+  logic st_order_query_clear;
 
-  store_buffer #(
+  // Store completion report (store_wb_q 已并入 stq)：lsu_group 填完成字段，
+  // stq 反向给出最老未上报 store 的写回内容。
+  logic st_complete_valid;
+  logic [ST_IDX_WIDTH-1:0] st_complete_id;
+  logic [ROB_IDX_WIDTH-1:0] st_complete_rob_idx;
+  logic [Cfg.XLEN-1:0] st_complete_data;
+  logic st_complete_exception;
+  logic [4:0] st_complete_ecause;
+  logic st_complete_is_mispred;
+  logic [Cfg.PLEN-1:0] st_complete_redirect_pc;
+  logic [Cfg.PLEN-1:0] st_complete_pc;
+  logic st_wb_fire;
+  logic st_wb_valid;
+  logic [ROB_IDX_WIDTH-1:0] st_wb_rob_idx;
+  logic [Cfg.XLEN-1:0] st_wb_data;
+  logic st_wb_exception;
+  logic [4:0] st_wb_ecause;
+  logic st_wb_is_mispred;
+  logic [Cfg.PLEN-1:0] st_wb_redirect_pc;
+  logic [$clog2(SB_DEPTH+1)-1:0] st_unreported_count;
+
+  stq #(
       .SB_DEPTH     (SB_DEPTH),
       .ROB_IDX_WIDTH(ROB_IDX_WIDTH),
       .DISPATCH_WIDTH(DISPATCH_WIDTH),
-      .COMMIT_WIDTH (COMMIT_WIDTH)
-  ) u_sb (
+      .COMMIT_WIDTH (COMMIT_WIDTH),
+      .ECAUSE_WIDTH (5)
+  ) u_stq (
       .clk_i (clk_i),
       .rst_ni(rst_ni),
 
-      .alloc_req_i(sb_alloc_req),
-      .alloc_ready_o(sb_alloc_ready),
-      .alloc_id_o(sb_alloc_id),
-      .alloc_fire_i(sb_alloc_fire),
+      .alloc_req_i(st_alloc_req),
+      .alloc_ready_o(st_alloc_ready),
+      .alloc_id_o(st_alloc_id),
+      .alloc_fire_i(st_alloc_fire),
 
-      .ex_valid_i  (sb_ex_valid),
-      .ex_sb_id_i  (sb_ex_sb_id),
-      .ex_addr_i   (sb_ex_addr),
-      .ex_data_i   (sb_ex_data),
-      .ex_op_i     (sb_ex_op),
-      .ex_rob_idx_i(sb_ex_rob_idx),
+      .ex_valid_i  (st_ex_valid),
+      .ex_st_id_i  (st_ex_st_id),
+      .ex_addr_i   (st_ex_addr),
+      .ex_data_i   (st_ex_data),
+      .ex_op_i     (st_ex_op),
+      .ex_rob_idx_i(st_ex_rob_idx),
 
-      .commit_valid_i(sb_commit_valid),
-      .commit_sb_id_i(sb_commit_id),
+      .commit_valid_i(st_commit_valid),
+      .commit_st_id_i(st_commit_id),
 
-      .dcache_req_valid_o(sb_dcache_req_valid),
-      .dcache_req_ready_i(sb_dcache_req_ready),
-      .dcache_req_addr_o (sb_dcache_req_addr),
-      .dcache_req_data_o (sb_dcache_req_data),
-      .dcache_req_op_o   (sb_dcache_req_op),
+      .dcache_req_valid_o(st_dcache_req_valid),
+      .dcache_req_ready_i(st_dcache_req_ready),
+      .dcache_req_addr_o (st_dcache_req_addr),
+      .dcache_req_data_o (st_dcache_req_data),
+      .dcache_req_op_o   (st_dcache_req_op),
 
-      .order_query_valid_i(sb_order_query_valid),
-      .order_query_sb_id_i(sb_order_query_sb_id),
-      .order_query_clear_o(sb_order_query_clear),
+      .order_query_valid_i(st_order_query_valid),
+      .order_query_st_id_i(st_order_query_st_id),
+      .order_query_clear_o(st_order_query_clear),
 
-      .load_be_i(sb_load_be),
-      .load_addr_i(sb_load_addr),
-      .load_rob_idx_i(sb_load_rob_idx),
-      .load_hit_o(sb_load_hit),
-      .load_data_o(sb_load_data),
+      .st_complete_valid_i(st_complete_valid),
+      .st_complete_id_i(st_complete_id),
+      .st_complete_rob_idx_i(st_complete_rob_idx),
+      .st_complete_data_i(st_complete_data),
+      .st_complete_exception_i(st_complete_exception),
+      .st_complete_ecause_i(st_complete_ecause),
+      .st_complete_is_mispred_i(st_complete_is_mispred),
+      .st_complete_redirect_pc_i(st_complete_redirect_pc),
+      .st_complete_pc_i(st_complete_pc),
+      .st_wb_valid_o(st_wb_valid),
+      .st_wb_rob_idx_o(st_wb_rob_idx),
+      .st_wb_data_o(st_wb_data),
+      .st_wb_exception_o(st_wb_exception),
+      .st_wb_ecause_o(st_wb_ecause),
+      .st_wb_is_mispred_o(st_wb_is_mispred),
+      .st_wb_redirect_pc_o(st_wb_redirect_pc),
+      .st_wb_fire_i(st_wb_fire),
+      .st_unreported_count_o(st_unreported_count),
+
+      .load_be_i(stq_fwd_be),
+      .load_addr_i(stq_fwd_addr),
+      .load_rob_idx_i(stq_fwd_rob_idx),
+      .load_hit_o(stq_fwd_hit),
+      .load_data_o(stq_fwd_data),
 
       .rob_head_i(rob_head_ptr),
 
@@ -587,7 +628,7 @@ module backend #(
   logic            [DISPATCH_WIDTH-1:0][    FTQ_ID_W-1:0]  rob_dispatch_ftq_id;
   logic            [DISPATCH_WIDTH-1:0][FETCH_EPOCH_W-1:0] rob_dispatch_fetch_epoch;
   logic            [DISPATCH_WIDTH-1:0]                    rob_dispatch_is_store;
-  logic            [DISPATCH_WIDTH-1:0][ SB_IDX_WIDTH-1:0] rob_dispatch_sb_id;
+  logic            [DISPATCH_WIDTH-1:0][ ST_IDX_WIDTH-1:0] rob_dispatch_st_id;
 
   logic            [DISPATCH_WIDTH-1:0]                    issue_valid;
   logic            [DISPATCH_WIDTH-1:0]                    issue_rs1_in_rob;
@@ -843,14 +884,14 @@ module backend #(
       .rob_dispatch_ftq_id_o(rob_dispatch_ftq_id),
       .rob_dispatch_fetch_epoch_o(rob_dispatch_fetch_epoch),
       .rob_dispatch_is_store_o(rob_dispatch_is_store),
-      .rob_dispatch_sb_id_o(rob_dispatch_sb_id),
+      .rob_dispatch_st_id_o(rob_dispatch_st_id),
 
       .rob_ready_i   (rob_ready),
       .rob_tail_ptr_i(rob_dispatch_rob_index[0]),
 
-      .sb_alloc_req_o(sb_alloc_req),
-      .sb_alloc_ready_i(sb_alloc_ready),
-      .sb_alloc_id_i(sb_alloc_id),
+      .st_alloc_req_o(st_alloc_req),
+      .st_alloc_ready_i(st_alloc_ready),
+      .st_alloc_id_i(st_alloc_id),
 
       .issue_valid_o      (issue_valid),
       .issue_rs1_in_rob_o (issue_rs1_in_rob),
@@ -868,8 +909,8 @@ module backend #(
       .flush_i(backend_flush)
   );
 
-  // Store Buffer allocation fires only when rename accepts the bundle.
-  assign sb_alloc_fire = rename_fire && (|sb_alloc_req);
+  // STQ allocation fires only when rename accepts the bundle.
+  assign st_alloc_fire = rename_fire && (|st_alloc_req);
 
   // =========================================================
   // ARF (8 read ports)
@@ -1151,7 +1192,7 @@ module backend #(
   logic [Cfg.XLEN-1:0] lsu_dispatch_v2[0:3];
   logic [ROB_IDX_WIDTH-1:0] lsu_dispatch_q2[0:3];
   logic lsu_dispatch_r2[0:3];
-  logic [SB_IDX_WIDTH-1:0] lsu_dispatch_sb_id[0:3];
+  logic [ST_IDX_WIDTH-1:0] lsu_dispatch_st_id[0:3];
 
   logic [3:0] csr_dispatch_valid;
   decode_pkg::uop_t csr_dispatch_op[0:3];
@@ -1202,7 +1243,7 @@ module backend #(
       lsu_dispatch_v2[k] = '0;
       lsu_dispatch_q2[k] = '0;
       lsu_dispatch_r2[k] = 1'b0;
-      lsu_dispatch_sb_id[k] = '0;
+      lsu_dispatch_st_id[k] = '0;
 
       csr_dispatch_op[k] = '0;
       csr_dispatch_dst[k] = '0;
@@ -1271,7 +1312,7 @@ module backend #(
             lsu_dispatch_v2[lsu_k]    = issue_v2[i];
             lsu_dispatch_q2[lsu_k]    = issue_q2[i];
             lsu_dispatch_r2[lsu_k]    = issue_r2[i];
-            lsu_dispatch_sb_id[lsu_k] = rob_dispatch_sb_id[i];
+            lsu_dispatch_st_id[lsu_k] = rob_dispatch_st_id[i];
 
             lsu_k++;
           end
@@ -1411,7 +1452,7 @@ module backend #(
       .DATA_W(Cfg.XLEN),
       .TAG_W (ROB_IDX_WIDTH),
       .CDB_W (WB_WIDTH),
-      .SB_W  (SB_IDX_WIDTH)
+      .ST_W  (ST_IDX_WIDTH)
   ) u_issue_lsu (
       .clk(clk_i),
       .rst_n(rst_ni),
@@ -1426,7 +1467,7 @@ module backend #(
       .dispatch_v2   (lsu_dispatch_v2),
       .dispatch_q2   (lsu_dispatch_q2),
       .dispatch_r2   (lsu_dispatch_r2),
-      .dispatch_sb_id(lsu_dispatch_sb_id),
+      .dispatch_st_id(lsu_dispatch_st_id),
 
       .rob_head_i(rob_head_ptr),
       .mispred_block_i(lsu_issue_block_mispred),
@@ -1446,7 +1487,7 @@ module backend #(
       .lsu_v1   (lsu_v1),
       .lsu_v2   (lsu_v2),
       .lsu_dst  (lsu_dst),
-      .lsu_sb_id(lsu_sb_id)
+      .lsu_stq_id(lsu_stq_id)
   );
 
   issue_single #(
@@ -1641,7 +1682,7 @@ module backend #(
   decode_pkg::uop_t lsu_uop;
   logic [Cfg.XLEN-1:0] lsu_v1, lsu_v2;
   logic [ROB_IDX_WIDTH-1:0] lsu_dst;
-  logic [SB_IDX_WIDTH-1:0] lsu_sb_id;
+  logic [ST_IDX_WIDTH-1:0] lsu_stq_id;
 
   logic lsu_req_ready;
   logic [LSU_WB_PORTS-1:0] lsu_wb_valid;
@@ -1704,9 +1745,9 @@ module backend #(
   logic ifu_pte_upd_ready;
   logic [31:0] ifu_pte_upd_paddr;
   logic [31:0] ifu_pte_upd_data;
-  logic [$clog2(LSU_LQ_DEPTH + 1)-1:0] lsu_lq_count_dbg;
-  logic lsu_lq_head_valid_dbg;
-  logic [ROB_IDX_WIDTH-1:0] lsu_lq_head_rob_tag_dbg;
+  logic [$clog2(LSU_LDQ_DEPTH + 1)-1:0] lsu_ldq_count_dbg;
+  logic lsu_ldq_head_valid_dbg;
+  logic [ROB_IDX_WIDTH-1:0] lsu_ldq_head_rob_tag_dbg;
   logic [$clog2(LSU_SQ_DEPTH + 1)-1:0] lsu_sq_count_dbg;
   logic lsu_sq_head_valid_dbg;
   logic [ROB_IDX_WIDTH-1:0] lsu_sq_head_rob_tag_dbg;
@@ -1752,11 +1793,11 @@ module backend #(
       .ifu_pte_ld_rsp_valid_o(ifu_pte_rsp_valid),
       .ifu_pte_ld_rsp_data_o(ifu_pte_rsp_data),
 
-      .sb_st_req_valid_i(sb_dcache_req_valid),
-      .sb_st_req_ready_o(sb_dcache_req_ready),
-      .sb_st_req_addr_i(sb_dcache_req_addr),
-      .sb_st_req_data_i(sb_dcache_req_data),
-      .sb_st_req_op_i(sb_dcache_req_op),
+      .st_dcache_req_valid_i(st_dcache_req_valid),
+      .st_dcache_req_ready_o(st_dcache_req_ready),
+      .st_dcache_req_addr_i(st_dcache_req_addr),
+      .st_dcache_req_data_i(st_dcache_req_data),
+      .st_dcache_req_op_i(st_dcache_req_op),
 
       .pte_st_req_valid_i(lsu_pte_upd_valid),
       .pte_st_req_ready_o(lsu_pte_upd_ready),
@@ -1790,7 +1831,7 @@ module backend #(
       .Cfg(Cfg),
       .ROB_IDX_WIDTH(ROB_IDX_WIDTH),
       .SB_DEPTH(SB_DEPTH),
-      .LQ_DEPTH(LSU_LQ_DEPTH),
+      .LDQ_DEPTH(LSU_LDQ_DEPTH),
       .SQ_DEPTH(LSU_SQ_DEPTH),
       .N_LSU(LSU_GROUP_SIZE),
       .COMMIT_WIDTH(COMMIT_WIDTH),
@@ -1811,28 +1852,47 @@ module backend #(
       .rs2_data_i (lsu_v2),
       .rob_tag_i  (lsu_dst),
       .rob_head_i (rob_head_ptr),
-      .sb_id_i    (lsu_sb_id),
+      .st_id_i    (lsu_stq_id),
       .mmu_satp_i(csr_satp_state),
       .mmu_priv_i(csr_priv_mode),
       .mmu_sum_i(csr_mstatus_sum),
       .mmu_mxr_i(csr_mstatus_mxr),
       .mmu_sfence_vma_i(csr_sfence_vma_flush),
 
-      .sb_ex_valid_o(sb_ex_valid),
-      .sb_ex_sb_id_o(sb_ex_sb_id),
-      .sb_ex_addr_o (sb_ex_addr),
-      .sb_ex_data_o (sb_ex_data),
-      .sb_ex_op_o   (sb_ex_op),
-      .sb_ex_rob_idx_o(sb_ex_rob_idx),
+      .st_ex_valid_o(st_ex_valid),
+      .st_ex_st_id_o(st_ex_st_id),
+      .st_ex_addr_o (st_ex_addr),
+      .st_ex_data_o (st_ex_data),
+      .st_ex_op_o   (st_ex_op),
+      .st_ex_rob_idx_o(st_ex_rob_idx),
 
-      .sb_load_addr_o(sb_load_addr),
-      .sb_load_be_o(sb_load_be),
-      .sb_load_rob_idx_o(sb_load_rob_idx),
-      .sb_load_hit_i(sb_load_hit),
-      .sb_load_data_i(sb_load_data),
-      .sb_order_query_valid_o(sb_order_query_valid),
-      .sb_order_query_sb_id_o(sb_order_query_sb_id),
-      .sb_order_query_clear_i(sb_order_query_clear),
+      .stq_fwd_addr_o(stq_fwd_addr),
+      .stq_fwd_be_o(stq_fwd_be),
+      .stq_fwd_rob_idx_o(stq_fwd_rob_idx),
+      .stq_fwd_hit_i(stq_fwd_hit),
+      .stq_fwd_data_i(stq_fwd_data),
+      .st_order_query_valid_o(st_order_query_valid),
+      .st_order_query_st_id_o(st_order_query_st_id),
+      .st_order_query_clear_i(st_order_query_clear),
+
+      .st_complete_valid_o(st_complete_valid),
+      .st_complete_id_o(st_complete_id),
+      .st_complete_rob_idx_o(st_complete_rob_idx),
+      .st_complete_data_o(st_complete_data),
+      .st_complete_exception_o(st_complete_exception),
+      .st_complete_ecause_o(st_complete_ecause),
+      .st_complete_is_mispred_o(st_complete_is_mispred),
+      .st_complete_redirect_pc_o(st_complete_redirect_pc),
+      .st_complete_pc_o(st_complete_pc),
+      .st_wb_fire_o(st_wb_fire),
+      .st_wb_valid_i(st_wb_valid),
+      .st_wb_rob_idx_i(st_wb_rob_idx),
+      .st_wb_data_i(st_wb_data),
+      .st_wb_exception_i(st_wb_exception),
+      .st_wb_ecause_i(st_wb_ecause),
+      .st_wb_is_mispred_i(st_wb_is_mispred),
+      .st_wb_redirect_pc_i(st_wb_redirect_pc),
+      .st_unreported_count_i(st_unreported_count),
 
       .ld_req_valid_o(lsu_ld_req_valid),
       .ld_req_ready_i(lsu_ld_req_ready),
@@ -1880,9 +1940,9 @@ module backend #(
       .fast_lsu_is_mispred_o(lsu_fast_is_mispred),
       .fast_lsu_redirect_pc_o(lsu_fast_redirect_pc),
 
-      .dbg_lq_count_o(lsu_lq_count_dbg),
-      .dbg_lq_head_valid_o(lsu_lq_head_valid_dbg),
-      .dbg_lq_head_rob_tag_o(lsu_lq_head_rob_tag_dbg),
+      .dbg_ldq_count_o(lsu_ldq_count_dbg),
+      .dbg_ldq_head_valid_o(lsu_ldq_head_valid_dbg),
+      .dbg_ldq_head_rob_tag_o(lsu_ldq_head_rob_tag_dbg),
       .dbg_sq_count_o(lsu_sq_count_dbg),
       .dbg_sq_head_valid_o(lsu_sq_head_valid_dbg),
       .dbg_sq_head_rob_tag_o(lsu_sq_head_rob_tag_dbg)

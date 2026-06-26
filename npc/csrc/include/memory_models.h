@@ -1146,11 +1146,11 @@ inline void tick(Top *top, MemSystem &mem, VerilatedVcdC *tfp,
   mem.drive(top);
   top->clk_i = 0;
   top->eval();
-  if (top->dbg_sb_dcache_req_valid_o && top->dbg_sb_dcache_req_ready_o) {
-    const uint32_t addr = top->dbg_sb_dcache_req_addr_o;
+  if (top->dbg_st_dcache_req_valid_o && top->dbg_st_dcache_req_ready_o) {
+    const uint32_t addr = top->dbg_st_dcache_req_addr_o;
     if (!UnifiedMem::in_pmem(addr)) {
-      const uint32_t data = top->dbg_sb_dcache_req_data_o;
-      const uint32_t op = top->dbg_sb_dcache_req_op_o;
+      const uint32_t data = top->dbg_st_dcache_req_data_o;
+      const uint32_t op = top->dbg_st_dcache_req_op_o;
       mem.mem.write_store(addr, data, op);
     }
   }

@@ -33,11 +33,11 @@ module backend_mmu_dcache_mux #(
     output logic                               ifu_pte_ld_rsp_valid_o,
     output logic [31:0]                        ifu_pte_ld_rsp_data_o,
 
-    input  logic                               sb_st_req_valid_i,
-    output logic                               sb_st_req_ready_o,
-    input  logic [PLEN-1:0]                    sb_st_req_addr_i,
-    input  logic [XLEN-1:0]                    sb_st_req_data_i,
-    input  decode_pkg::lsu_op_e                sb_st_req_op_i,
+    input  logic                               st_dcache_req_valid_i,
+    output logic                               st_dcache_req_ready_o,
+    input  logic [PLEN-1:0]                    st_dcache_req_addr_i,
+    input  logic [XLEN-1:0]                    st_dcache_req_data_i,
+    input  decode_pkg::lsu_op_e                st_dcache_req_op_i,
 
     input  logic                               pte_st_req_valid_i,
     output logic                               pte_st_req_ready_o,
@@ -79,7 +79,7 @@ module backend_mmu_dcache_mux #(
 
   logic st_sel_lsu_pte;
   logic st_sel_ifu_pte;
-  logic st_sel_sb;
+  logic st_sel_stq;
 
   logic mmu_ld_inflight_q;
   logic mmu_ld_owner_q;
@@ -143,19 +143,19 @@ module backend_mmu_dcache_mux #(
 
   assign st_sel_lsu_pte = pte_st_req_valid_i;
   assign st_sel_ifu_pte = !st_sel_lsu_pte && ifu_pte_st_req_valid_i;
-  assign st_sel_sb = !st_sel_lsu_pte && !st_sel_ifu_pte && sb_st_req_valid_i;
+  assign st_sel_stq = !st_sel_lsu_pte && !st_sel_ifu_pte && st_dcache_req_valid_i;
 
-  assign dcache_st_req_valid_o = st_sel_lsu_pte || st_sel_ifu_pte || st_sel_sb;
+  assign dcache_st_req_valid_o = st_sel_lsu_pte || st_sel_ifu_pte || st_sel_stq;
   assign dcache_st_req_addr_o = st_sel_lsu_pte ? pte_st_req_paddr_i[PLEN-1:0] :
                                 st_sel_ifu_pte ? ifu_pte_st_req_paddr_i[PLEN-1:0] :
-                                sb_st_req_addr_i;
+                                st_dcache_req_addr_i;
   assign dcache_st_req_data_o = st_sel_lsu_pte ? {{(XLEN-32){1'b0}}, pte_st_req_data_i} :
                                 st_sel_ifu_pte ? {{(XLEN-32){1'b0}}, ifu_pte_st_req_data_i} :
-                                sb_st_req_data_i;
-  assign dcache_st_req_op_o = (st_sel_lsu_pte || st_sel_ifu_pte) ? decode_pkg::LSU_SW : sb_st_req_op_i;
+                                st_dcache_req_data_i;
+  assign dcache_st_req_op_o = (st_sel_lsu_pte || st_sel_ifu_pte) ? decode_pkg::LSU_SW : st_dcache_req_op_i;
 
   assign pte_st_req_ready_o = st_sel_lsu_pte && dcache_st_req_ready_i;
   assign ifu_pte_st_req_ready_o = st_sel_ifu_pte && dcache_st_req_ready_i;
-  assign sb_st_req_ready_o = st_sel_sb && dcache_st_req_ready_i;
+  assign st_dcache_req_ready_o = st_sel_stq && dcache_st_req_ready_i;
 
 endmodule

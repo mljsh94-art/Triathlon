@@ -319,7 +319,7 @@ int main(int argc, char **argv) {
     npc::tick(top, mem, tfp, sim_time);
     profile.observe_cycle(top);
 
-    observer.service_store_buffer(cycles, top, mem);
+    observer.service_stq(cycles, top, mem);
     profile.record_flush(cycles, top, mem.mem);
 
     if (auto exit_code = npc::try_ebreak_on_exception_flush(args, top, mem.mem, rf, cycles,

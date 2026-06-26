@@ -21,7 +21,7 @@ void clear_inputs(Vtb_rob_exception *top) {
   top->dispatch_has_rd_i = 0;
   top->dispatch_is_branch_i = 0;
   top->dispatch_is_store_i = 0;
-  top->dispatch_sb_id_i = 0;
+  top->dispatch_st_id_i = 0;
 
   top->wb_valid_i = 0;
   top->wb_rob_index_i = 0;

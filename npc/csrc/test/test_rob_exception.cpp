@@ -36,7 +36,7 @@ void clear_inputs(Vtb_rob_exception *top) {
   top->dispatch_has_rd_i = 0;
   top->dispatch_is_branch_i = 0;
   top->dispatch_is_store_i = 0;
-  top->dispatch_sb_id_i = 0;
+  top->dispatch_st_id_i = 0;
 
   top->wb_valid_i = 0;
   top->wb_rob_index_i = 0;
@@ -240,7 +240,7 @@ void test_dual_wb_different_tags(Vtb_rob_exception *top) {
   expect((top->query_data_o & 0xFFFFFFFFu) == 0x22222222u, "tag1 query data after dual wb");
 }
 
-void test_store_commit_sb_id(Vtb_rob_exception *top) {
+void test_store_commit_st_id(Vtb_rob_exception *top) {
   constexpr uint32_t kSbId = 2u;
 
   clear_inputs(top);
@@ -249,7 +249,7 @@ void test_store_commit_sb_id(Vtb_rob_exception *top) {
   top->dispatch_fu_type_i = kFuLsu;
   top->dispatch_has_rd_i = 0;
   top->dispatch_is_store_i = 1;
-  top->dispatch_sb_id_i = kSbId;
+  top->dispatch_st_id_i = kSbId;
   eval_comb(top);
   expect(top->rob_ready_o == 1, "store dispatch accepted");
   tick(top);
@@ -265,7 +265,7 @@ void test_store_commit_sb_id(Vtb_rob_exception *top) {
   eval_comb(top);
   expect(top->commit_valid_o == 1, "store commit valid");
   expect(top->commit_is_store_o == 1, "store commit flagged");
-  expect(top->commit_sb_id_o == kSbId, "store commit sb_id matches dispatch");
+  expect(top->commit_st_id_o == kSbId, "store commit st_id matches dispatch");
   tick(top);
 }
 
@@ -315,7 +315,7 @@ int main(int argc, char **argv) {
   reset(top);
   test_dual_wb_different_tags(top);
   reset(top);
-  test_store_commit_sb_id(top);
+  test_store_commit_st_id(top);
   reset(top);
   test_sync_exception_not_direct_flush(top);
   test_async_exception_redirect_flush(top);

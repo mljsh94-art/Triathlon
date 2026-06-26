@@ -237,15 +237,15 @@ void SimObserver::emit_sv32_fault_walk(uint64_t cycle, Vtb_triathlon *top, MemSy
   std::cout.flags(f);
 }
 
-void SimObserver::service_store_buffer(uint64_t cycle, Vtb_triathlon *top, MemSystem &mem) {
-  if (!top->dbg_sb_dcache_req_valid_o || !top->dbg_sb_dcache_req_ready_o ||
-      !UnifiedMem::in_pmem(top->dbg_sb_dcache_req_addr_o)) {
+void SimObserver::service_stq(uint64_t cycle, Vtb_triathlon *top, MemSystem &mem) {
+  if (!top->dbg_st_dcache_req_valid_o || !top->dbg_st_dcache_req_ready_o ||
+      !UnifiedMem::in_pmem(top->dbg_st_dcache_req_addr_o)) {
     return;
   }
 
-  const uint32_t addr = top->dbg_sb_dcache_req_addr_o;
-  const uint32_t data = top->dbg_sb_dcache_req_data_o;
-  const uint32_t op = top->dbg_sb_dcache_req_op_o;
+  const uint32_t addr = top->dbg_st_dcache_req_addr_o;
+  const uint32_t data = top->dbg_st_dcache_req_data_o;
+  const uint32_t op = top->dbg_st_dcache_req_op_o;
   const uint32_t aligned = addr & ~0x3u;
   const bool watch_pt_write = args_.linux_early_debug && (aligned >= kLinuxPtWatchBase) &&
                               (aligned < kLinuxPtWatchEnd) &&
@@ -876,19 +876,19 @@ void SimObserver::emit_progress(uint64_t cycle, Vtb_triathlon *top, MemSystem &m
                 << "/" << static_cast<int>(top->dbg_rob_q2_is_store_o)
                 << "/0x" << std::hex << static_cast<uint32_t>(top->dbg_rob_q2_pc_o)
                 << " sb(cnt/h/t)=0x" << std::hex
-                << static_cast<uint32_t>(top->dbg_sb_count_o)
-                << "/0x" << static_cast<uint32_t>(top->dbg_sb_head_ptr_o)
-                << "/0x" << static_cast<uint32_t>(top->dbg_sb_tail_ptr_o)
-                << " sb_head(v/c/a/d/addr)=" << std::dec
-                << static_cast<int>(top->dbg_sb_head_valid_o) << "/"
-                << static_cast<int>(top->dbg_sb_head_committed_o) << "/"
-                << static_cast<int>(top->dbg_sb_head_addr_valid_o) << "/"
-                << static_cast<int>(top->dbg_sb_head_data_valid_o) << "/0x"
-                << std::hex << top->dbg_sb_head_addr_o
-                << " sb_dcache(v/r/addr)= " << std::dec
-                << static_cast<int>(top->dbg_sb_dcache_req_valid_o) << "/"
-                << static_cast<int>(top->dbg_sb_dcache_req_ready_o) << "/0x"
-                << std::hex << top->dbg_sb_dcache_req_addr_o
+                << static_cast<uint32_t>(top->dbg_st_count_o)
+                << "/0x" << static_cast<uint32_t>(top->dbg_st_head_ptr_o)
+                << "/0x" << static_cast<uint32_t>(top->dbg_st_tail_ptr_o)
+                << " stq_head(v/c/a/d/addr)=" << std::dec
+                << static_cast<int>(top->dbg_st_head_valid_o) << "/"
+                << static_cast<int>(top->dbg_st_head_committed_o) << "/"
+                << static_cast<int>(top->dbg_st_head_addr_valid_o) << "/"
+                << static_cast<int>(top->dbg_st_head_data_valid_o) << "/0x"
+                << std::hex << top->dbg_st_head_addr_o
+                << " st_dcache(v/r/addr)= " << std::dec
+                << static_cast<int>(top->dbg_st_dcache_req_valid_o) << "/"
+                << static_cast<int>(top->dbg_st_dcache_req_ready_o) << "/0x"
+                << std::hex << top->dbg_st_dcache_req_addr_o
                 << " dc_mshr(cnt/full/empty)=" << std::dec
                 << static_cast<uint32_t>(top->dbg_dc_mshr_count_o) << "/"
                 << static_cast<int>(top->dbg_dc_mshr_full_o) << "/"
@@ -931,7 +931,7 @@ void SimObserver::emit_progress(uint64_t cycle, Vtb_triathlon *top, MemSystem &m
                 << " lsu_rs_head(q1/q2/sb)=0x" << std::hex
                 << static_cast<uint32_t>(top->dbg_lsu_rs_head_q1_o) << "/0x"
                 << static_cast<uint32_t>(top->dbg_lsu_rs_head_q2_o) << "/0x"
-                << static_cast<uint32_t>(top->dbg_lsu_rs_head_sb_id_o)
+                << static_cast<uint32_t>(top->dbg_lsu_rs_head_st_id_o)
                 << " lsu_rs_head(ld/st)=" << std::dec
                 << static_cast<int>(top->dbg_lsu_rs_head_is_load_o) << "/"
                 << static_cast<int>(top->dbg_lsu_rs_head_is_store_o)
@@ -939,14 +939,14 @@ void SimObserver::emit_progress(uint64_t cycle, Vtb_triathlon *top, MemSystem &m
                 << static_cast<int>(top->dbg_lsu_ld_req_valid_o) << "/"
                 << static_cast<int>(top->dbg_lsu_ld_req_ready_o) << "/"
                 << static_cast<int>(top->dbg_lsu_ld_rsp_valid_o)
-                << " lsu_grp(req(ld/st)/alloc(lq/sq)/pend/mmu/lq/sq)="
+                << " lsu_grp(req(ld/st)/alloc(ldq/stq)/pend/mmu/ldq/stq)="
                 << static_cast<int>(top->dbg_lsu_load_req_ready_o) << "/"
                 << static_cast<int>(top->dbg_lsu_store_req_ready_o) << "/"
-                << static_cast<int>(top->dbg_lsu_lq_alloc_ready_o) << "/"
+                << static_cast<int>(top->dbg_lsu_ldq_alloc_ready_o) << "/"
                 << static_cast<int>(top->dbg_lsu_sq_alloc_ready_o) << "/"
                 << static_cast<int>(top->dbg_lsu_pend_valid_o) << "/"
                 << static_cast<uint32_t>(top->dbg_lsu_mmu_state_o) << "/"
-                << static_cast<uint32_t>(top->dbg_lsu_lq_count_o) << "/"
+                << static_cast<uint32_t>(top->dbg_lsu_ldq_count_o) << "/"
                 << static_cast<uint32_t>(top->dbg_lsu_sq_count_o)
                 << " flush=" << static_cast<int>(top->backend_flush_o)
                 << " dc_miss(v/r)="

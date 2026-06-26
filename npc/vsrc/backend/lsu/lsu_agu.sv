@@ -1,4 +1,4 @@
-// vsrc/backend/execute/lsu_agu.sv
+// vsrc/backend/lsu/lsu_agu.sv
 import config_pkg::*;
 import decode_pkg::*;
 

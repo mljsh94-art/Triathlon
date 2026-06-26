@@ -5,7 +5,7 @@ module reservation_station_lsu #(
     parameter                   RS_IDX_W = $clog2(Cfg.RS_DEPTH),
     parameter                   TAG_W    = 6,
     parameter                   CDB_W    = 4,
-    parameter                   SB_W     = 4
+    parameter                   ST_W     = 4
 ) (
     input wire clk,
     input wire rst_n,
@@ -24,7 +24,7 @@ module reservation_station_lsu #(
     input wire              [DATA_W-1:0] in_v2     [0:RS_DEPTH-1],
     input wire              [ TAG_W-1:0] in_q2     [0:RS_DEPTH-1],
     input wire                           in_r2     [0:RS_DEPTH-1],
-    input wire              [  SB_W-1:0] in_sb_id  [0:RS_DEPTH-1],
+    input wire              [  ST_W-1:0] in_st_id  [0:RS_DEPTH-1],
 
     input wire [ CDB_W-1:0] cdb_valid,
     input wire [ TAG_W-1:0] cdb_tag  [0:CDB_W-1],
@@ -47,8 +47,8 @@ module reservation_station_lsu #(
     output logic [  DATA_W-1:0] out_v1_1,
     output logic [  DATA_W-1:0] out_v2_0,
     output logic [  DATA_W-1:0] out_v2_1,
-    output logic [   SB_W-1:0]  out_sb_id_0,
-    output logic [   SB_W-1:0]  out_sb_id_1,
+    output logic [   ST_W-1:0]  out_st_id_0,
+    output logic [   ST_W-1:0]  out_st_id_1,
     output logic [   TAG_W-1:0] dst_tag_o[0:RS_DEPTH-1]
 );
 
@@ -65,7 +65,7 @@ module reservation_station_lsu #(
   reg               [   TAG_W-1:0] q2_arr [0:RS_DEPTH-1];
   reg                              r2_arr [0:RS_DEPTH-1];
 
-  reg               [   SB_W-1:0]  sb_arr [0:RS_DEPTH-1];
+  reg               [   ST_W-1:0]  st_arr [0:RS_DEPTH-1];
 
   logic             [RS_DEPTH-1:0] busy_d;
   decode_pkg::uop_t                op_arr_d [0:RS_DEPTH-1];
@@ -76,7 +76,7 @@ module reservation_station_lsu #(
   logic             [  DATA_W-1:0] v2_arr_d [0:RS_DEPTH-1];
   logic             [   TAG_W-1:0] q2_arr_d [0:RS_DEPTH-1];
   logic                            r2_arr_d [0:RS_DEPTH-1];
-  logic             [   SB_W-1:0]  sb_arr_d [0:RS_DEPTH-1];
+  logic             [   ST_W-1:0]  st_arr_d [0:RS_DEPTH-1];
 `ifndef SYNTHESIS
   localparam int unsigned RS_LSU_TRACE_BUDGET = 512;
   logic [31:0] rs_lsu_trace_cnt_q;
@@ -122,7 +122,7 @@ module reservation_station_lsu #(
     v2_arr_d = v2_arr;
     q2_arr_d = q2_arr;
     r2_arr_d = r2_arr;
-    sb_arr_d = sb_arr;
+    st_arr_d = st_arr;
 
     for (int i = 0; i < RS_DEPTH; i++) begin
       if (issue_grant[i]) begin
@@ -131,7 +131,7 @@ module reservation_station_lsu #(
         busy_d[i]    = 1'b1;
         op_arr_d[i]  = in_op[i];
         dst_arr_d[i] = in_dst_tag[i];
-        sb_arr_d[i]  = in_sb_id[i];
+        st_arr_d[i]  = in_st_id[i];
 
         v1_arr_d[i]  = in_v1[i];
         q1_arr_d[i]  = in_q1[i];
@@ -192,7 +192,7 @@ module reservation_station_lsu #(
       v2_arr <= v2_arr_d;
       q2_arr <= q2_arr_d;
       r2_arr <= r2_arr_d;
-      sb_arr <= sb_arr_d;
+      st_arr <= st_arr_d;
     end
   end
 
@@ -230,13 +230,13 @@ module reservation_station_lsu #(
   assign out_dst_tag_0 = dst_arr[sel_idx_0];
   assign out_v1_0      = v1_arr[sel_idx_0];
   assign out_v2_0      = v2_arr[sel_idx_0];
-  assign out_sb_id_0   = sb_arr[sel_idx_0];
+  assign out_st_id_0   = st_arr[sel_idx_0];
   // Port 1
   assign out_op_1      = op_arr[sel_idx_1];
   assign out_dst_tag_1 = dst_arr[sel_idx_1];
   assign out_v1_1      = v1_arr[sel_idx_1];
   assign out_v2_1      = v2_arr[sel_idx_1];
-  assign out_sb_id_1   = sb_arr[sel_idx_1];
+  assign out_st_id_1   = st_arr[sel_idx_1];
 
   assign busy_vector   = busy;
 
@@ -267,7 +267,7 @@ module reservation_station_lsu #(
         if (entry_wen[i] && watch_lsu_pc(in_op[i].pc) &&
             ((rs_lsu_trace_cnt_q + trace_inc) < RS_LSU_TRACE_BUDGET)) begin
           $display("[rs-lsu-enq] idx=%0d pc=%h dst=%0d sb=%0d in_v1=%h in_q1=%0d in_r1=%0d in_v2=%h in_q2=%0d in_r2=%0d grant=%0d busy_old=%0d",
-                   i, in_op[i].pc, in_dst_tag[i], in_sb_id[i],
+                   i, in_op[i].pc, in_dst_tag[i], in_st_id[i],
                    in_v1[i], in_q1[i], in_r1[i], in_v2[i], in_q2[i], in_r2[i],
                    issue_grant[i], busy[i]);
           trace_inc++;
@@ -275,7 +275,7 @@ module reservation_station_lsu #(
         if (issue_grant[i] && busy[i] && watch_lsu_pc(op_arr[i].pc) &&
             ((rs_lsu_trace_cnt_q + trace_inc) < RS_LSU_TRACE_BUDGET)) begin
           $display("[rs-lsu-deq] idx=%0d pc=%h dst=%0d sb=%0d v1=%h q1=%0d r1=%0d v2=%h q2=%0d r2=%0d ready=%0d",
-                   i, op_arr[i].pc, dst_arr[i], sb_arr[i],
+                   i, op_arr[i].pc, dst_arr[i], st_arr[i],
                    v1_arr[i], q1_arr[i], r1_arr[i], v2_arr[i], q2_arr[i], r2_arr[i], ready_mask[i]);
           trace_inc++;
         end

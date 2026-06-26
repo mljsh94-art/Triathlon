@@ -35,16 +35,16 @@ uint32_t packed_field(uint32_t value, int idx, int width) {
   return (value >> (idx * width)) & mask;
 }
 
-uint32_t lsu_lane_state(const Vtb_triathlon *top, int idx) {
-  return packed_field(static_cast<uint32_t>(top->dbg_lsu_lane_state_o), idx, 3);
+uint32_t lsu_ld_pipe_state(const Vtb_triathlon *top, int idx) {
+  return packed_field(static_cast<uint32_t>(top->dbg_lsu_ld_pipe_state_o), idx, 3);
 }
 
-uint32_t lsu_lane_req_tag(const Vtb_triathlon *top, int idx) {
-  return packed_field(static_cast<uint32_t>(top->dbg_lsu_lane_req_tag_o), idx, kDebugRobIdxWidth);
+uint32_t lsu_ld_pipe_req_tag(const Vtb_triathlon *top, int idx) {
+  return packed_field(static_cast<uint32_t>(top->dbg_lsu_ld_pipe_req_tag_o), idx, kDebugRobIdxWidth);
 }
 
-uint32_t lsu_lane_wb_rob_idx(const Vtb_triathlon *top, int idx) {
-  return packed_field(static_cast<uint32_t>(top->dbg_lsu_lane_wb_rob_idx_o), idx, kDebugRobIdxWidth);
+uint32_t lsu_ld_pipe_wb_rob_idx(const Vtb_triathlon *top, int idx) {
+  return packed_field(static_cast<uint32_t>(top->dbg_lsu_ld_pipe_wb_rob_idx_o), idx, kDebugRobIdxWidth);
 }
 
 uint32_t wb_rob_idx(const Vtb_triathlon *top, int idx) {
@@ -83,16 +83,16 @@ bool lsu_fu_ready(const Vtb_triathlon *top) {
 LsuHeadLaneSnapshot find_lsu_head_lane(const Vtb_triathlon *top) {
   LsuHeadLaneSnapshot snap;
   const uint32_t head = static_cast<uint32_t>(top->dbg_rob_head_ptr_o);
-  const uint32_t lane_wb_valid = static_cast<uint32_t>(top->dbg_lsu_lane_wb_valid_o);
-  const uint32_t lane_ld_req_valid = static_cast<uint32_t>(top->dbg_lsu_lane_ld_req_valid_o);
-  const uint32_t lane_ld_rsp_ready = static_cast<uint32_t>(top->dbg_lsu_lane_ld_rsp_ready_o);
+  const uint32_t lane_wb_valid = static_cast<uint32_t>(top->dbg_lsu_ld_pipe_wb_valid_o);
+  const uint32_t lane_ld_req_valid = static_cast<uint32_t>(top->dbg_lsu_ld_pipe_ld_req_valid_o);
+  const uint32_t lane_ld_rsp_ready = static_cast<uint32_t>(top->dbg_lsu_ld_pipe_ld_rsp_ready_o);
 
   for (int i = 0; i < kDebugLaneCount; i++) {
     if (bit_at(lane_wb_valid, i) &&
-        lsu_lane_wb_rob_idx(top, i) == head) {
+        lsu_ld_pipe_wb_rob_idx(top, i) == head) {
       snap.found = true;
       snap.lane = static_cast<uint32_t>(i);
-      snap.state = lsu_lane_state(top, i);
+      snap.state = lsu_ld_pipe_state(top, i);
       snap.ld_req_valid = bit_at(lane_ld_req_valid, i);
       snap.ld_rsp_ready = bit_at(lane_ld_rsp_ready, i);
       snap.wb_valid = true;
@@ -101,8 +101,8 @@ LsuHeadLaneSnapshot find_lsu_head_lane(const Vtb_triathlon *top) {
   }
 
   for (int i = 0; i < kDebugLaneCount; i++) {
-    const uint32_t state = lsu_lane_state(top, i);
-    if (state != 0u && lsu_lane_req_tag(top, i) == head) {
+    const uint32_t state = lsu_ld_pipe_state(top, i);
+    if (state != 0u && lsu_ld_pipe_req_tag(top, i) == head) {
       snap.found = true;
       snap.lane = static_cast<uint32_t>(i);
       snap.state = state;
@@ -211,9 +211,9 @@ const char *classify_lsu_head_lane_detail(const Vtb_triathlon *top, bool nonbp) 
                    : "rob_lsu_incomplete_sm_idle";
     case 1u:
       if (lane.ld_req_valid && !top->dbg_lsu_ld_req_ready_o) {
-        if (top->dbg_sb_dcache_req_valid_o && !top->dbg_sb_dcache_req_ready_o) {
-          return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_sb_conflict_nonbp"
-                       : "rob_lsu_wait_ld_req_ready_sb_conflict";
+        if (top->dbg_st_dcache_req_valid_o && !top->dbg_st_dcache_req_ready_o) {
+          return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_st_conflict_nonbp"
+                       : "rob_lsu_wait_ld_req_ready_st_conflict";
         }
         if (top->dbg_dc_mshr_full_o || !top->dbg_dc_mshr_alloc_ready_o) {
           return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_mshr_blocked_nonbp"
@@ -408,22 +408,22 @@ void ProfileCollector::on_no_commit_cycle(uint64_t cycles,
               << " lsu_inflight(tag/addr)=0x" << std::hex
               << static_cast<uint32_t>(top->dbg_lsu_inflight_tag_o)
               << "/0x" << top->dbg_lsu_inflight_addr_o
-              << " lsu_lane_state=0x"
-              << lsu_lane_state(top, 0)
-              << "/" << lsu_lane_state(top, 1)
-              << "/" << lsu_lane_state(top, 2)
-              << "/" << lsu_lane_state(top, 3)
-              << " lsu_lane_req_tag=0x"
-              << lsu_lane_req_tag(top, 0)
-              << "/" << lsu_lane_req_tag(top, 1)
-              << "/" << lsu_lane_req_tag(top, 2)
-              << "/" << lsu_lane_req_tag(top, 3)
-              << " lsu_lane_wb(v/tag)=0x"
-              << std::hex << static_cast<uint32_t>(top->dbg_lsu_lane_wb_valid_o)
-              << "/0x" << lsu_lane_wb_rob_idx(top, 0)
-              << "/" << lsu_lane_wb_rob_idx(top, 1)
-              << "/" << lsu_lane_wb_rob_idx(top, 2)
-              << "/" << lsu_lane_wb_rob_idx(top, 3)
+              << " lsu_ld_pipe_state=0x"
+              << lsu_ld_pipe_state(top, 0)
+              << "/" << lsu_ld_pipe_state(top, 1)
+              << "/" << lsu_ld_pipe_state(top, 2)
+              << "/" << lsu_ld_pipe_state(top, 3)
+              << " lsu_ld_pipe_req_tag=0x"
+              << lsu_ld_pipe_req_tag(top, 0)
+              << "/" << lsu_ld_pipe_req_tag(top, 1)
+              << "/" << lsu_ld_pipe_req_tag(top, 2)
+              << "/" << lsu_ld_pipe_req_tag(top, 3)
+              << " lsu_ld_pipe_wb(v/tag)=0x"
+              << std::hex << static_cast<uint32_t>(top->dbg_lsu_ld_pipe_wb_valid_o)
+              << "/0x" << lsu_ld_pipe_wb_rob_idx(top, 0)
+              << "/" << lsu_ld_pipe_wb_rob_idx(top, 1)
+              << "/" << lsu_ld_pipe_wb_rob_idx(top, 2)
+              << "/" << lsu_ld_pipe_wb_rob_idx(top, 3)
               << " lsu_wb(v/tag/store_head)=0x" << static_cast<int>(top->dbg_lsu_wb_valid_o)
               << "/0x" << static_cast<uint32_t>(top->dbg_lsu_wb_rob_idx_o)
               << "/0x" << static_cast<int>(top->dbg_lsu_store_wb_head_valid_o)
@@ -445,14 +445,14 @@ void ProfileCollector::on_no_commit_cycle(uint64_t cycles,
               << "/0x" << std::hex << static_cast<uint32_t>(top->dbg_lsu_grp_alloc_lane_o)
               << "/0x" << static_cast<uint32_t>(top->dbg_lsu_grp_ld_owner_o)
               << std::dec
-              << " lsug(req(ld/st)/alloc(lq/sq)/pend/mmu/lq/sq)="
+              << " lsug(req(ld/st)/alloc(ldq/stq)/pend/mmu/ldq/stq)="
               << static_cast<int>(top->dbg_lsu_load_req_ready_o) << "/"
               << static_cast<int>(top->dbg_lsu_store_req_ready_o) << "/"
-              << static_cast<int>(top->dbg_lsu_lq_alloc_ready_o) << "/"
+              << static_cast<int>(top->dbg_lsu_ldq_alloc_ready_o) << "/"
               << static_cast<int>(top->dbg_lsu_sq_alloc_ready_o) << "/"
               << static_cast<int>(top->dbg_lsu_pend_valid_o) << "/"
               << static_cast<uint32_t>(top->dbg_lsu_mmu_state_o) << "/"
-              << static_cast<uint32_t>(top->dbg_lsu_lq_count_o) << "/"
+              << static_cast<uint32_t>(top->dbg_lsu_ldq_count_o) << "/"
               << static_cast<uint32_t>(top->dbg_lsu_sq_count_o)
               << " lsu_rs(b/r)=0x" << std::hex
               << static_cast<uint32_t>(top->dbg_lsu_rs_busy_o) << "/0x"
@@ -469,17 +469,17 @@ void ProfileCollector::on_no_commit_cycle(uint64_t cycles,
               << " lsu_rs_head(q1/q2/sb)=0x" << std::hex
               << static_cast<uint32_t>(top->dbg_lsu_rs_head_q1_o) << "/0x"
               << static_cast<uint32_t>(top->dbg_lsu_rs_head_q2_o) << "/0x"
-              << static_cast<uint32_t>(top->dbg_lsu_rs_head_sb_id_o)
+              << static_cast<uint32_t>(top->dbg_lsu_rs_head_st_id_o)
               << " lsu_rs_head(ld/st)=" << std::dec
               << static_cast<int>(top->dbg_lsu_rs_head_is_load_o) << "/"
               << static_cast<int>(top->dbg_lsu_rs_head_is_store_o)
-              << " sb_alloc(req/ready/fire)=0x" << std::hex
-              << static_cast<uint32_t>(top->dbg_sb_alloc_req_o)
-              << std::dec << "/" << static_cast<int>(top->dbg_sb_alloc_ready_o) << "/"
-              << static_cast<int>(top->dbg_sb_alloc_fire_o)
-              << " sb_dcache(v/r/addr)=" << static_cast<int>(top->dbg_sb_dcache_req_valid_o)
-              << "/" << static_cast<int>(top->dbg_sb_dcache_req_ready_o) << "/0x"
-              << std::hex << top->dbg_sb_dcache_req_addr_o
+              << " st_alloc(req/ready/fire)=0x" << std::hex
+              << static_cast<uint32_t>(top->dbg_st_alloc_req_o)
+              << std::dec << "/" << static_cast<int>(top->dbg_st_alloc_ready_o) << "/"
+              << static_cast<int>(top->dbg_st_alloc_fire_o)
+              << " st_dcache(v/r/addr)=" << static_cast<int>(top->dbg_st_dcache_req_valid_o)
+              << "/" << static_cast<int>(top->dbg_st_dcache_req_ready_o) << "/0x"
+              << std::hex << top->dbg_st_dcache_req_addr_o
               << " dc_mshr(cnt/full/empty)=" << std::dec
               << static_cast<uint32_t>(top->dbg_dc_mshr_count_o) << "/"
               << static_cast<int>(top->dbg_dc_mshr_full_o) << "/"
@@ -532,16 +532,16 @@ void ProfileCollector::on_no_commit_cycle(uint64_t cycles,
               << "/" << static_cast<int>(top->dbg_rob_q2_is_store_o)
               << "/0x" << std::hex << static_cast<uint32_t>(top->dbg_rob_q2_pc_o)
               << " sb(cnt/h/t)=0x" << std::hex
-              << static_cast<uint32_t>(top->dbg_sb_count_o)
-              << "/0x" << static_cast<uint32_t>(top->dbg_sb_head_ptr_o)
-              << "/0x" << static_cast<uint32_t>(top->dbg_sb_tail_ptr_o)
+              << static_cast<uint32_t>(top->dbg_st_count_o)
+              << "/0x" << static_cast<uint32_t>(top->dbg_st_head_ptr_o)
+              << "/0x" << static_cast<uint32_t>(top->dbg_st_tail_ptr_o)
               << std::dec
-              << " sb_head(v/c/a/d/addr)="
-              << static_cast<int>(top->dbg_sb_head_valid_o) << "/"
-              << static_cast<int>(top->dbg_sb_head_committed_o) << "/"
-              << static_cast<int>(top->dbg_sb_head_addr_valid_o) << "/"
-              << static_cast<int>(top->dbg_sb_head_data_valid_o) << "/0x"
-              << std::hex << top->dbg_sb_head_addr_o
+              << " stq_head(v/c/a/d/addr)="
+              << static_cast<int>(top->dbg_st_head_valid_o) << "/"
+              << static_cast<int>(top->dbg_st_head_committed_o) << "/"
+              << static_cast<int>(top->dbg_st_head_addr_valid_o) << "/"
+              << static_cast<int>(top->dbg_st_head_data_valid_o) << "/0x"
+              << std::hex << top->dbg_st_head_addr_o
               << std::dec << "\n";
     std::cout.flags(f);
   }
@@ -636,7 +636,7 @@ const char *ProfileCollector::classify_decode_blocked_detail_cycle(const Vtb_tri
         if (top->dbg_ifu_pte_req_valid_o) return "lsug_wait_ld_req_not_ready_ifu_pte";
         if (top->dbg_dcache_refill_valid_o) return "lsug_wait_ld_req_not_ready_refill";
         if (top->dbg_dcache_pending_ld_valid_o) return "lsug_wait_ld_req_not_ready_pending_load";
-        if (top->dbg_sb_dcache_req_valid_o && !top->dbg_sb_dcache_req_ready_o) {
+        if (top->dbg_st_dcache_req_valid_o && !top->dbg_st_dcache_req_ready_o) {
           return "lsug_wait_ld_req_not_ready_store_conflict";
         }
         if (top->dbg_dcache_ld_line_in_mshr_o) return "lsug_wait_ld_req_not_ready_mshr_line_hit";
@@ -666,8 +666,8 @@ const char *ProfileCollector::classify_decode_blocked_detail_cycle(const Vtb_tri
   if (top->dbg_dc_store_wait_same_line_o) return "dc_store_wait_same_line";
   if (top->dbg_dc_store_wait_mshr_full_o) return "dc_store_wait_mshr_full";
 
-  if (static_cast<uint32_t>(top->dbg_sb_alloc_req_o) != 0u && !top->dbg_sb_alloc_ready_o) {
-    return "sb_alloc_blocked";
+  if (static_cast<uint32_t>(top->dbg_st_alloc_req_o) != 0u && !top->dbg_st_alloc_ready_o) {
+    return "st_alloc_blocked";
   }
 
   if (top->dbg_lsu_rs_head_valid_o) {
@@ -721,12 +721,12 @@ const char *ProfileCollector::classify_rob_backpressure_detail_cycle(const Vtb_t
   bool is_store = top->dbg_rob_head_is_store_o;
 
   if (is_store) {
-    if (!top->dbg_sb_head_valid_o) return "rob_store_wait_sb_head";
-    if (!top->dbg_sb_head_committed_o) return "rob_store_wait_commit";
-    if (!top->dbg_sb_head_addr_valid_o) return "rob_store_wait_addr";
-    if (!top->dbg_sb_head_data_valid_o) return "rob_store_wait_data";
-    if (top->dbg_sb_dcache_req_valid_o && !top->dbg_sb_dcache_req_ready_o) return "rob_store_wait_dcache";
-    if (!top->dbg_sb_dcache_req_valid_o) return "rob_store_wait_issue";
+    if (!top->dbg_st_head_valid_o) return "rob_store_wait_stq_head";
+    if (!top->dbg_st_head_committed_o) return "rob_store_wait_commit";
+    if (!top->dbg_st_head_addr_valid_o) return "rob_store_wait_addr";
+    if (!top->dbg_st_head_data_valid_o) return "rob_store_wait_data";
+    if (top->dbg_st_dcache_req_valid_o && !top->dbg_st_dcache_req_ready_o) return "rob_store_wait_dcache";
+    if (!top->dbg_st_dcache_req_valid_o) return "rob_store_wait_issue";
     return "rob_store_wait_other";
   }
 
@@ -777,14 +777,14 @@ const char *ProfileCollector::classify_other_detail_cycle(const Vtb_triathlon *t
   }
 
   if (rob_head_is_store) {
-    if (!top->dbg_sb_head_valid_o) return "rob_head_store_wait_sb_head_nonbp";
-    if (!top->dbg_sb_head_committed_o) return "rob_head_store_wait_commit_nonbp";
-    if (!top->dbg_sb_head_addr_valid_o) return "rob_head_store_wait_addr_nonbp";
-    if (!top->dbg_sb_head_data_valid_o) return "rob_head_store_wait_data_nonbp";
-    if (top->dbg_sb_dcache_req_valid_o && !top->dbg_sb_dcache_req_ready_o) {
+    if (!top->dbg_st_head_valid_o) return "rob_head_store_wait_stq_head_nonbp";
+    if (!top->dbg_st_head_committed_o) return "rob_head_store_wait_commit_nonbp";
+    if (!top->dbg_st_head_addr_valid_o) return "rob_head_store_wait_addr_nonbp";
+    if (!top->dbg_st_head_data_valid_o) return "rob_head_store_wait_data_nonbp";
+    if (top->dbg_st_dcache_req_valid_o && !top->dbg_st_dcache_req_ready_o) {
       return "rob_head_store_wait_dcache_nonbp";
     }
-    if (!top->dbg_sb_dcache_req_valid_o) return "rob_head_store_wait_issue_nonbp";
+    if (!top->dbg_st_dcache_req_valid_o) return "rob_head_store_wait_issue_nonbp";
     return "rob_head_store_wait_other_nonbp";
   }
 

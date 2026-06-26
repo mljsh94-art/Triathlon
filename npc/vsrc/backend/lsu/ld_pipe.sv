@@ -1,17 +1,17 @@
-// vsrc/backend/execute/lsu.sv
+// vsrc/backend/lsu/ld_pipe.sv
 import config_pkg::*;
 import decode_pkg::*;
 
 // Simple LSU:
 // - Computes effective address (rs1 + imm)
 // - Loads: optional store-buffer forwarding, otherwise blocking D$ request
-// - Stores: write address/data into Store Buffer, then complete in ROB
+// - Stores: write address/data into STQ, then complete in ROB
 // - Single in-flight load, no load queue
-module lsu_lane #(
+module ld_pipe #(
     parameter config_pkg::cfg_t Cfg           = config_pkg::EmptyCfg,
     parameter int unsigned      ROB_IDX_WIDTH = 6,
     parameter int unsigned      SB_DEPTH      = 32,
-    parameter int unsigned      SB_IDX_WIDTH  = $clog2(SB_DEPTH),
+    parameter int unsigned      ST_IDX_WIDTH  = $clog2(SB_DEPTH),
     parameter int unsigned      ECAUSE_WIDTH  = 5
 ) (
     input logic clk_i,
@@ -32,23 +32,23 @@ module lsu_lane #(
     input  logic                                 force_exception_i,
     input  logic             [ ECAUSE_WIDTH-1:0] force_ecause_i,
     input  logic             [ROB_IDX_WIDTH-1:0] rob_tag_i,
-    input  logic             [ SB_IDX_WIDTH-1:0] sb_id_i,
+    input  logic             [ ST_IDX_WIDTH-1:0] st_id_i,
 
     // =========================================================
-    // 2) Store Buffer interface (execute fill)
+    // 2) STQ interface (execute fill)
     // =========================================================
-    output logic                                    sb_ex_valid_o,
-    output logic                [ SB_IDX_WIDTH-1:0] sb_ex_sb_id_o,
-    output logic                [     Cfg.PLEN-1:0] sb_ex_addr_o,
-    output logic                [     Cfg.XLEN-1:0] sb_ex_data_o,
-    output decode_pkg::lsu_op_e                     sb_ex_op_o,
-    output logic                [ROB_IDX_WIDTH-1:0] sb_ex_rob_idx_o,
+    output logic                                    st_ex_valid_o,
+    output logic                [ ST_IDX_WIDTH-1:0] st_ex_st_id_o,
+    output logic                [     Cfg.PLEN-1:0] st_ex_addr_o,
+    output logic                [     Cfg.XLEN-1:0] st_ex_data_o,
+    output decode_pkg::lsu_op_e                     st_ex_op_o,
+    output logic                [ROB_IDX_WIDTH-1:0] st_ex_rob_idx_o,
 
     // Store-to-Load Forwarding (query)
-    output logic [     Cfg.PLEN-1:0] sb_load_addr_o,
-    output logic [ROB_IDX_WIDTH-1:0] sb_load_rob_idx_o,
-    input  logic                     sb_load_hit_i,
-    input  logic [     Cfg.XLEN-1:0] sb_load_data_i,
+    output logic [     Cfg.PLEN-1:0] stq_fwd_addr_o,
+    output logic [ROB_IDX_WIDTH-1:0] stq_fwd_rob_idx_o,
+    input  logic                     stq_fwd_hit_i,
+    input  logic [     Cfg.XLEN-1:0] stq_fwd_data_i,
 
     // =========================================================
     // 3) D-Cache Load interface
@@ -180,7 +180,7 @@ module lsu_lane #(
   assign misaligned    = misaligned_i;
   assign is_mmio       = config_pkg::is_mmio_addr({{(32-Cfg.PLEN){1'b0}}, eff_addr});
 
-  assign fwd_data      = extract_fwd(sb_load_data_i, uop_i.lsu_op);
+  assign fwd_data      = extract_fwd(stq_fwd_data_i, uop_i.lsu_op);
   assign eff_addr_tval = Cfg.XLEN'(eff_addr);
   assign req_addr_tval = Cfg.XLEN'(req_addr_q);
 
@@ -200,13 +200,13 @@ module lsu_lane #(
                                                           input logic acc_is_load,
                                                           input logic acc_misaligned,
                                                           input logic acc_force_exception,
-                                                          input logic acc_sb_hit,
+                                                          input logic acc_stq_fwd_hit,
                                                           input logic acc_is_mmio);
     begin
       if (acc_is_store) begin
         next_state_after_accept = S_RESP;
       end else if (acc_is_load) begin
-        if (acc_misaligned || acc_force_exception || acc_sb_hit) begin
+        if (acc_misaligned || acc_force_exception || acc_stq_fwd_hit) begin
           next_state_after_accept = S_RESP;
         end else if (acc_is_mmio) begin
           next_state_after_accept = S_MMIO_WAIT_ROB;
@@ -244,16 +244,16 @@ module lsu_lane #(
   assign req_fire_w = req_valid_i && req_ready_o;
 
   // Store buffer execute write (pulse when accepting a store)
-  assign sb_ex_valid_o = req_fire_w && is_store && !misaligned;
-  assign sb_ex_sb_id_o = sb_id_i;
-  assign sb_ex_addr_o = eff_addr;
-  assign sb_ex_data_o = rs2_data_i;
-  assign sb_ex_op_o = uop_i.lsu_op;
-  assign sb_ex_rob_idx_o = rob_tag_i;
+  assign st_ex_valid_o = req_fire_w && is_store && !misaligned;
+  assign st_ex_st_id_o = st_id_i;
+  assign st_ex_addr_o = eff_addr;
+  assign st_ex_data_o = rs2_data_i;
+  assign st_ex_op_o = uop_i.lsu_op;
+  assign st_ex_rob_idx_o = rob_tag_i;
 
   // Store-buffer forwarding address (only meaningful for incoming load)
-  assign sb_load_addr_o = (req_fire_w && is_load) ? eff_addr : '0;
-  assign sb_load_rob_idx_o = req_fire_w ? rob_tag_i : '0;
+  assign stq_fwd_addr_o = (req_fire_w && is_load) ? eff_addr : '0;
+  assign stq_fwd_rob_idx_o = req_fire_w ? rob_tag_i : '0;
 
   // D-Cache load port
   assign ld_req_valid_o = (state_q == S_LD_REQ);
@@ -321,7 +321,7 @@ module lsu_lane #(
       S_IDLE: begin
         if (req_fire_w) begin
           state_d = next_state_after_accept(is_store, is_load, misaligned, force_exception_i,
-                                            sb_load_hit_i, is_mmio);
+                                            stq_fwd_hit_i, is_mmio);
         end
       end
 
@@ -336,7 +336,7 @@ module lsu_lane #(
           if (wb_ready_i) begin
             if (req_fire_w) begin
               state_d = next_state_after_accept(is_store, is_load, misaligned, force_exception_i,
-                                                sb_load_hit_i, is_mmio);
+                                                stq_fwd_hit_i, is_mmio);
             end else begin
               state_d = S_IDLE;
             end
@@ -350,7 +350,7 @@ module lsu_lane #(
         if (wb_ready_i) begin
           if (req_fire_w) begin
             state_d = next_state_after_accept(is_store, is_load, misaligned, force_exception_i,
-                                              sb_load_hit_i, is_mmio);
+                                              stq_fwd_hit_i, is_mmio);
           end else begin
             state_d = S_IDLE;
           end
@@ -370,7 +370,7 @@ module lsu_lane #(
           if (wb_ready_i) begin
             if (req_fire_w) begin
               state_d = next_state_after_accept(is_store, is_load, misaligned, force_exception_i,
-                                                sb_load_hit_i, is_mmio);
+                                                stq_fwd_hit_i, is_mmio);
             end else begin
               state_d = S_IDLE;
             end
@@ -422,9 +422,9 @@ module lsu_lane #(
         if (req_fire_w) begin
           inflight_is_load_q <= is_load;
           inflight_is_mmio_q <= is_load && is_mmio && !misaligned && !force_exception_i &&
-                                !sb_load_hit_i;
+                                !stq_fwd_hit_i;
           inflight_is_amo_q <= is_amo;
-          if (is_load && !misaligned && !force_exception_i && !sb_load_hit_i) begin
+          if (is_load && !misaligned && !force_exception_i && !stq_fwd_hit_i) begin
             req_addr_q <= eff_addr;
             req_op_q   <= uop_i.lsu_op;
             req_tag_q  <= rob_tag_i;
@@ -445,7 +445,7 @@ module lsu_lane #(
               resp_data_q   <= eff_addr_tval;
               resp_exc_q    <= 1'b1;
               resp_ecause_q <= force_ecause_i;
-            end else if (sb_load_hit_i) begin
+            end else if (stq_fwd_hit_i) begin
               resp_data_q   <= fwd_data;
               resp_exc_q    <= 1'b0;
               resp_ecause_q <= '0;

@@ -13,7 +13,7 @@ module tb_rob_exception (
     input logic dispatch_has_rd_i,
     input logic dispatch_is_branch_i,
     input logic dispatch_is_store_i,
-    input logic [1:0] dispatch_sb_id_i,
+    input logic [1:0] dispatch_st_id_i,
 
     input logic wb_valid_i,
     input logic [2:0] wb_rob_index_i,
@@ -41,7 +41,7 @@ module tb_rob_exception (
     output logic [Cfg.XLEN-1:0] commit_wdata_o,
     output logic [2:0] commit_rob_index_o,
     output logic commit_is_store_o,
-    output logic [1:0] commit_sb_id_o,
+    output logic [1:0] commit_st_id_o,
     output logic flush_is_mispred_o,
     output logic [QUERY_WIDTH-1:0] query_ready_o,
     output logic [(QUERY_WIDTH*Cfg.XLEN)-1:0] query_data_o,
@@ -61,7 +61,7 @@ module tb_rob_exception (
   localparam int unsigned WB_WIDTH = 2;
   localparam int unsigned QUERY_WIDTH = 2;
   localparam int unsigned SB_DEPTH = 4;
-  localparam int unsigned SB_IDX_WIDTH = 2;
+  localparam int unsigned ST_IDX_WIDTH = 2;
 
   logic [DISPATCH_WIDTH-1:0] dispatch_valid_bus;
   logic [DISPATCH_WIDTH-1:0][Cfg.PLEN-1:0] dispatch_pc_bus;
@@ -79,7 +79,7 @@ module tb_rob_exception (
   logic [DISPATCH_WIDTH-1:0][decode_pkg::FTQ_ID_W-1:0] dispatch_ftq_id_bus;
   logic [DISPATCH_WIDTH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] dispatch_fetch_epoch_bus;
   logic [DISPATCH_WIDTH-1:0] dispatch_is_store_bus;
-  logic [DISPATCH_WIDTH-1:0][SB_IDX_WIDTH-1:0] dispatch_sb_id_bus;
+  logic [DISPATCH_WIDTH-1:0][ST_IDX_WIDTH-1:0] dispatch_st_id_bus;
 
   logic [WB_WIDTH-1:0] wb_valid_bus;
   logic [WB_WIDTH-1:0][$clog2(ROB_DEPTH)-1:0] wb_rob_index_bus;
@@ -110,7 +110,7 @@ module tb_rob_exception (
   logic [COMMIT_WIDTH-1:0][Cfg.XLEN-1:0] commit_wdata_bus;
   logic [COMMIT_WIDTH-1:0][$clog2(ROB_DEPTH)-1:0] commit_rob_index_bus;
   logic [COMMIT_WIDTH-1:0] commit_is_store_bus;
-  logic [COMMIT_WIDTH-1:0][SB_IDX_WIDTH-1:0] commit_sb_id_bus;
+  logic [COMMIT_WIDTH-1:0][ST_IDX_WIDTH-1:0] commit_st_id_bus;
   logic [COMMIT_WIDTH-1:0] commit_is_branch_bus;
   logic [COMMIT_WIDTH-1:0] commit_is_jump_bus;
   logic [COMMIT_WIDTH-1:0] commit_is_call_bus;
@@ -160,7 +160,7 @@ module tb_rob_exception (
   assign dispatch_ftq_id_bus[0] = '0;
   assign dispatch_fetch_epoch_bus[0] = '0;
   assign dispatch_is_store_bus[0] = dispatch_is_store_i;
-  assign dispatch_sb_id_bus[0] = dispatch_sb_id_i;
+  assign dispatch_st_id_bus[0] = dispatch_st_id_i;
 
   assign wb_valid_bus[0] = wb_valid_i;
   assign wb_rob_index_bus[0] = wb_rob_index_i;
@@ -197,7 +197,7 @@ module tb_rob_exception (
   assign commit_wdata_o = commit_wdata_bus[0];
   assign commit_rob_index_o = commit_rob_index_bus[0];
   assign commit_is_store_o = commit_is_store_bus[0];
-  assign commit_sb_id_o = commit_sb_id_bus[0];
+  assign commit_st_id_o = commit_st_id_bus[0];
   assign flush_is_mispred_o = flush_is_mispred_bus;
   assign query_ready_o = query_ready_bus;
   assign query_data_o = query_data_bus;
@@ -220,7 +220,7 @@ module tb_rob_exception (
       .WB_WIDTH(WB_WIDTH),
       .QUERY_WIDTH(QUERY_WIDTH),
       .SB_DEPTH(SB_DEPTH),
-      .SB_IDX_WIDTH(SB_IDX_WIDTH)
+      .ST_IDX_WIDTH(ST_IDX_WIDTH)
   ) dut (
       .clk_i(clk_i),
       .rst_ni(rst_ni),
@@ -242,7 +242,7 @@ module tb_rob_exception (
       .dispatch_ftq_id_i(dispatch_ftq_id_bus),
       .dispatch_fetch_epoch_i(dispatch_fetch_epoch_bus),
       .dispatch_is_store_i(dispatch_is_store_bus),
-      .dispatch_sb_id_i(dispatch_sb_id_bus),
+      .dispatch_st_id_i(dispatch_st_id_bus),
       .rob_ready_o(rob_ready_bus),
       .dispatch_rob_index_o(),
 
@@ -277,7 +277,7 @@ module tb_rob_exception (
       .commit_wdata_o(commit_wdata_bus),
       .commit_rob_index_o(commit_rob_index_bus),
       .commit_is_store_o(commit_is_store_bus),
-      .commit_sb_id_o(commit_sb_id_bus),
+      .commit_st_id_o(commit_st_id_bus),
       .commit_is_branch_o(commit_is_branch_bus),
       .commit_is_jump_o(commit_is_jump_bus),
       .commit_is_call_o(commit_is_call_bus),

@@ -9,9 +9,9 @@ module rob #(
     parameter int unsigned COMMIT_WIDTH = Cfg.NRET,
     parameter int unsigned WB_WIDTH = 4,
     parameter int unsigned QUERY_WIDTH = DISPATCH_WIDTH * 2,
-    // [新增] Store Buffer 参数
+    // [新增] STQ 参数
     parameter int unsigned SB_DEPTH = 32,
-    parameter int unsigned SB_IDX_WIDTH = $clog2(SB_DEPTH),
+    parameter int unsigned ST_IDX_WIDTH = $clog2(SB_DEPTH),
     parameter int unsigned MAX_COMMIT_BR = 1,
     parameter int unsigned MAX_COMMIT_ST = 2,
     parameter int unsigned MAX_COMMIT_LD = 2,
@@ -40,10 +40,10 @@ module rob #(
     input logic [DISPATCH_WIDTH-1:0][decode_pkg::FTQ_ID_W-1:0] dispatch_ftq_id_i,
     input logic [DISPATCH_WIDTH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] dispatch_fetch_epoch_i,
 
-    // [新增] 接收 Store Buffer ID
+    // [新增] 接收 STQ ID
     // 只有当指令是 Store 时，这个信号才有效；否则忽略
     input logic [DISPATCH_WIDTH-1:0]                   dispatch_is_store_i,
-    input logic [DISPATCH_WIDTH-1:0][SB_IDX_WIDTH-1:0] dispatch_sb_id_i,
+    input logic [DISPATCH_WIDTH-1:0][ST_IDX_WIDTH-1:0] dispatch_st_id_i,
 
     output logic rob_ready_o,
     output logic [DISPATCH_WIDTH-1:0][$clog2(ROB_DEPTH)-1:0] dispatch_rob_index_o,
@@ -84,7 +84,7 @@ module rob #(
     input logic [FAST_LSU_PORTS-1:0][Cfg.PLEN-1:0] fast_lsu_redirect_pc_i,
 
     // =========================================================
-    // 3. Commit 阶段 (To ARF & Controller & RAT & SB)
+    // 3. Commit 阶段 (To ARF & Controller & RAT & STQ)
     // =========================================================
     output logic [COMMIT_WIDTH-1:0] commit_valid_o,
     output logic [COMMIT_WIDTH-1:0][Cfg.PLEN-1:0] commit_pc_o,
@@ -99,10 +99,10 @@ module rob #(
     // To RAT
     output logic [COMMIT_WIDTH-1:0][$clog2(ROB_DEPTH)-1:0] commit_rob_index_o,
 
-    // To Store Buffer [修复核心]
+    // To STQ [修复核心]
     output logic [COMMIT_WIDTH-1:0] commit_is_store_o,
-    // [新增] 告诉 Store Buffer 哪条指令退休了
-    output logic [COMMIT_WIDTH-1:0][SB_IDX_WIDTH-1:0] commit_sb_id_o,
+    // [新增] 告诉 STQ 哪条指令退休了
+    output logic [COMMIT_WIDTH-1:0][ST_IDX_WIDTH-1:0] commit_st_id_o,
     output logic [COMMIT_WIDTH-1:0]                    commit_is_branch_o,
     output logic [COMMIT_WIDTH-1:0]                    commit_is_jump_o,
     output logic [COMMIT_WIDTH-1:0]                    commit_is_call_o,
@@ -189,9 +189,9 @@ module rob #(
     logic [decode_pkg::FTQ_ID_W-1:0] ftq_id;
     logic [decode_pkg::FETCH_EPOCH_W-1:0] fetch_epoch;
 
-    // [新增] 存储该指令对应的 Store Buffer ID
+    // [新增] 存储该指令对应的 STQ ID
     logic is_store;
-    logic [SB_IDX_WIDTH-1:0] sb_id;
+    logic [ST_IDX_WIDTH-1:0] st_id;
   } rob_entry_t;
 
   rob_entry_t [ROB_DEPTH-1:0] rob_ram;
@@ -303,7 +303,7 @@ module rob #(
     commit_areg_o  = '0;
     commit_wdata_o = '0;
     commit_is_store_o = '0;
-    commit_sb_id_o    = '0; // 默认清零
+    commit_st_id_o    = '0; // 默认清零
     commit_is_branch_o = '0;
     commit_is_jump_o = '0;
     commit_is_call_o = '0;
@@ -386,7 +386,7 @@ module rob #(
               end
 
               commit_is_store_o[i] = rob_ram[commit_rob_index_o[i]].is_store;
-              commit_sb_id_o[i]    = rob_ram[commit_rob_index_o[i]].sb_id;
+              commit_st_id_o[i]    = rob_ram[commit_rob_index_o[i]].st_id;
               commit_is_branch_o[i] = rob_ram[commit_rob_index_o[i]].is_branch;
               commit_is_jump_o[i] = rob_ram[commit_rob_index_o[i]].is_jump;
               commit_is_call_o[i] = rob_ram[commit_rob_index_o[i]].is_call;
@@ -419,7 +419,7 @@ module rob #(
               end
 
               commit_is_store_o[i] = rob_ram[commit_rob_index_o[i]].is_store;
-              commit_sb_id_o[i]    = rob_ram[commit_rob_index_o[i]].sb_id;
+              commit_st_id_o[i]    = rob_ram[commit_rob_index_o[i]].st_id;
               commit_is_branch_o[i] = rob_ram[commit_rob_index_o[i]].is_branch;
               commit_is_jump_o[i] = rob_ram[commit_rob_index_o[i]].is_jump;
               commit_is_call_o[i] = rob_ram[commit_rob_index_o[i]].is_call;
@@ -675,9 +675,9 @@ module rob #(
             rob_ram[w_idx].ftq_id      <= dispatch_ftq_id_i[i];
             rob_ram[w_idx].fetch_epoch <= dispatch_fetch_epoch_i[i];
 
-            // [新增] 保存 SB ID
+            // [新增] 保存 STQ ID
             rob_ram[w_idx].is_store    <= dispatch_is_store_i[i];
-            rob_ram[w_idx].sb_id       <= dispatch_sb_id_i[i];
+            rob_ram[w_idx].st_id       <= dispatch_st_id_i[i];
           end
         end
       end
@@ -785,8 +785,8 @@ module rob #(
                        "rob/commit_we_invalid")
           end
           if (commit_valid_o[i] && commit_is_store_o[i]) begin
-            `NPC_ASSERT(commit_sb_id_o[i] == rob_ram[commit_rob_index_o[i]].sb_id,
-                       "rob/commit_sb_id_mismatch")
+            `NPC_ASSERT(commit_st_id_o[i] == rob_ram[commit_rob_index_o[i]].st_id,
+                       "rob/commit_st_id_mismatch")
           end
         end
 

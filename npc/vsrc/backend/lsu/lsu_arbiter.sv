@@ -1,4 +1,4 @@
-// vsrc/backend/execute/lsu_arbiter.sv
+// vsrc/backend/lsu/lsu_arbiter.sv
 import config_pkg::*;
 import decode_pkg::*;
 
@@ -14,7 +14,7 @@ import decode_pkg::*;
 //                              back `wb_pop_i` to advance the pointer when the
 //                              granted lane is actually consumed.
 //
-// The lanes (`lsu_lane`) are reduced to a pure request -> wait -> writeback
+// The load pipes (`ld_pipe`) are reduced to a pure request -> wait -> writeback
 // FSM and never touch a shared resource directly; all selection/muxing lives
 // here. Behaviorally identical to the inline arbitration that used to sit in
 // lsu_group.
