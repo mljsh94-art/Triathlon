@@ -49,6 +49,7 @@ module tb_instr_aligner_ftb_boundary_c (
       .fe_pred_npc_i(fe_pred_npc_i),
       .fe_pred_taken_i(fe_pred_taken_i),
       .fe_ftq_id_i(fe_ftq_id_i),
+      .fe_pred_ghr_i('0),
       .fe_fetch_epoch_i(fe_fetch_epoch_i),
       .ibuf_aln_ready_i(ibuf_aln_ready_i),
       .aln_entry_count_o(aln_entry_count_o),

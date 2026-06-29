@@ -39,6 +39,7 @@ module rob #(
     input logic            [DISPATCH_WIDTH-1:0][Cfg.PLEN-1:0] dispatch_pred_npc_i,
     input logic [DISPATCH_WIDTH-1:0][decode_pkg::FTQ_ID_W-1:0] dispatch_ftq_id_i,
     input logic [DISPATCH_WIDTH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] dispatch_fetch_epoch_i,
+    input logic [DISPATCH_WIDTH-1:0][decode_pkg::PRED_GHR_W-1:0] dispatch_pred_ghr_i,
 
     // [新增] 接收 STQ ID
     // 只有当指令是 Store 时，这个信号才有效；否则忽略
@@ -112,6 +113,7 @@ module rob #(
     output logic [COMMIT_WIDTH-1:0][Cfg.PLEN-1:0]      commit_actual_npc_o,
     output logic [COMMIT_WIDTH-1:0][decode_pkg::FTQ_ID_W-1:0] commit_ftq_id_o,
     output logic [COMMIT_WIDTH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] commit_fetch_epoch_o,
+    output logic [COMMIT_WIDTH-1:0][decode_pkg::PRED_GHR_W-1:0] commit_pred_ghr_o,
 
     // Flush Interface
     output logic flush_o,
@@ -188,6 +190,7 @@ module rob #(
     logic [Cfg.ILEN-1:0] decoded_inst;
     logic [decode_pkg::FTQ_ID_W-1:0] ftq_id;
     logic [decode_pkg::FETCH_EPOCH_W-1:0] fetch_epoch;
+    logic [decode_pkg::PRED_GHR_W-1:0] pred_ghr;
 
     // [新增] 存储该指令对应的 STQ ID
     logic is_store;
@@ -313,6 +316,7 @@ module rob #(
     commit_actual_npc_o = '0;
     commit_ftq_id_o = '0;
     commit_fetch_epoch_o = '0;
+    commit_pred_ghr_o = '0;
     commit_rob_index_o = '0;
 
     // External flush kills all in-flight state and suppresses same-cycle commit.
@@ -396,6 +400,7 @@ module rob #(
               commit_actual_npc_o[i] = head_fast_redirect_pc[i];
               commit_ftq_id_o[i] = rob_ram[commit_rob_index_o[i]].ftq_id;
               commit_fetch_epoch_o[i] = rob_ram[commit_rob_index_o[i]].fetch_epoch;
+              commit_pred_ghr_o[i] = rob_ram[commit_rob_index_o[i]].pred_ghr;
 
               stop_commit          = 1'b1;
               flush_o              = 1'b1;
@@ -429,6 +434,7 @@ module rob #(
               commit_actual_npc_o[i] = head_fast_redirect_pc[i];
               commit_ftq_id_o[i] = rob_ram[commit_rob_index_o[i]].ftq_id;
               commit_fetch_epoch_o[i] = rob_ram[commit_rob_index_o[i]].fetch_epoch;
+              commit_pred_ghr_o[i] = rob_ram[commit_rob_index_o[i]].pred_ghr;
             end
           end else begin
             stop_commit = 1'b1;
@@ -674,6 +680,7 @@ module rob #(
             rob_ram[w_idx].decoded_inst <= dispatch_decoded_inst_i[i];
             rob_ram[w_idx].ftq_id      <= dispatch_ftq_id_i[i];
             rob_ram[w_idx].fetch_epoch <= dispatch_fetch_epoch_i[i];
+            rob_ram[w_idx].pred_ghr    <= dispatch_pred_ghr_i[i];
 
             // [新增] 保存 STQ ID
             rob_ram[w_idx].is_store    <= dispatch_is_store_i[i];

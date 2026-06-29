@@ -17,6 +17,7 @@ module instr_aligner #(
     input  logic [global_config_pkg::PRED_SLOT_COUNT-1:0][Cfg.PLEN-1:0] fe_pred_npc_i,
     input  logic [global_config_pkg::PRED_SLOT_COUNT-1:0] fe_pred_taken_i,
     input  logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] fe_ftq_id_i,
+    input  logic [Cfg.INSTR_PER_FETCH-1:0][global_config_pkg::PRED_GHR_W-1:0] fe_pred_ghr_i,
     input  logic [Cfg.INSTR_PER_FETCH-1:0][2:0] fe_fetch_epoch_i,
     input  logic ibuf_aln_ready_i,
 
@@ -119,6 +120,7 @@ module instr_aligner #(
       entries_w[i].is_rvc = 1'b0;
       entries_w[i].ftq_id = '0;
       entries_w[i].fetch_epoch = '0;
+      entries_w[i].pred_ghr = '0;
     end
     if (fe_valid_i) begin
       // 半字收集：按 half-word slot_valid（h<=pred_slot_idx）挑选有效半字进入展开流。
@@ -149,6 +151,7 @@ module instr_aligner #(
         entries_w[wr_idx].is_rvc = 1'b0;
         entries_w[wr_idx].ftq_id = fe_ftq_id_i[word_idx];
         entries_w[wr_idx].fetch_epoch = fe_fetch_epoch_i[word_idx];
+        entries_w[wr_idx].pred_ghr = fe_pred_ghr_i[word_idx];
         wr_idx++;
         hw_idx = 1;
         carry_valid_next_w = 1'b0;
@@ -175,6 +178,7 @@ module instr_aligner #(
           entries_w[wr_idx].is_rvc = 1'b1;
           entries_w[wr_idx].ftq_id = fe_ftq_id_i[word_idx];
           entries_w[wr_idx].fetch_epoch = fe_fetch_epoch_i[word_idx];
+          entries_w[wr_idx].pred_ghr = fe_pred_ghr_i[word_idx];
           wr_idx++;
           hw_idx++;
           if (taken_here) begin
@@ -199,6 +203,7 @@ module instr_aligner #(
             entries_w[wr_idx].is_rvc = 1'b0;
             entries_w[wr_idx].ftq_id = fe_ftq_id_i[word_idx];
             entries_w[wr_idx].fetch_epoch = fe_fetch_epoch_i[word_idx];
+            entries_w[wr_idx].pred_ghr = fe_pred_ghr_i[word_idx];
             wr_idx++;
             hw_idx += 2;
             if (taken_here) begin

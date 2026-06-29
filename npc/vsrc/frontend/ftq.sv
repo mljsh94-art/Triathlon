@@ -1,5 +1,6 @@
 import config_pkg::*;
 import global_config_pkg::PRED_SLOT_IDX_W;
+import global_config_pkg::PRED_GHR_W;
 
 module ftq #(
     parameter config_pkg::cfg_t Cfg = config_pkg::EmptyCfg,
@@ -17,6 +18,7 @@ module ftq #(
   input  logic [PRED_SLOT_IDX_W-1:0] enq_pred_slot_idx_i,
   input  logic [Cfg.PLEN-1:0] enq_pred_target_i,
     input  logic [Cfg.PLEN-1:0] enq_pred_npc_i,
+    input  logic [PRED_GHR_W-1:0] enq_pred_ghr_i,
     input  logic [EPOCH_W-1:0] enq_epoch_i,
     output logic [ID_W-1:0] enq_ftq_id_o,
 
@@ -27,6 +29,7 @@ module ftq #(
   output logic [PRED_SLOT_IDX_W-1:0] deq_pred_slot_idx_o,
   output logic [Cfg.PLEN-1:0] deq_pred_target_o,
     output logic [Cfg.PLEN-1:0] deq_pred_npc_o,
+    output logic [PRED_GHR_W-1:0] deq_pred_ghr_o,
     output logic [EPOCH_W-1:0] deq_epoch_o,
     output logic [((DEPTH > 1) ? $clog2(DEPTH) : 1)-1:0] deq_ftq_id_o,
 
@@ -45,6 +48,7 @@ module ftq #(
   logic [DEPTH-1:0][SLOT_IDX_W-1:0] pred_slot_idx_q;
   logic [DEPTH-1:0][Cfg.PLEN-1:0] pred_target_q;
   logic [DEPTH-1:0][Cfg.PLEN-1:0] pred_npc_q;
+  logic [DEPTH-1:0][PRED_GHR_W-1:0] pred_ghr_q;
   logic [DEPTH-1:0][EPOCH_W-1:0] epoch_q;
 
   logic enq_fire_w;
@@ -73,6 +77,7 @@ module ftq #(
   assign deq_pred_slot_idx_o = pred_slot_idx_q[head_q];
   assign deq_pred_target_o = pred_target_q[head_q];
   assign deq_pred_npc_o = pred_npc_q[head_q];
+  assign deq_pred_ghr_o = pred_ghr_q[head_q];
   assign deq_epoch_o = epoch_q[head_q];
   assign deq_ftq_id_o = head_q;
   assign count_o = count_q;
@@ -87,6 +92,7 @@ module ftq #(
       pred_slot_idx_q <= '0;
       pred_target_q <= '0;
       pred_npc_q <= '0;
+      pred_ghr_q <= '0;
       epoch_q <= '0;
     end else begin
       if (flush_i) begin
@@ -98,6 +104,7 @@ module ftq #(
         pred_slot_idx_q <= '0;
         pred_target_q <= '0;
         pred_npc_q <= '0;
+        pred_ghr_q <= '0;
         epoch_q <= '0;
       end else begin
         if (enq_fire_w) begin
@@ -106,6 +113,7 @@ module ftq #(
           pred_slot_idx_q[tail_q] <= enq_pred_slot_idx_i;
           pred_target_q[tail_q] <= enq_pred_target_i;
           pred_npc_q[tail_q] <= enq_pred_npc_i;
+          pred_ghr_q[tail_q] <= enq_pred_ghr_i;
           epoch_q[tail_q] <= enq_epoch_i;
           tail_q <= ptr_inc(tail_q);
         end

@@ -15,6 +15,7 @@ package global_config_pkg;
   // pred_slot_idx 由 word index(语义) 升级为 half-word index(0~PRED_SLOT_COUNT-1)。
   localparam int unsigned PRED_SLOT_COUNT = Cfg.INSTR_PER_FETCH * 2;
   localparam int unsigned PRED_SLOT_IDX_W = (PRED_SLOT_COUNT > 1) ? $clog2(PRED_SLOT_COUNT) : 1;
+  localparam int unsigned PRED_GHR_W = (Cfg.BPU_GHR_BITS > 0) ? Cfg.BPU_GHR_BITS : 1;
 
   typedef struct packed {
     logic valid;
@@ -29,6 +30,7 @@ package global_config_pkg;
     logic [Cfg.PLEN-1:0] pred_npc;
     logic [FETCH_EPOCH_W-1:0] fetch_epoch;
     logic [FTQ_ID_W-1:0] ftq_id;
+    logic [PRED_GHR_W-1:0] pred_ghr;
   } ftq_entry_t;
 
   typedef struct packed {
@@ -40,6 +42,7 @@ package global_config_pkg;
     logic                is_rvc;
     logic [FTQ_ID_W-1:0] ftq_id;
     logic [FETCH_EPOCH_W-1:0] fetch_epoch;
+    logic [PRED_GHR_W-1:0] pred_ghr;
   } ibuf_entry_t;
 
 endpackage : global_config_pkg

@@ -70,6 +70,8 @@ module tb_bpu_phase5_red (
       .update_is_rvc_i(update_is_rvc_i),
       .update_ftq_id_i('0),
       .update_fetch_epoch_i('0),
+      .update_ghr_i('0),
+      .update_ghr_i('0),
       .ras_update_valid_i(ras_update_valid_i),
       .ras_update_is_call_i(ras_update_is_call_i),
       .ras_update_is_ret_i(ras_update_is_ret_i),
@@ -84,7 +86,9 @@ module tb_bpu_phase5_red (
       .ftq_enq_pred_slot_valid_o(ftq_enq_pred_slot_valid),
       .ftq_enq_pred_slot_idx_o(ftq_enq_pred_slot_idx),
       .ftq_enq_pred_target_o(ftq_enq_pred_target),
-      .ftq_enq_pred_npc_o(ftq_enq_pred_npc)
+      .ftq_enq_pred_npc_o(ftq_enq_pred_npc),
+      .ftq_enq_pred_ghr_o(),
+      .ftq_enq_pred_ghr_o()
   );
   assign npc_o = ftq_enq_pred_npc;
   assign pred_slot_valid_o = ftq_enq_pred_slot_valid;

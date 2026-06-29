@@ -63,6 +63,7 @@ module frontend #(
   logic [SLOT_IDX_W-1:0] ftq_enq_pred_slot_idx;
   logic [Cfg.PLEN-1:0] ftq_enq_pred_target;
   logic [Cfg.PLEN-1:0] ftq_enq_pred_npc;
+  logic [PRED_GHR_W-1:0] ftq_enq_pred_ghr;
   logic [EPOCH_W-1:0] ftq_enq_epoch;
   logic [FTQ_ID_W-1:0] ftq_enq_ftq_id;
   logic ftq_deq_valid;
@@ -72,6 +73,7 @@ module frontend #(
   logic [SLOT_IDX_W-1:0] ftq_deq_pred_slot_idx;
   logic [Cfg.PLEN-1:0] ftq_deq_pred_target;
   logic [Cfg.PLEN-1:0] ftq_deq_pred_npc;
+  logic [PRED_GHR_W-1:0] ftq_deq_pred_ghr;
   logic [EPOCH_W-1:0] ftq_deq_epoch;
   logic [FTQ_ID_W-1:0] ftq_deq_ftq_id;
   logic [FTQ_CNT_W-1:0] ftq_count;
@@ -99,6 +101,7 @@ module frontend #(
   logic [PRED_SLOT_COUNT-1:0][Cfg.PLEN-1:0] ifu_ibuf_pred_npc;
   logic [PRED_SLOT_COUNT-1:0] ifu_ibuf_pred_taken;
   logic [Cfg.INSTR_PER_FETCH-1:0][FTQ_ID_W-1:0] ifu_ibuf_ftq_id;
+  logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] ifu_ibuf_pred_ghr;
   logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ifu_ibuf_fetch_epoch;
 
   logic [$clog2(FE_EXPAND_MAX + 1)-1:0] aln_entry_count;
@@ -126,6 +129,7 @@ module frontend #(
   assign fe2be_o.is_rvc = ibuffer_is_rvc_w;
   assign fe2be_o.ftq_id = ibuffer_ftq_id_w;
   assign fe2be_o.fetch_epoch = ibuffer_fetch_epoch_w;
+  assign fe2be_o.pred_ghr = ibuffer_pred_ghr_w;
 
   logic ibuffer_valid_w;
   logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.ILEN-1:0] ibuffer_instrs_w;
@@ -135,6 +139,7 @@ module frontend #(
   logic [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] ibuffer_pred_npc_w;
   logic [Cfg.INSTR_PER_FETCH-1:0] ibuffer_is_rvc_w;
   logic [Cfg.INSTR_PER_FETCH-1:0][FTQ_ID_W-1:0] ibuffer_ftq_id_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] ibuffer_pred_ghr_w;
   logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ibuffer_fetch_epoch_w;
   logic ibuffer_ready_w;
 
@@ -155,6 +160,7 @@ module frontend #(
       .ftq_deq_pred_npc_i       (ftq_deq_pred_npc),
       .ftq_deq_epoch_i          (ftq_deq_epoch),
       .ftq_deq_ftq_id_i         (ftq_deq_ftq_id),
+      .ftq_deq_pred_ghr_i       (ftq_deq_pred_ghr),
       .ftq_next_pc_i            (ftq_enq_pc),
 
       .ifu2icache_req_handshake_o(ifu2icache_req_handshake),
@@ -171,6 +177,7 @@ module frontend #(
       .ifu_ibuffer_rsp_pred_npc_o(ifu_ibuf_pred_npc),
       .ifu_ibuffer_rsp_pred_taken_o(ifu_ibuf_pred_taken),
       .ifu_ibuffer_rsp_ftq_id_o(ifu_ibuf_ftq_id),
+      .ifu_ibuffer_rsp_pred_ghr_o(ifu_ibuf_pred_ghr),
       .ifu_ibuffer_rsp_fetch_epoch_o(ifu_ibuf_fetch_epoch),
 
       .flush_i      (be2fe_i.flush),
@@ -214,6 +221,7 @@ module frontend #(
       .fe_pred_npc_i(ifu_ibuf_pred_npc),
       .fe_pred_taken_i(ifu_ibuf_pred_taken),
       .fe_ftq_id_i(ifu_ibuf_ftq_id),
+      .fe_pred_ghr_i(ifu_ibuf_pred_ghr),
       .fe_fetch_epoch_i(ifu_ibuf_fetch_epoch),
       .ibuf_aln_ready_i(ibuf_aln_ready),
 
@@ -243,6 +251,7 @@ module frontend #(
       .ibuf_pred_npc_o(ibuffer_pred_npc_w),
       .ibuf_is_rvc_o(ibuffer_is_rvc_w),
       .ibuf_ftq_id_o(ibuffer_ftq_id_w),
+      .ibuf_pred_ghr_o(ibuffer_pred_ghr_w),
       .ibuf_fetch_epoch_o(ibuffer_fetch_epoch_w),
 
       .flush_i(be2fe_i.flush)
@@ -263,6 +272,7 @@ module frontend #(
       .enq_pred_slot_idx_i(ftq_enq_pred_slot_idx),
       .enq_pred_target_i(ftq_enq_pred_target),
       .enq_pred_npc_i(ftq_enq_pred_npc),
+      .enq_pred_ghr_i(ftq_enq_pred_ghr),
       .enq_epoch_i(ftq_enq_epoch),
       .enq_ftq_id_o(ftq_enq_ftq_id),
       .deq_valid_o(ftq_deq_valid),
@@ -272,6 +282,7 @@ module frontend #(
       .deq_pred_slot_idx_o(ftq_deq_pred_slot_idx),
       .deq_pred_target_o(ftq_deq_pred_target),
       .deq_pred_npc_o(ftq_deq_pred_npc),
+      .deq_pred_ghr_o(ftq_deq_pred_ghr),
       .deq_epoch_o(ftq_deq_epoch),
       .deq_ftq_id_o(ftq_deq_ftq_id),
       .count_o(ftq_count)
@@ -323,6 +334,7 @@ module frontend #(
       .update_is_rvc_i       (be2fe_i.bpu_update_is_rvc),
       .update_ftq_id_i       (be2fe_i.bpu_update_ftq_id),
       .update_fetch_epoch_i  (be2fe_i.bpu_update_fetch_epoch),
+      .update_ghr_i          (be2fe_i.bpu_update_ghr),
       .ras_update_valid_i    (be2fe_i.bpu_ras_update_valid),
       .ras_update_is_call_i  (be2fe_i.bpu_ras_update_is_call),
       .ras_update_is_ret_i   (be2fe_i.bpu_ras_update_is_ret),
@@ -339,7 +351,8 @@ module frontend #(
       .ftq_enq_pred_slot_valid_o(ftq_enq_pred_slot_valid),
       .ftq_enq_pred_slot_idx_o(ftq_enq_pred_slot_idx),
       .ftq_enq_pred_target_o (ftq_enq_pred_target),
-      .ftq_enq_pred_npc_o    (ftq_enq_pred_npc)
+      .ftq_enq_pred_npc_o    (ftq_enq_pred_npc),
+      .ftq_enq_pred_ghr_o    (ftq_enq_pred_ghr)
   );
 
   icache #(

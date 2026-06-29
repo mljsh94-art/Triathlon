@@ -15,6 +15,7 @@ module tb_ftq #(
     input  logic [((Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1)-1:0] enq_pred_slot_idx_i,
     input  logic [Cfg.PLEN-1:0] enq_pred_target_i,
     input  logic [Cfg.PLEN-1:0] enq_pred_npc_i,
+    input  logic [PRED_GHR_W-1:0] enq_pred_ghr_i,
     input  logic [2:0]  enq_epoch_i,
 
     output logic        deq_valid_o,
@@ -24,6 +25,7 @@ module tb_ftq #(
     output logic [((Cfg.INSTR_PER_FETCH > 1) ? $clog2(Cfg.INSTR_PER_FETCH) : 1)-1:0] deq_pred_slot_idx_o,
     output logic [Cfg.PLEN-1:0] deq_pred_target_o,
     output logic [Cfg.PLEN-1:0] deq_pred_npc_o,
+    output logic [PRED_GHR_W-1:0] deq_pred_ghr_o,
     output logic [2:0]  deq_epoch_o,
     output logic [((TB_FTQ_DEPTH > 1) ? $clog2(TB_FTQ_DEPTH) : 1)-1:0] deq_ftq_id_o,
 
@@ -52,6 +54,7 @@ module tb_ftq #(
       .enq_pred_slot_idx_i(enq_pred_slot_idx_i),
       .enq_pred_target_i(enq_pred_target_i),
       .enq_pred_npc_i(enq_pred_npc_i),
+      .enq_pred_ghr_i(enq_pred_ghr_i),
       .enq_epoch_i(enq_epoch_i),
       .deq_valid_o(deq_valid_o),
       .deq_ready_i(deq_ready_i),
@@ -60,6 +63,7 @@ module tb_ftq #(
       .deq_pred_slot_idx_o(deq_pred_slot_idx_o),
       .deq_pred_target_o(deq_pred_target_o),
       .deq_pred_npc_o(deq_pred_npc_o),
+      .deq_pred_ghr_o(deq_pred_ghr_o),
       .deq_epoch_o(deq_epoch_o),
       .deq_ftq_id_o(deq_ftq_id_o),
       .count_o(count_w)

@@ -46,6 +46,7 @@ module tb_ibuffer #(
       aln_entries[i].is_rvc = aln_is_rvc_i[i];
       aln_entries[i].ftq_id = aln_ftq_id_i[(i+1)*((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1 -: ((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)];
       aln_entries[i].fetch_epoch = aln_fetch_epoch_i[(i+1)*3-1 -: 3];
+      aln_entries[i].pred_ghr = '0;
     end
   end
 
@@ -71,6 +72,7 @@ module tb_ibuffer #(
       .ibuf_pred_npc_o(ibuf_pred_npc_o),
       .ibuf_is_rvc_o(ibuf_is_rvc_o),
       .ibuf_ftq_id_o(ibuf_ftq_id_o),
+      .ibuf_pred_ghr_o(),
       .ibuf_fetch_epoch_o(ibuf_fetch_epoch_o),
 
       .flush_i(flush_i)

@@ -24,6 +24,7 @@ module ibuffer #(
     output logic [DECODE_WIDTH-1:0][Cfg.PLEN-1:0] ibuf_pred_npc_o,
     output logic [DECODE_WIDTH-1:0] ibuf_is_rvc_o,
     output logic [DECODE_WIDTH-1:0][((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] ibuf_ftq_id_o,
+    output logic [DECODE_WIDTH-1:0][global_config_pkg::PRED_GHR_W-1:0] ibuf_pred_ghr_o,
     output logic [DECODE_WIDTH-1:0][2:0] ibuf_fetch_epoch_o,
 
     input logic flush_i
@@ -115,6 +116,7 @@ module ibuffer #(
       ibuf_is_rvc_o[j] = 1'b0;
       ibuf_ftq_id_o[j] = '0;
       ibuf_fetch_epoch_o[j] = '0;
+      ibuf_pred_ghr_o[j] = '0;
 
       if (!flush_i && (CNT_W'(j) < out_count_w)) begin
         if (CNT_W'(j) < count_q) begin
@@ -127,6 +129,7 @@ module ibuffer #(
           ibuf_is_rvc_o[j] = fifo_q[ridx].is_rvc;
           ibuf_ftq_id_o[j] = fifo_q[ridx].ftq_id;
           ibuf_fetch_epoch_o[j] = fifo_q[ridx].fetch_epoch;
+          ibuf_pred_ghr_o[j] = fifo_q[ridx].pred_ghr;
         end else begin
           aln_idx = CNT_W'(j) - count_q;
           ibuf_instrs_o[j] = aln_entries_i[aln_idx].instr;
@@ -137,6 +140,7 @@ module ibuffer #(
           ibuf_is_rvc_o[j] = aln_entries_i[aln_idx].is_rvc;
           ibuf_ftq_id_o[j] = aln_entries_i[aln_idx].ftq_id;
           ibuf_fetch_epoch_o[j] = aln_entries_i[aln_idx].fetch_epoch;
+          ibuf_pred_ghr_o[j] = aln_entries_i[aln_idx].pred_ghr;
         end
       end
     end

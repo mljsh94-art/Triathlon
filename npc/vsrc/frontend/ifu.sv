@@ -23,6 +23,7 @@ module ifu #(
     input  logic [Cfg.PLEN-1:0]        ftq_deq_pred_npc_i,
     input  logic [2:0]                 ftq_deq_epoch_i,
     input  logic [((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] ftq_deq_ftq_id_i,
+    input  logic [PRED_GHR_W-1:0]      ftq_deq_pred_ghr_i,
     input  logic [Cfg.PLEN-1:0]        ftq_next_pc_i,
 
     //--- 2.ICache请求接口 (缓存提货，获取指令数据) ---
@@ -41,6 +42,7 @@ module ifu #(
     output logic [PRED_SLOT_COUNT-1:0][Cfg.PLEN-1:0] ifu_ibuffer_rsp_pred_npc_o, // 半字粒度预测 npc（taken 半字=target）
     output logic [PRED_SLOT_COUNT-1:0] ifu_ibuffer_rsp_pred_taken_o, // 半字粒度 taken 标记（截断点）
     output logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] ifu_ibuffer_rsp_ftq_id_o, // 指令对应分配的 FTQ ID
+    output logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] ifu_ibuffer_rsp_pred_ghr_o, // 预测当拍 GHR 快照
     output logic [Cfg.INSTR_PER_FETCH-1:0][2:0] ifu_ibuffer_rsp_fetch_epoch_o, // 当前取指所属的“时空代数” Epoch，用于识别/丢弃错路指令
 
     //--- 4.后端冲刷/重定向接口 (纠错机制) ---
@@ -81,6 +83,7 @@ module ifu #(
   localparam logic [4:0] EXC_INST_PAGE_FAULT = 5'd12;
   localparam int unsigned FTQ_DEPTH = (Cfg.FTQ_DEPTH >= 2) ? Cfg.FTQ_DEPTH : 2;
   localparam int unsigned FTQ_ID_W = (FTQ_DEPTH > 1) ? $clog2(FTQ_DEPTH) : 1;
+  localparam int unsigned PRED_GHR_W = (Cfg.BPU_GHR_BITS > 0) ? Cfg.BPU_GHR_BITS : 1;
 
   // Pending request FIFO (BPU generated).
   localparam int unsigned REQ_DEPTH =
@@ -99,11 +102,12 @@ module ifu #(
       (Cfg.IFU_FQ_DEPTH >= 2) ? Cfg.IFU_FQ_DEPTH : ((Cfg.INSTR_PER_FETCH >= 2) ? Cfg.INSTR_PER_FETCH : 2);
   localparam int unsigned FQ_CNT_W = $clog2(FQ_DEPTH + 1);
   // bundle 打包：pc + 指令数据(word) + 半字 slot_valid + 半字 pred_npc + 半字 pred_taken +
-  //            ftq_id(word) + epoch(word)
+  //            ftq_id(word) + pred_ghr(word) + epoch(word)
   localparam int unsigned FQ_DATA_W = Cfg.PLEN + (Cfg.INSTR_PER_FETCH * Cfg.ILEN) +
                                       PRED_SLOT_COUNT + (PRED_SLOT_COUNT * Cfg.PLEN) +
                                       PRED_SLOT_COUNT +
                                       (Cfg.INSTR_PER_FETCH * FTQ_ID_W) +
+                                      (Cfg.INSTR_PER_FETCH * PRED_GHR_W) +
                                       (Cfg.INSTR_PER_FETCH * EPOCH_W);
 
   logic [Cfg.PLEN-1:0] local_mmu_replay_pc_w;
@@ -116,6 +120,7 @@ module ifu #(
   logic [REQ_DEPTH-1:0][SLOT_IDX_W-1:0] req_pred_slot_idx_fifo_q;
   logic [REQ_DEPTH-1:0][Cfg.PLEN-1:0] req_pred_target_fifo_q;
   logic [REQ_DEPTH-1:0][FTQ_ID_W-1:0] req_ftq_id_fifo_q;
+  logic [REQ_DEPTH-1:0][PRED_GHR_W-1:0] req_pred_ghr_fifo_q;
   logic [REQ_DEPTH-1:0][EPOCH_W-1:0] req_epoch_fifo_q;
   logic [REQ_PTR_W-1:0] req_head_q;
   logic [REQ_PTR_W-1:0] req_tail_q;
@@ -125,6 +130,7 @@ module ifu #(
   logic [SLOT_IDX_W-1:0] req_head_pred_slot_idx_w;
   logic [Cfg.PLEN-1:0] req_head_pred_target_w;
   logic [FTQ_ID_W-1:0] req_head_ftq_id_w;
+  logic [PRED_GHR_W-1:0] req_head_pred_ghr_w;
   logic [EPOCH_W-1:0] req_head_epoch_w;
 
   // Inflight FIFO metadata
@@ -133,6 +139,7 @@ module ifu #(
   logic [INF_DEPTH-1:0][SLOT_IDX_W-1:0] inf_pred_slot_idx_fifo_q;
   logic [INF_DEPTH-1:0][Cfg.PLEN-1:0] inf_pred_target_fifo_q;
   logic [INF_DEPTH-1:0][FTQ_ID_W-1:0] inf_ftq_id_fifo_q;
+  logic [INF_DEPTH-1:0][PRED_GHR_W-1:0] inf_pred_ghr_fifo_q;
   logic [INF_DEPTH-1:0][EPOCH_W-1:0] inf_epoch_fifo_q;
   logic [INF_PTR_W-1:0] inf_head_q;
   logic [INF_PTR_W-1:0] inf_tail_q;
@@ -152,12 +159,14 @@ module ifu #(
   logic [SLOT_IDX_W-1:0] inf_head_pred_slot_idx_w;
   logic [Cfg.PLEN-1:0] inf_head_pred_target_w;
   logic [FTQ_ID_W-1:0] inf_head_ftq_id_w;
+  logic [PRED_GHR_W-1:0] inf_head_pred_ghr_w;
   logic [EPOCH_W-1:0] inf_head_epoch_w;
 
   logic [PRED_SLOT_COUNT-1:0] rsp_slot_valid_w;
   logic [PRED_SLOT_COUNT-1:0][Cfg.PLEN-1:0] rsp_pred_npc_w;
   logic [PRED_SLOT_COUNT-1:0] rsp_pred_taken_w;
   logic [Cfg.INSTR_PER_FETCH-1:0][FTQ_ID_W-1:0] rsp_ftq_id_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] rsp_pred_ghr_w;
   logic [Cfg.INSTR_PER_FETCH-1:0][EPOCH_W-1:0] rsp_fetch_epoch_w;
 
   logic req_fifo_empty_w;
@@ -258,6 +267,7 @@ module ifu #(
   assign req_head_pred_slot_idx_w = req_pred_slot_idx_fifo_q[req_head_q];
   assign req_head_pred_target_w = req_pred_target_fifo_q[req_head_q];
   assign req_head_ftq_id_w = req_ftq_id_fifo_q[req_head_q];
+  assign req_head_pred_ghr_w = req_pred_ghr_fifo_q[req_head_q];
   assign req_head_epoch_w = req_epoch_fifo_q[req_head_q];
 
   assign inf_head_pc_w = inf_pc_fifo_q[inf_head_q];
@@ -265,6 +275,7 @@ module ifu #(
   assign inf_head_pred_slot_idx_w = inf_pred_slot_idx_fifo_q[inf_head_q];
   assign inf_head_pred_target_w = inf_pred_target_fifo_q[inf_head_q];
   assign inf_head_ftq_id_w = inf_ftq_id_fifo_q[inf_head_q];
+  assign inf_head_pred_ghr_w = inf_pred_ghr_fifo_q[inf_head_q];
   assign inf_head_epoch_w = inf_epoch_fifo_q[inf_head_q];
 
   always_comb begin
@@ -363,15 +374,16 @@ module ifu #(
     end
     for (int w = 0; w < Cfg.INSTR_PER_FETCH; w++) begin
       rsp_ftq_id_w[w]      = inf_head_ftq_id_w;
+      rsp_pred_ghr_w[w]    = inf_head_pred_ghr_w;
       rsp_fetch_epoch_w[w] = inf_head_epoch_w;
     end
   end
 
   assign fq_enq_data_w = {inf_head_pc_w, icache2ifu_rsp_data_i, rsp_slot_valid_w, rsp_pred_npc_w,
-                          rsp_pred_taken_w, rsp_ftq_id_w, rsp_fetch_epoch_w};
+                          rsp_pred_taken_w, rsp_ftq_id_w, rsp_pred_ghr_w, rsp_fetch_epoch_w};
   assign {ifu_ibuffer_rsp_pc_o, ifu_ibuffer_rsp_data_o, ifu_ibuffer_rsp_slot_valid_o,
           ifu_ibuffer_rsp_pred_npc_o, ifu_ibuffer_rsp_pred_taken_o, ifu_ibuffer_rsp_ftq_id_o,
-          ifu_ibuffer_rsp_fetch_epoch_o} = fq_deq_data_w;
+          ifu_ibuffer_rsp_pred_ghr_o, ifu_ibuffer_rsp_fetch_epoch_o} = fq_deq_data_w;
   assign ifu_ibuffer_rsp_valid_o = fq_deq_valid_w;
 
   sv32_mmu #(
@@ -430,6 +442,7 @@ module ifu #(
       req_pred_slot_idx_fifo_q <= '0;
       req_pred_target_fifo_q <= '0;
       req_ftq_id_fifo_q <= '0;
+      req_pred_ghr_fifo_q <= '0;
       req_epoch_fifo_q <= '0;
       req_head_q <= '0;
       req_tail_q <= '0;
@@ -440,6 +453,7 @@ module ifu #(
       inf_pred_slot_idx_fifo_q <= '0;
       inf_pred_target_fifo_q <= '0;
       inf_ftq_id_fifo_q <= '0;
+      inf_pred_ghr_fifo_q <= '0;
       inf_epoch_fifo_q <= '0;
       inf_head_q <= '0;
       inf_tail_q <= '0;
@@ -499,6 +513,7 @@ module ifu #(
           req_pred_slot_idx_fifo_q[req_tail_q] <= ftq_deq_pred_slot_idx_i;
           req_pred_target_fifo_q[req_tail_q] <= ftq_deq_pred_target_i;
           req_ftq_id_fifo_q[req_tail_q] <= ftq_deq_ftq_id_i;
+          req_pred_ghr_fifo_q[req_tail_q] <= ftq_deq_pred_ghr_i;
           req_epoch_fifo_q[req_tail_q] <= ftq_deq_epoch_i;
           req_tail_q <= req_ptr_inc(req_tail_q);
         end
@@ -539,6 +554,7 @@ module ifu #(
           inf_pred_slot_idx_fifo_q[inf_tail_q] <= req_head_pred_slot_idx_w;
           inf_pred_target_fifo_q[inf_tail_q] <= req_head_pred_target_w;
           inf_ftq_id_fifo_q[inf_tail_q] <= req_head_ftq_id_w;
+          inf_pred_ghr_fifo_q[inf_tail_q] <= req_head_pred_ghr_w;
           inf_epoch_fifo_q[inf_tail_q] <= req_head_epoch_w;
           inf_tail_q <= inf_ptr_inc(inf_tail_q);
         end

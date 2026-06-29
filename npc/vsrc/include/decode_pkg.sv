@@ -3,6 +3,7 @@ package decode_pkg;
   localparam int unsigned FTQ_DEPTH = (Cfg.FTQ_DEPTH >= 2) ? Cfg.FTQ_DEPTH : 2;
   localparam int unsigned FTQ_ID_W = (Cfg.FTQ_ID_W >= 1) ? Cfg.FTQ_ID_W : 1;
   localparam int unsigned FETCH_EPOCH_W = (Cfg.FETCH_EPOCH_W >= 1) ? Cfg.FETCH_EPOCH_W : 3;
+  localparam int unsigned PRED_GHR_W = (Cfg.BPU_GHR_BITS > 0) ? Cfg.BPU_GHR_BITS : 1;
 
   typedef enum logic [2:0] {
     FU_NONE,
@@ -120,6 +121,7 @@ package decode_pkg;
     logic is_rvc;
     logic [FTQ_ID_W-1:0] ftq_id;
     logic [FETCH_EPOCH_W-1:0] fetch_epoch;
+    logic [PRED_GHR_W-1:0] pred_ghr;
 
     // 其它 flag（后面可以扩展）
     logic is_word_op;

@@ -33,6 +33,7 @@ module rename #(
     output logic            [Cfg.INSTR_PER_FETCH-1:0][Cfg.PLEN-1:0] rob_dispatch_pred_npc_o,
     output logic            [Cfg.INSTR_PER_FETCH-1:0][decode_pkg::FTQ_ID_W-1:0] rob_dispatch_ftq_id_o,
     output logic            [Cfg.INSTR_PER_FETCH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] rob_dispatch_fetch_epoch_o,
+    output logic            [Cfg.INSTR_PER_FETCH-1:0][decode_pkg::PRED_GHR_W-1:0] rob_dispatch_pred_ghr_o,
 
     // [新增] 傳遞 Store 信息給 ROB
     output logic [Cfg.INSTR_PER_FETCH-1:0]                   rob_dispatch_is_store_o,
@@ -218,6 +219,7 @@ module rename #(
         rob_dispatch_pred_npc_o[i] = dec_uops_i[i].pred_npc;
         rob_dispatch_ftq_id_o[i] = dec_uops_i[i].ftq_id;
         rob_dispatch_fetch_epoch_o[i] = dec_uops_i[i].fetch_epoch;
+        rob_dispatch_pred_ghr_o[i] = dec_uops_i[i].pred_ghr;
 
         // Store 信息傳遞
         rob_dispatch_is_store_o[i] = dec_uops_i[i].is_store;
@@ -261,6 +263,7 @@ module rename #(
         rob_dispatch_pred_npc_o[i] = '0;
         rob_dispatch_ftq_id_o[i] = '0;
         rob_dispatch_fetch_epoch_o[i] = '0;
+        rob_dispatch_pred_ghr_o[i] = '0;
         rob_dispatch_is_store_o[i] = 1'b0;
         rob_dispatch_st_id_o[i]    = '0;
 

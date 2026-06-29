@@ -14,6 +14,7 @@ package core_contract_pkg;
     logic [Cfg.INSTR_PER_FETCH-1:0] is_rvc;
     logic [Cfg.INSTR_PER_FETCH-1:0][((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] ftq_id;
     logic [Cfg.INSTR_PER_FETCH-1:0][2:0] fetch_epoch;
+    logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] pred_ghr;
   } fe_be_bundle_t;
 
   // be→fe 控制侧带：flush / BPU 训练 / MMU 状态（不含 ifetch_fault / IFU PTE 遍历）
@@ -30,6 +31,7 @@ package core_contract_pkg;
     logic bpu_update_is_rvc;
     logic [FTQ_ID_W-1:0] bpu_update_ftq_id;
     logic [FETCH_EPOCH_W-1:0] bpu_update_fetch_epoch;
+    logic [PRED_GHR_W-1:0] bpu_update_ghr;
     logic [Cfg.NRET-1:0] bpu_ras_update_valid;
     logic [Cfg.NRET-1:0] bpu_ras_update_is_call;
     logic [Cfg.NRET-1:0] bpu_ras_update_is_ret;

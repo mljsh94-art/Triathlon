@@ -101,6 +101,7 @@ module tb_backend (
   assign fe2be.is_rvc = frontend_ibuf_is_rvc;
   assign fe2be.ftq_id = frontend_ibuf_ftq_id;
   assign fe2be.fetch_epoch = frontend_ibuf_fetch_epoch;
+  assign fe2be.pred_ghr = '0;
   assign fe2be.ready = fe2be_ready;
   assign frontend_ibuf_ready = fe2be_ready;
 

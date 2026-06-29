@@ -83,6 +83,7 @@ module backend #(
   localparam int unsigned RENAME_PENDING_CNT_W = $clog2(RENAME_PENDING_DEPTH + 1);
   localparam int unsigned FTQ_ID_W = decode_pkg::FTQ_ID_W;
   localparam int unsigned FETCH_EPOCH_W = decode_pkg::FETCH_EPOCH_W;
+  localparam int unsigned PRED_GHR_W = decode_pkg::PRED_GHR_W;
   localparam int unsigned COMMIT_SEL_W = (COMMIT_WIDTH > 1) ? $clog2(COMMIT_WIDTH) : 1;
   localparam int unsigned ROB_MAX_COMMIT_BR = (Cfg.ROB_MAX_COMMIT_BR >= 1) ? Cfg.ROB_MAX_COMMIT_BR : 1;
   localparam int unsigned ROB_MAX_COMMIT_ST = (Cfg.ROB_MAX_COMMIT_ST >= 1) ? Cfg.ROB_MAX_COMMIT_ST : 2;
@@ -154,6 +155,7 @@ module backend #(
       .ibuf_is_rvc_i    (fe2be_i.is_rvc),
       .ibuf_ftq_id_i    (fe2be_i.ftq_id),
       .ibuf_fetch_epoch_i(fe2be_i.fetch_epoch),
+      .ibuf_pred_ghr_i  (fe2be_i.pred_ghr),
 
       .dec2backend_valid_o(dec_valid),
       .backend2dec_ready_i(decode_backend_ready),
@@ -186,6 +188,7 @@ module backend #(
   logic [    COMMIT_WIDTH-1:0][     Cfg.PLEN-1:0] commit_actual_npc;
   logic [    COMMIT_WIDTH-1:0][    FTQ_ID_W-1:0]  commit_ftq_id;
   logic [    COMMIT_WIDTH-1:0][FETCH_EPOCH_W-1:0] commit_fetch_epoch;
+  logic [    COMMIT_WIDTH-1:0][    PRED_GHR_W-1:0] commit_pred_ghr;
 
   logic                                           rob_flush;
   logic [        Cfg.PLEN-1:0]                    rob_flush_pc;
@@ -209,6 +212,7 @@ module backend #(
   logic [        Cfg.PLEN-1:0]                    rob_sync_exception_tval_q;
   logic [            FTQ_ID_W-1:0]                bpu_update_ftq_id_dbg;
   logic [       FETCH_EPOCH_W-1:0]                bpu_update_fetch_epoch_dbg;
+  logic [            PRED_GHR_W-1:0]              bpu_update_ghr_dbg;
   logic [         COMMIT_SEL_W-1:0]               bpu_update_sel_idx_dbg;
   logic [        Cfg.PLEN-1:0]                    retire_redirect_pc_dbg;
 
@@ -257,6 +261,7 @@ module backend #(
       .dispatch_pred_npc_i(rob_dispatch_pred_npc),
       .dispatch_ftq_id_i(rob_dispatch_ftq_id),
       .dispatch_fetch_epoch_i(rob_dispatch_fetch_epoch),
+      .dispatch_pred_ghr_i(rob_dispatch_pred_ghr),
       .dispatch_is_store_i(rob_dispatch_is_store),
       .dispatch_st_id_i(rob_dispatch_st_id),
 
@@ -311,6 +316,7 @@ module backend #(
       .commit_actual_npc_o(commit_actual_npc),
       .commit_ftq_id_o(commit_ftq_id),
       .commit_fetch_epoch_o(commit_fetch_epoch),
+      .commit_pred_ghr_o(commit_pred_ghr),
 
       .flush_o             (rob_flush),
       .flush_pc_o          (rob_flush_pc),
@@ -345,6 +351,7 @@ module backend #(
       .COMMIT_WIDTH(COMMIT_WIDTH),
       .FTQ_ID_W(FTQ_ID_W),
       .FETCH_EPOCH_W(FETCH_EPOCH_W),
+      .PRED_GHR_W(PRED_GHR_W),
       .COMMIT_SEL_W(COMMIT_SEL_W),
       .ENABLE_COMMIT_RAS_UPDATE(ENABLE_COMMIT_RAS_UPDATE)
   ) u_retire_redirect_ctrl (
@@ -362,6 +369,7 @@ module backend #(
       .commit_actual_npc_i(commit_actual_npc),
       .commit_ftq_id_i(commit_ftq_id),
       .commit_fetch_epoch_i(commit_fetch_epoch),
+      .commit_pred_ghr_i(commit_pred_ghr),
 
       .backend_flush_o(be2fe_flush_w),
       .backend_redirect_pc_o(be2fe_redirect_pc_w),
@@ -377,6 +385,7 @@ module backend #(
       .bpu_update_is_rvc_o(be2fe_bpu_update_is_rvc_w),
       .bpu_update_ftq_id_dbg_o(bpu_update_ftq_id_dbg),
       .bpu_update_fetch_epoch_dbg_o(bpu_update_fetch_epoch_dbg),
+      .bpu_update_ghr_o(bpu_update_ghr_dbg),
       .bpu_update_sel_idx_dbg_o(bpu_update_sel_idx_dbg),
 
       .bpu_ras_update_valid_o(be2fe_bpu_ras_update_valid_w),
@@ -414,6 +423,7 @@ module backend #(
   assign be2fe_o.bpu_update_is_rvc = be2fe_bpu_update_is_rvc_w;
   assign be2fe_o.bpu_update_ftq_id = bpu_update_ftq_id_dbg;
   assign be2fe_o.bpu_update_fetch_epoch = bpu_update_fetch_epoch_dbg;
+  assign be2fe_o.bpu_update_ghr = bpu_update_ghr_dbg;
   assign be2fe_o.bpu_ras_update_valid = be2fe_bpu_ras_update_valid_w;
   assign be2fe_o.bpu_ras_update_is_call = be2fe_bpu_ras_update_is_call_w;
   assign be2fe_o.bpu_ras_update_is_ret = be2fe_bpu_ras_update_is_ret_w;
@@ -629,6 +639,7 @@ module backend #(
   logic            [DISPATCH_WIDTH-1:0][     Cfg.PLEN-1:0] rob_dispatch_pred_npc;
   logic            [DISPATCH_WIDTH-1:0][    FTQ_ID_W-1:0]  rob_dispatch_ftq_id;
   logic            [DISPATCH_WIDTH-1:0][FETCH_EPOCH_W-1:0] rob_dispatch_fetch_epoch;
+  logic            [DISPATCH_WIDTH-1:0][    PRED_GHR_W-1:0] rob_dispatch_pred_ghr;
   logic            [DISPATCH_WIDTH-1:0]                    rob_dispatch_is_store;
   logic            [DISPATCH_WIDTH-1:0][ ST_IDX_WIDTH-1:0] rob_dispatch_st_id;
 
@@ -885,6 +896,7 @@ module backend #(
       .rob_dispatch_pred_npc_o(rob_dispatch_pred_npc),
       .rob_dispatch_ftq_id_o(rob_dispatch_ftq_id),
       .rob_dispatch_fetch_epoch_o(rob_dispatch_fetch_epoch),
+      .rob_dispatch_pred_ghr_o(rob_dispatch_pred_ghr),
       .rob_dispatch_is_store_o(rob_dispatch_is_store),
       .rob_dispatch_st_id_o(rob_dispatch_st_id),
 

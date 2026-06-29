@@ -48,6 +48,7 @@ module bpu #(
     input logic                update_is_rvc_i,
     input logic [global_config_pkg::FTQ_ID_W-1:0] update_ftq_id_i,
     input logic [FETCH_EPOCH_W-1:0] update_fetch_epoch_i,
+    input logic [GHR_W-1:0] update_ghr_i,
     input logic [Cfg.NRET-1:0] ras_update_valid_i,
     input logic [Cfg.NRET-1:0] ras_update_is_call_i,
     input logic [Cfg.NRET-1:0] ras_update_is_ret_i,
@@ -66,7 +67,8 @@ module bpu #(
     output logic                    ftq_enq_pred_slot_valid_o,
     output logic [SLOT_IDX_W-1:0]   ftq_enq_pred_slot_idx_o,
     output logic [Cfg.PLEN-1:0]     ftq_enq_pred_target_o,
-    output logic [Cfg.PLEN-1:0]     ftq_enq_pred_npc_o
+    output logic [Cfg.PLEN-1:0]     ftq_enq_pred_npc_o,
+    output logic [GHR_W-1:0]        ftq_enq_pred_ghr_o
 );
 
   // FTB：pred_slot_idx 升级为 fetch block 内的半字 index（0~PRED_SLOT_COUNT-1）。
@@ -273,7 +275,7 @@ module bpu #(
     ftq_update_w.is_call  = update_is_call_i;
     ftq_update_w.is_ret   = update_is_ret_i;
     ftq_update_w.is_rvc   = update_is_rvc_i;
-    ftq_update_w.meta.ghr  = arch_ghr_q;
+    ftq_update_w.meta.ghr  = update_ghr_i;
     ftq_update_w.meta.path = ittage_predict_ctx_w;
 
     tage_update_w = ftq_update_w;
@@ -446,7 +448,7 @@ module bpu #(
       .update_pc_i(ftq_update_w.pc),
       .update_taken_i(ftq_update_w.taken),
       .update_target_i(ftq_update_w.target),
-      .update_ghr_i(arch_ghr_q),
+      .update_ghr_i(update_ghr_i),
       .dbg_cond_update_total_o(),
       .dbg_cond_local_correct_o(),
       .dbg_cond_global_correct_o(),
@@ -751,6 +753,7 @@ module bpu #(
   assign ftq_enq_pred_slot_idx_o = pred_slot_idx_w;
   assign ftq_enq_pred_target_o = pred_slot_target_w;
   assign ftq_enq_pred_npc_o = pred_npc_w;
+  assign ftq_enq_pred_ghr_o = spec_ghr_q;
 
   always_ff @(posedge clk_i or posedge rst_i) begin
     if (rst_i) begin

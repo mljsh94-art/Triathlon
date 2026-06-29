@@ -26,6 +26,7 @@ module decoder #(
     input  logic [DECODE_WIDTH-1:0]               ibuf_is_rvc_i,
     input logic [DECODE_WIDTH-1:0][decode_pkg::FTQ_ID_W-1:0] ibuf_ftq_id_i,
     input logic [DECODE_WIDTH-1:0][decode_pkg::FETCH_EPOCH_W-1:0] ibuf_fetch_epoch_i,
+    input logic [DECODE_WIDTH-1:0][decode_pkg::PRED_GHR_W-1:0] ibuf_pred_ghr_i,
 
     // Decoded uops to Rename / Issue
     output logic                                dec2backend_valid_o,
@@ -216,6 +217,7 @@ module decoder #(
       uop_decoded.pc        = instr_pc;
       uop_decoded.ftq_id    = '0;
       uop_decoded.fetch_epoch = '0;
+      uop_decoded.pred_ghr  = '0;
       uop_decoded.is_rvc    = 1'b0;
 
       uop_decoded.is_load   = 1'b0;
@@ -743,6 +745,7 @@ module decoder #(
       lane_uop.is_rvc = ibuf_is_rvc_i[lane_index];
       lane_uop.ftq_id = ibuf_ftq_id_i[lane_index];
       lane_uop.fetch_epoch = ibuf_fetch_epoch_i[lane_index];
+      lane_uop.pred_ghr = ibuf_pred_ghr_i[lane_index];
       dec_uops_o[lane_index] = lane_uop;
     end
   end

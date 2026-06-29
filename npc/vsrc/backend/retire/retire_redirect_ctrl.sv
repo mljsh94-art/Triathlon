@@ -5,6 +5,7 @@ module retire_redirect_ctrl #(
     parameter int unsigned COMMIT_WIDTH = Cfg.NRET,
     parameter int unsigned FTQ_ID_W = ((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1),
     parameter int unsigned FETCH_EPOCH_W = 3,
+    parameter int unsigned PRED_GHR_W = (Cfg.BPU_GHR_BITS > 0) ? Cfg.BPU_GHR_BITS : 1,
     parameter int unsigned COMMIT_SEL_W = (COMMIT_WIDTH > 1) ? $clog2(COMMIT_WIDTH) : 1,
     parameter bit ENABLE_COMMIT_RAS_UPDATE = 1'b1
 ) (
@@ -22,6 +23,7 @@ module retire_redirect_ctrl #(
     input logic [COMMIT_WIDTH-1:0][Cfg.PLEN-1:0] commit_actual_npc_i,
     input logic [COMMIT_WIDTH-1:0][FTQ_ID_W-1:0] commit_ftq_id_i,
     input logic [COMMIT_WIDTH-1:0][FETCH_EPOCH_W-1:0] commit_fetch_epoch_i,
+    input logic [COMMIT_WIDTH-1:0][PRED_GHR_W-1:0] commit_pred_ghr_i,
 
     output logic backend_flush_o,
     output logic [Cfg.PLEN-1:0] backend_redirect_pc_o,
@@ -37,6 +39,7 @@ module retire_redirect_ctrl #(
     output logic bpu_update_is_rvc_o,
     output logic [FTQ_ID_W-1:0] bpu_update_ftq_id_dbg_o,
     output logic [FETCH_EPOCH_W-1:0] bpu_update_fetch_epoch_dbg_o,
+    output logic [PRED_GHR_W-1:0] bpu_update_ghr_o,
     output logic [COMMIT_SEL_W-1:0] bpu_update_sel_idx_dbg_o,
 
     output logic [COMMIT_WIDTH-1:0] bpu_ras_update_valid_o,
@@ -64,6 +67,7 @@ module retire_redirect_ctrl #(
     bpu_update_is_rvc_o = 1'b0;
     bpu_update_ftq_id_dbg_o = '0;
     bpu_update_fetch_epoch_dbg_o = '0;
+    bpu_update_ghr_o = '0;
     bpu_update_sel_idx_dbg_o = '0;
     fallthrough_pc = '0;
     instr_size = '0;
@@ -90,6 +94,7 @@ module retire_redirect_ctrl #(
       bpu_update_is_rvc_o = commit_is_rvc_i[sel_idx];
       bpu_update_ftq_id_dbg_o = commit_ftq_id_i[sel_idx];
       bpu_update_fetch_epoch_dbg_o = commit_fetch_epoch_i[sel_idx];
+      bpu_update_ghr_o = commit_pred_ghr_i[sel_idx];
       bpu_update_sel_idx_dbg_o = COMMIT_SEL_W'(sel_idx);
     end
   end
