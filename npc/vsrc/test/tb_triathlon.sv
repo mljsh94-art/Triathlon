@@ -883,58 +883,58 @@ module tb_triathlon #(
   assign dbg_bpu_cond_selected_correct_o = dut.u_frontend.i_bpu.u_bht.dbg_cond_selected_correct_q;
   assign dbg_bpu_cond_choose_local_o = dut.u_frontend.i_bpu.u_bht.dbg_cond_choose_local_q;
   assign dbg_bpu_cond_choose_global_o = dut.u_frontend.i_bpu.u_bht.dbg_cond_choose_global_q;
-  assign dbg_bpu_tage_lookup_total_o = dut.u_frontend.i_bpu.dbg_tage_lookup_total_q;
-  assign dbg_bpu_tage_hit_total_o = dut.u_frontend.i_bpu.dbg_tage_hit_total_q;
-  assign dbg_bpu_tage_override_total_o = dut.u_frontend.i_bpu.dbg_tage_override_total_q;
-  assign dbg_bpu_tage_override_correct_o = dut.u_frontend.i_bpu.dbg_tage_override_correct_q;
-  assign dbg_bpu_sc_lookup_total_o = dut.u_frontend.i_bpu.dbg_sc_lookup_total_q;
-  assign dbg_bpu_sc_confident_total_o = dut.u_frontend.i_bpu.dbg_sc_confident_total_q;
-  assign dbg_bpu_sc_override_total_o = dut.u_frontend.i_bpu.dbg_sc_override_total_q;
-  assign dbg_bpu_sc_override_correct_o = dut.u_frontend.i_bpu.dbg_sc_override_correct_q;
-  assign dbg_bpu_loop_lookup_total_o = dut.u_frontend.i_bpu.dbg_loop_lookup_total_q;
-  assign dbg_bpu_loop_hit_total_o = dut.u_frontend.i_bpu.dbg_loop_hit_total_q;
-  assign dbg_bpu_loop_confident_total_o = dut.u_frontend.i_bpu.dbg_loop_confident_total_q;
-  assign dbg_bpu_loop_override_total_o = dut.u_frontend.i_bpu.dbg_loop_override_total_q;
-  assign dbg_bpu_loop_override_correct_o = dut.u_frontend.i_bpu.dbg_loop_override_correct_q;
+  assign dbg_bpu_tage_lookup_total_o = dut.u_frontend.i_bpu.u_track.dbg_tage_lookup_total_q;
+  assign dbg_bpu_tage_hit_total_o = dut.u_frontend.i_bpu.u_track.dbg_tage_hit_total_q;
+  assign dbg_bpu_tage_override_total_o = dut.u_frontend.i_bpu.u_track.dbg_tage_override_total_q;
+  assign dbg_bpu_tage_override_correct_o = dut.u_frontend.i_bpu.u_track.dbg_tage_override_correct_q;
+  assign dbg_bpu_sc_lookup_total_o = dut.u_frontend.i_bpu.u_track.dbg_sc_lookup_total_q;
+  assign dbg_bpu_sc_confident_total_o = dut.u_frontend.i_bpu.u_track.dbg_sc_confident_total_q;
+  assign dbg_bpu_sc_override_total_o = dut.u_frontend.i_bpu.u_track.dbg_sc_override_total_q;
+  assign dbg_bpu_sc_override_correct_o = dut.u_frontend.i_bpu.u_track.dbg_sc_override_correct_q;
+  assign dbg_bpu_loop_lookup_total_o = dut.u_frontend.i_bpu.u_track.dbg_loop_lookup_total_q;
+  assign dbg_bpu_loop_hit_total_o = dut.u_frontend.i_bpu.u_track.dbg_loop_hit_total_q;
+  assign dbg_bpu_loop_confident_total_o = dut.u_frontend.i_bpu.u_track.dbg_loop_confident_total_q;
+  assign dbg_bpu_loop_override_total_o = dut.u_frontend.i_bpu.u_track.dbg_loop_override_total_q;
+  assign dbg_bpu_loop_override_correct_o = dut.u_frontend.i_bpu.u_track.dbg_loop_override_correct_q;
   assign dbg_bpu_cond_provider_legacy_selected_o =
-      dut.u_frontend.i_bpu.dbg_cond_provider_legacy_selected_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_provider_legacy_selected_q;
   assign dbg_bpu_cond_provider_tage_selected_o =
-      dut.u_frontend.i_bpu.dbg_cond_provider_tage_selected_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_provider_tage_selected_q;
   assign dbg_bpu_cond_provider_sc_selected_o =
-      dut.u_frontend.i_bpu.dbg_cond_provider_sc_selected_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_provider_sc_selected_q;
   assign dbg_bpu_cond_provider_loop_selected_o =
-      dut.u_frontend.i_bpu.dbg_cond_provider_loop_selected_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_provider_loop_selected_q;
   assign dbg_bpu_cond_provider_legacy_correct_o =
-      dut.u_frontend.i_bpu.dbg_cond_provider_legacy_correct_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_provider_legacy_correct_q;
   assign dbg_bpu_cond_provider_tage_correct_o =
-      dut.u_frontend.i_bpu.dbg_cond_provider_tage_correct_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_provider_tage_correct_q;
   assign dbg_bpu_cond_provider_sc_correct_o =
-      dut.u_frontend.i_bpu.dbg_cond_provider_sc_correct_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_provider_sc_correct_q;
   assign dbg_bpu_cond_provider_loop_correct_o =
-      dut.u_frontend.i_bpu.dbg_cond_provider_loop_correct_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_provider_loop_correct_q;
   assign dbg_bpu_cond_selected_wrong_alt_legacy_correct_o =
-      dut.u_frontend.i_bpu.dbg_cond_selected_wrong_alt_legacy_correct_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_selected_wrong_alt_legacy_correct_q;
   assign dbg_bpu_cond_selected_wrong_alt_tage_correct_o =
-      dut.u_frontend.i_bpu.dbg_cond_selected_wrong_alt_tage_correct_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_selected_wrong_alt_tage_correct_q;
   assign dbg_bpu_cond_selected_wrong_alt_sc_correct_o =
-      dut.u_frontend.i_bpu.dbg_cond_selected_wrong_alt_sc_correct_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_selected_wrong_alt_sc_correct_q;
   assign dbg_bpu_cond_selected_wrong_alt_loop_correct_o =
-      dut.u_frontend.i_bpu.dbg_cond_selected_wrong_alt_loop_correct_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_selected_wrong_alt_loop_correct_q;
   assign dbg_bpu_cond_selected_wrong_alt_any_correct_o =
-      dut.u_frontend.i_bpu.dbg_cond_selected_wrong_alt_any_correct_q;
-  assign dbg_bpu_ftb_lookup_total_o = dut.u_frontend.i_bpu.dbg_ftb_lookup_total_q;
-  assign dbg_bpu_ftb_cond_hit_total_o = dut.u_frontend.i_bpu.dbg_ftb_cond_hit_total_q;
-  assign dbg_bpu_ftb_jump_hit_total_o = dut.u_frontend.i_bpu.dbg_ftb_jump_hit_total_q;
-  assign dbg_bpu_ftb_cond_pick_total_o = dut.u_frontend.i_bpu.dbg_ftb_cond_pick_total_q;
-  assign dbg_bpu_ftb_jump_pick_total_o = dut.u_frontend.i_bpu.dbg_ftb_jump_pick_total_q;
-  assign dbg_bpu_ftb_cond_tag_miss_total_o = dut.u_frontend.i_bpu.dbg_ftb_cond_tag_miss_total_q;
-  assign dbg_bpu_ftb_jump_tag_miss_total_o = dut.u_frontend.i_bpu.dbg_ftb_jump_tag_miss_total_q;
-  assign dbg_bpu_ftb_train_cond_total_o = dut.u_frontend.i_bpu.dbg_ftb_train_cond_total_q;
-  assign dbg_bpu_ftb_train_jump_total_o = dut.u_frontend.i_bpu.dbg_ftb_train_jump_total_q;
-  assign dbg_bpu_ittage_lookup_total_o = dut.u_frontend.i_bpu.dbg_ittage_lookup_total_q;
-  assign dbg_bpu_ittage_hit_total_o = dut.u_frontend.i_bpu.dbg_ittage_hit_total_q;
-  assign dbg_bpu_ittage_use_total_o = dut.u_frontend.i_bpu.dbg_ittage_use_total_q;
-  assign dbg_bpu_ittage_train_total_o = dut.u_frontend.i_bpu.dbg_ittage_train_total_q;
+      dut.u_frontend.i_bpu.u_track.dbg_cond_selected_wrong_alt_any_correct_q;
+  assign dbg_bpu_ftb_lookup_total_o = dut.u_frontend.i_bpu.u_track.dbg_ftb_lookup_total_q;
+  assign dbg_bpu_ftb_cond_hit_total_o = dut.u_frontend.i_bpu.u_track.dbg_ftb_cond_hit_total_q;
+  assign dbg_bpu_ftb_jump_hit_total_o = dut.u_frontend.i_bpu.u_track.dbg_ftb_jump_hit_total_q;
+  assign dbg_bpu_ftb_cond_pick_total_o = dut.u_frontend.i_bpu.u_track.dbg_ftb_cond_pick_total_q;
+  assign dbg_bpu_ftb_jump_pick_total_o = dut.u_frontend.i_bpu.u_track.dbg_ftb_jump_pick_total_q;
+  assign dbg_bpu_ftb_cond_tag_miss_total_o = dut.u_frontend.i_bpu.u_track.dbg_ftb_cond_tag_miss_total_q;
+  assign dbg_bpu_ftb_jump_tag_miss_total_o = dut.u_frontend.i_bpu.u_track.dbg_ftb_jump_tag_miss_total_q;
+  assign dbg_bpu_ftb_train_cond_total_o = dut.u_frontend.i_bpu.u_track.dbg_ftb_train_cond_total_q;
+  assign dbg_bpu_ftb_train_jump_total_o = dut.u_frontend.i_bpu.u_track.dbg_ftb_train_jump_total_q;
+  assign dbg_bpu_ittage_lookup_total_o = dut.u_frontend.i_bpu.u_track.dbg_ittage_lookup_total_q;
+  assign dbg_bpu_ittage_hit_total_o = dut.u_frontend.i_bpu.u_track.dbg_ittage_hit_total_q;
+  assign dbg_bpu_ittage_use_total_o = dut.u_frontend.i_bpu.u_track.dbg_ittage_use_total_q;
+  assign dbg_bpu_ittage_train_total_o = dut.u_frontend.i_bpu.u_track.dbg_ittage_train_total_q;
   assign dbg_bpu_pred_snap_valid_o = dut.u_frontend.i_bpu.pred_snap_valid_q;
   assign dbg_bpu_pred_snap_cond_hit_o = dut.u_frontend.i_bpu.pred_snap_cond_hit_q;
   assign dbg_bpu_pred_snap_jump_hit_o = dut.u_frontend.i_bpu.pred_snap_jump_hit_q;

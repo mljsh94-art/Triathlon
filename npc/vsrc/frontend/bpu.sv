@@ -81,9 +81,6 @@ module bpu #(
   localparam int unsigned BTB_TAG_W = Cfg.PLEN - BTB_IDX_W - BLOCK_ADDR_LSB;
   localparam int unsigned GHR_W = (GHR_BITS > 0) ? GHR_BITS : 1;
   localparam int unsigned PATH_HIST_W = (PATH_HIST_BITS > 0) ? PATH_HIST_BITS : 1;
-  localparam int unsigned TAGE_TRACK_DEPTH = (TRACK_DEPTH >= 2) ? TRACK_DEPTH : 2;
-  localparam int unsigned TAGE_TRACK_PTR_W = (TAGE_TRACK_DEPTH > 1) ? $clog2(TAGE_TRACK_DEPTH) : 1;
-  localparam int unsigned TAGE_TRACK_CNT_W = $clog2(TAGE_TRACK_DEPTH + 1);
   localparam logic [1:0] COND_PROVIDER_LEGACY = 2'd0;
   localparam logic [1:0] COND_PROVIDER_TAGE = 2'd1;
   localparam logic [1:0] COND_PROVIDER_SC = 2'd2;
@@ -111,53 +108,17 @@ module bpu #(
   logic pred_event_is_cond_q;
   logic pred_event_taken_q;
   logic [Cfg.PLEN-1:0] pred_event_pc_q;
+  // arch/spec GHR + path history、推测推进、commit 推进、flush 回滚与 ITTAGE path
+  // context 生成已抽到 u_history (bpu_history.sv)。顶层只保留只读连线与 ghr_q 别名。
   logic [GHR_W-1:0] arch_ghr_q;
   logic [GHR_W-1:0] spec_ghr_q;
-  logic [PATH_HIST_W-1:0] arch_path_hist_q;
-  logic [PATH_HIST_W-1:0] spec_path_hist_q;
   logic [GHR_W-1:0] ghr_q;
   logic [PATH_HIST_W-1:0] ittage_predict_ctx_w;
   // dbg_cond_* (update/local/global/selected correct, choose local/global) 计数已随
   // tournament 训练迁入 u_bht (bpu_bht.sv)；tb 经 i_bpu.u_bht.dbg_cond_*_q 层级引用读取。
-  logic [63:0] dbg_tage_lookup_total_q;
-  logic [63:0] dbg_tage_hit_total_q;
-  logic [63:0] dbg_tage_override_total_q;
-  logic [63:0] dbg_tage_override_correct_q;
-  logic [63:0] dbg_sc_lookup_total_q;
-  logic [63:0] dbg_sc_confident_total_q;
-  logic [63:0] dbg_sc_override_total_q;
-  logic [63:0] dbg_sc_override_correct_q;
-  logic [63:0] dbg_loop_lookup_total_q;
-  logic [63:0] dbg_loop_hit_total_q;
-  logic [63:0] dbg_loop_confident_total_q;
-  logic [63:0] dbg_loop_override_total_q;
-  logic [63:0] dbg_loop_override_correct_q;
-  logic [63:0] dbg_cond_provider_legacy_selected_q;
-  logic [63:0] dbg_cond_provider_tage_selected_q;
-  logic [63:0] dbg_cond_provider_sc_selected_q;
-  logic [63:0] dbg_cond_provider_loop_selected_q;
-  logic [63:0] dbg_cond_provider_legacy_correct_q;
-  logic [63:0] dbg_cond_provider_tage_correct_q;
-  logic [63:0] dbg_cond_provider_sc_correct_q;
-  logic [63:0] dbg_cond_provider_loop_correct_q;
-  logic [63:0] dbg_cond_selected_wrong_alt_legacy_correct_q;
-  logic [63:0] dbg_cond_selected_wrong_alt_tage_correct_q;
-  logic [63:0] dbg_cond_selected_wrong_alt_sc_correct_q;
-  logic [63:0] dbg_cond_selected_wrong_alt_loop_correct_q;
-  logic [63:0] dbg_cond_selected_wrong_alt_any_correct_q;
-  logic [63:0] dbg_ftb_lookup_total_q;
-  logic [63:0] dbg_ftb_cond_hit_total_q;
-  logic [63:0] dbg_ftb_jump_hit_total_q;
-  logic [63:0] dbg_ftb_cond_pick_total_q;
-  logic [63:0] dbg_ftb_jump_pick_total_q;
-  logic [63:0] dbg_ftb_cond_tag_miss_total_q;
-  logic [63:0] dbg_ftb_jump_tag_miss_total_q;
-  logic [63:0] dbg_ftb_train_cond_total_q;
-  logic [63:0] dbg_ftb_train_jump_total_q;
-  logic [63:0] dbg_ittage_lookup_total_q;
-  logic [63:0] dbg_ittage_hit_total_q;
-  logic [63:0] dbg_ittage_use_total_q;
-  logic [63:0] dbg_ittage_train_total_q;
+  // dbg_tage_*/dbg_sc_*/dbg_loop_*/dbg_cond_provider_*/dbg_ftb_*/dbg_ittage_* 计数器与
+  // 各 provider 的 override 追踪 FIFO 已随 update 逻辑迁入 u_track (bpu_track.sv)；
+  // tb 经 i_bpu.u_track.dbg_*_q 层级引用读取，dbg_bpu_* profile 签名不变。
   logic dbg_snap_ftb_cond_hit_w;
   logic dbg_snap_ftb_jump_hit_w;
   logic dbg_snap_ftb_pick_cond_w;
@@ -198,55 +159,9 @@ module bpu #(
   logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] pred_snap_cond_branch_pc_q;
   logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] pred_snap_jump_branch_pc_q;
   logic pred_fire_comb_w;
-  logic [TAGE_TRACK_DEPTH-1:0] tage_track_override_q;
-  logic [TAGE_TRACK_DEPTH-1:0] tage_track_pred_taken_q;
-  logic [TAGE_TRACK_PTR_W-1:0] tage_track_head_q;
-  logic [TAGE_TRACK_PTR_W-1:0] tage_track_tail_q;
-  logic [TAGE_TRACK_CNT_W-1:0] tage_track_count_q;
-  logic [TAGE_TRACK_DEPTH-1:0] sc_track_override_q;
-  logic [TAGE_TRACK_DEPTH-1:0] sc_track_pred_taken_q;
-  logic [TAGE_TRACK_PTR_W-1:0] sc_track_head_q;
-  logic [TAGE_TRACK_PTR_W-1:0] sc_track_tail_q;
-  logic [TAGE_TRACK_CNT_W-1:0] sc_track_count_q;
-  logic [TAGE_TRACK_DEPTH-1:0] loop_track_override_q;
-  logic [TAGE_TRACK_DEPTH-1:0] loop_track_pred_taken_q;
-  logic [TAGE_TRACK_PTR_W-1:0] loop_track_head_q;
-  logic [TAGE_TRACK_PTR_W-1:0] loop_track_tail_q;
-  logic [TAGE_TRACK_CNT_W-1:0] loop_track_count_q;
-  logic [TAGE_TRACK_DEPTH-1:0][1:0] cond_track_provider_q;
-  logic [TAGE_TRACK_DEPTH-1:0] cond_track_selected_taken_q;
-  logic [TAGE_TRACK_DEPTH-1:0] cond_track_legacy_taken_q;
-  logic [TAGE_TRACK_DEPTH-1:0] cond_track_tage_taken_q;
-  logic [TAGE_TRACK_DEPTH-1:0] cond_track_sc_taken_q;
-  logic [TAGE_TRACK_DEPTH-1:0] cond_track_loop_taken_q;
-  logic [TAGE_TRACK_DEPTH-1:0] cond_track_tage_candidate_q;
-  logic [TAGE_TRACK_DEPTH-1:0] cond_track_sc_candidate_q;
-  logic [TAGE_TRACK_DEPTH-1:0] cond_track_loop_candidate_q;
-  logic [TAGE_TRACK_PTR_W-1:0] cond_track_head_q;
-  logic [TAGE_TRACK_PTR_W-1:0] cond_track_tail_q;
-  logic [TAGE_TRACK_CNT_W-1:0] cond_track_count_q;
 
   // bht_pc_index / bht_global_index / sat_inc / sat_dec 已随 BHT 抽入 u_bht (bpu_bht.sv)。
-
-  function automatic logic [GHR_W-1:0] ghr_shift(input logic [GHR_W-1:0] hist,
-                                                 input logic                 taken);
-    begin
-      ghr_shift = (hist << 1) | GHR_W'(taken);
-    end
-  endfunction
-
-  function automatic logic [PATH_HIST_W-1:0] path_shift(input logic [PATH_HIST_W-1:0] hist,
-                                                         input logic [Cfg.PLEN-1:0]      pc,
-                                                         input logic                      taken);
-    logic [PATH_HIST_W-1:0] pc_mix;
-    begin
-      pc_mix = '0;
-      for (int i = 0; i < Cfg.PLEN; i++) begin
-        pc_mix[i%PATH_HIST_W] ^= pc[i];
-      end
-      path_shift = {hist[PATH_HIST_W-2:0], taken} ^ pc_mix;
-    end
-  endfunction
+  // ghr_shift / path_shift 已随历史抽入 u_history (bpu_history.sv)。
 
   // FTB 单分支预测：原 [INSTR_PER_FETCH] per-slot 向量收敛为单分支标量。
   // 双槽各自还原的分支 PC：cond 槽喂 BHT/TAGE/SC/Loop，jump 槽喂 ITTAGE。
@@ -319,14 +234,8 @@ module bpu #(
   update_t       loop_update_w;
   update_t       ittage_update_w;
 
+  // ghr_q 别名保持对外不变（tb_bpu/tb_bpu_phase5_red 经 i_BPU.ghr_q 读取）。
   assign ghr_q = spec_ghr_q;
-
-  always_comb begin
-    ittage_predict_ctx_w = spec_path_hist_q;
-    if (!flush_i && pred_event_valid_q && pred_event_is_cond_q) begin
-      ittage_predict_ctx_w = path_shift(ittage_predict_ctx_w, pred_event_pc_q, pred_event_taken_q);
-    end
-  end
 
   always_comb begin
     ftq_update_w.valid    = update_valid_i;
@@ -460,6 +369,30 @@ module bpu #(
       .arch_ras_has_entry_o()
   );
 
+  // 共享分支历史：arch/spec GHR + path。推测推进由寄存的 pred_event（与 u_ras 同源）
+  // 驱动，commit 推进由 ftq_update 驱动，flush 时 spec<=arch 回滚。ITTAGE predict-time
+  // path context 也在此生成。逻辑与原 bpu.sv 内联完全一致，仅作用域/连线不同。
+  bpu_history #(
+      .Cfg(Cfg),
+      .GHR_BITS(GHR_BITS),
+      .PATH_HIST_BITS(PATH_HIST_BITS)
+  ) u_history (
+      .clk_i(clk_i),
+      .rst_i(rst_i),
+      .flush_i(flush_i),
+      .update_valid_i(ftq_update_w.valid),
+      .update_is_cond_i(ftq_update_w.is_cond),
+      .update_taken_i(ftq_update_w.taken),
+      .update_pc_i(ftq_update_w.pc),
+      .pred_event_valid_i(pred_event_valid_q),
+      .pred_event_is_cond_i(pred_event_is_cond_q),
+      .pred_event_taken_i(pred_event_taken_q),
+      .pred_event_pc_i(pred_event_pc_q),
+      .arch_ghr_o(arch_ghr_q),
+      .spec_ghr_o(spec_ghr_q),
+      .ittage_predict_ctx_o(ittage_predict_ctx_w)
+  );
+
   // BHT/chooser storage、index 函数、tournament 训练与 cond 计数。预测期暴露 legacy
   // 方向 sideband 给顶层做 SC override 门控；计数数组只读输出给 u_ftb 复用。
   bpu_bht #(
@@ -552,6 +485,52 @@ module bpu #(
       .dbg_snap_ftb_jump_in_range_o(dbg_snap_ftb_jump_in_range_w),
       .dbg_snap_ftb_cond_taken_pred_o(dbg_snap_ftb_cond_taken_pred_w),
       .dbg_snap_ftb_jump_indirect_o(dbg_snap_ftb_jump_indirect_w)
+  );
+
+  // Override 追踪 FIFO（tage/sc/loop/cond）+ 全部 dbg_* 计数器。预测期由 pred_fire +
+  // pred_slot/override sideband 入队并计数，commit 期由 update 出队比对正确性。逻辑与
+  // 原 bpu.sv 内联 always_ff 完全一致，仅作用域/连线不同。
+  bpu_track #(
+      .USE_TAGE(USE_TAGE),
+      .USE_SC(USE_SC),
+      .USE_LOOP(USE_LOOP),
+      .TRACK_DEPTH(TRACK_DEPTH)
+  ) u_track (
+      .clk_i(clk_i),
+      .rst_i(rst_i),
+      .flush_i(flush_i),
+      .update_valid_i(ftq_update_w.valid),
+      .update_is_cond_i(ftq_update_w.is_cond),
+      .update_taken_i(ftq_update_w.taken),
+      .ittage_update_valid_i(ittage_update_w.valid),
+      .pred_fire_i(pred_fire_comb_w),
+      .pred_slot_is_cond_i(pred_slot_is_cond_w),
+      .pred_slot_taken_i(pred_slot_taken_w),
+      .tage_hit_i(tage_hit_w),
+      .cond_tage_override_i(cond_tage_override_w),
+      .sc_confident_i(sc_confident_w),
+      .cond_sc_override_i(cond_sc_override_w),
+      .loop_hit_i(loop_hit_w),
+      .loop_confident_i(loop_confident_w),
+      .cond_loop_override_i(cond_loop_override_w),
+      .cond_selected_provider_i(cond_selected_provider_w),
+      .cond_selected_taken_i(cond_selected_taken_w),
+      .cond_taken_legacy_i(cond_taken_legacy_w),
+      .tage_taken_i(tage_taken_w),
+      .sc_taken_i(sc_taken_w),
+      .loop_taken_i(loop_taken_w),
+      .cond_tage_candidate_i(cond_tage_candidate_w),
+      .cond_sc_candidate_i(cond_sc_candidate_w),
+      .cond_loop_candidate_i(cond_loop_candidate_w),
+      .dbg_snap_ftb_cond_hit_i(dbg_snap_ftb_cond_hit_w),
+      .dbg_snap_ftb_jump_hit_i(dbg_snap_ftb_jump_hit_w),
+      .dbg_snap_ftb_pick_cond_i(dbg_snap_ftb_pick_cond_w),
+      .dbg_snap_ftb_pick_jump_i(dbg_snap_ftb_pick_jump_w),
+      .dbg_snap_ftb_cond_tag_miss_i(dbg_snap_ftb_cond_tag_miss_w),
+      .dbg_snap_ftb_jump_tag_miss_i(dbg_snap_ftb_jump_tag_miss_w),
+      .dbg_snap_ftb_jump_indirect_i(dbg_snap_ftb_jump_indirect_w),
+      .dbg_snap_ittage_raw_hit_i(dbg_snap_ittage_raw_hit_w),
+      .dbg_snap_ittage_use_i(dbg_snap_ittage_use_w)
   );
 
   always_comb begin
@@ -775,184 +754,14 @@ module bpu #(
       pred_snap_fetch_epoch_q <= '0;
       pred_snap_cond_branch_pc_q <= '0;
       pred_snap_jump_branch_pc_q <= '0;
-      arch_ghr_q <= '0;
-      spec_ghr_q <= '0;
-      arch_path_hist_q <= '0;
-      spec_path_hist_q <= '0;
-      dbg_tage_lookup_total_q <= '0;
-      dbg_tage_hit_total_q <= '0;
-      dbg_tage_override_total_q <= '0;
-      dbg_tage_override_correct_q <= '0;
-      dbg_sc_lookup_total_q <= '0;
-      dbg_sc_confident_total_q <= '0;
-      dbg_sc_override_total_q <= '0;
-      dbg_sc_override_correct_q <= '0;
-      dbg_loop_lookup_total_q <= '0;
-      dbg_loop_hit_total_q <= '0;
-      dbg_loop_confident_total_q <= '0;
-      dbg_loop_override_total_q <= '0;
-      dbg_loop_override_correct_q <= '0;
-      dbg_cond_provider_legacy_selected_q <= '0;
-      dbg_cond_provider_tage_selected_q <= '0;
-      dbg_cond_provider_sc_selected_q <= '0;
-      dbg_cond_provider_loop_selected_q <= '0;
-      dbg_cond_provider_legacy_correct_q <= '0;
-      dbg_cond_provider_tage_correct_q <= '0;
-      dbg_cond_provider_sc_correct_q <= '0;
-      dbg_cond_provider_loop_correct_q <= '0;
-      dbg_cond_selected_wrong_alt_legacy_correct_q <= '0;
-      dbg_cond_selected_wrong_alt_tage_correct_q <= '0;
-      dbg_cond_selected_wrong_alt_sc_correct_q <= '0;
-      dbg_cond_selected_wrong_alt_loop_correct_q <= '0;
-      dbg_cond_selected_wrong_alt_any_correct_q <= '0;
-      dbg_ftb_lookup_total_q <= '0;
-      dbg_ftb_cond_hit_total_q <= '0;
-      dbg_ftb_jump_hit_total_q <= '0;
-      dbg_ftb_cond_pick_total_q <= '0;
-      dbg_ftb_jump_pick_total_q <= '0;
-      dbg_ftb_cond_tag_miss_total_q <= '0;
-      dbg_ftb_jump_tag_miss_total_q <= '0;
-      dbg_ftb_train_cond_total_q <= '0;
-      dbg_ftb_train_jump_total_q <= '0;
-      dbg_ittage_lookup_total_q <= '0;
-      dbg_ittage_hit_total_q <= '0;
-      dbg_ittage_use_total_q <= '0;
-      dbg_ittage_train_total_q <= '0;
-      tage_track_override_q <= '0;
-      tage_track_pred_taken_q <= '0;
-      tage_track_head_q <= '0;
-      tage_track_tail_q <= '0;
-      tage_track_count_q <= '0;
-      sc_track_override_q <= '0;
-      sc_track_pred_taken_q <= '0;
-      sc_track_head_q <= '0;
-      sc_track_tail_q <= '0;
-      sc_track_count_q <= '0;
-      loop_track_override_q <= '0;
-      loop_track_pred_taken_q <= '0;
-      loop_track_head_q <= '0;
-      loop_track_tail_q <= '0;
-      loop_track_count_q <= '0;
-      cond_track_provider_q <= '0;
-      cond_track_selected_taken_q <= '0;
-      cond_track_legacy_taken_q <= '0;
-      cond_track_tage_taken_q <= '0;
-      cond_track_sc_taken_q <= '0;
-      cond_track_loop_taken_q <= '0;
-      cond_track_tage_candidate_q <= '0;
-      cond_track_sc_candidate_q <= '0;
-      cond_track_loop_candidate_q <= '0;
-      cond_track_head_q <= '0;
-      cond_track_tail_q <= '0;
-      cond_track_count_q <= '0;
 `ifndef SYNTHESIS
 `endif
+      // arch/spec GHR + path 复位已随历史迁入 u_history。
       // BHT/chooser 复位（2'b01 弱不跳）已随存储迁入 u_bht。
+      // dbg_* 计数器与 override 追踪 FIFO 复位已随逻辑迁入 u_track。
     end else begin
       logic pred_fire_w;
-      logic [TAGE_TRACK_PTR_W-1:0] tage_head_n;
-      logic [TAGE_TRACK_PTR_W-1:0] tage_tail_n;
-      logic [TAGE_TRACK_CNT_W-1:0] tage_count_n;
-      logic [TAGE_TRACK_DEPTH-1:0] tage_override_n;
-      logic [TAGE_TRACK_DEPTH-1:0] tage_pred_taken_n;
-      logic [TAGE_TRACK_PTR_W-1:0] sc_head_n;
-      logic [TAGE_TRACK_PTR_W-1:0] sc_tail_n;
-      logic [TAGE_TRACK_CNT_W-1:0] sc_count_n;
-      logic [TAGE_TRACK_DEPTH-1:0] sc_override_n;
-      logic [TAGE_TRACK_DEPTH-1:0] sc_pred_taken_n;
-      logic [TAGE_TRACK_PTR_W-1:0] loop_head_n;
-      logic [TAGE_TRACK_PTR_W-1:0] loop_tail_n;
-      logic [TAGE_TRACK_CNT_W-1:0] loop_count_n;
-      logic [TAGE_TRACK_DEPTH-1:0] loop_override_n;
-      logic [TAGE_TRACK_DEPTH-1:0] loop_pred_taken_n;
-      logic tage_pop_override;
-      logic tage_pop_pred_taken;
-      logic tage_push_override;
-      logic sc_pop_override;
-      logic sc_pop_pred_taken;
-      logic sc_push_override;
-      logic loop_pop_override;
-      logic loop_pop_pred_taken;
-      logic loop_push_override;
-      logic [TAGE_TRACK_PTR_W-1:0] cond_head_n;
-      logic [TAGE_TRACK_PTR_W-1:0] cond_tail_n;
-      logic [TAGE_TRACK_CNT_W-1:0] cond_count_n;
-      logic [TAGE_TRACK_DEPTH-1:0][1:0] cond_provider_n;
-      logic [TAGE_TRACK_DEPTH-1:0] cond_selected_taken_n;
-      logic [TAGE_TRACK_DEPTH-1:0] cond_legacy_taken_n;
-      logic [TAGE_TRACK_DEPTH-1:0] cond_tage_taken_n;
-      logic [TAGE_TRACK_DEPTH-1:0] cond_sc_taken_n;
-      logic [TAGE_TRACK_DEPTH-1:0] cond_loop_taken_n;
-      logic [TAGE_TRACK_DEPTH-1:0] cond_tage_candidate_n;
-      logic [TAGE_TRACK_DEPTH-1:0] cond_sc_candidate_n;
-      logic [TAGE_TRACK_DEPTH-1:0] cond_loop_candidate_n;
-      logic [1:0] cond_pop_provider;
-      logic cond_pop_selected_taken;
-      logic cond_pop_legacy_taken;
-      logic cond_pop_tage_taken;
-      logic cond_pop_sc_taken;
-      logic cond_pop_loop_taken;
-      logic cond_pop_tage_candidate;
-      logic cond_pop_sc_candidate;
-      logic cond_pop_loop_candidate;
-      logic cond_selected_pred_correct;
-      logic cond_alt_any_correct;
-      logic [GHR_W-1:0] arch_ghr_n;
-      logic [GHR_W-1:0] spec_ghr_n;
-      logic [PATH_HIST_W-1:0] arch_path_hist_n;
-      logic [PATH_HIST_W-1:0] spec_path_hist_n;
 
-      arch_ghr_n = arch_ghr_q;
-      spec_ghr_n = spec_ghr_q;
-      arch_path_hist_n = arch_path_hist_q;
-      spec_path_hist_n = spec_path_hist_q;
-      tage_head_n = tage_track_head_q;
-      tage_tail_n = tage_track_tail_q;
-      tage_count_n = tage_track_count_q;
-      tage_override_n = tage_track_override_q;
-      tage_pred_taken_n = tage_track_pred_taken_q;
-      sc_head_n = sc_track_head_q;
-      sc_tail_n = sc_track_tail_q;
-      sc_count_n = sc_track_count_q;
-      sc_override_n = sc_track_override_q;
-      sc_pred_taken_n = sc_track_pred_taken_q;
-      loop_head_n = loop_track_head_q;
-      loop_tail_n = loop_track_tail_q;
-      loop_count_n = loop_track_count_q;
-      loop_override_n = loop_track_override_q;
-      loop_pred_taken_n = loop_track_pred_taken_q;
-      cond_head_n = cond_track_head_q;
-      cond_tail_n = cond_track_tail_q;
-      cond_count_n = cond_track_count_q;
-      cond_provider_n = cond_track_provider_q;
-      cond_selected_taken_n = cond_track_selected_taken_q;
-      cond_legacy_taken_n = cond_track_legacy_taken_q;
-      cond_tage_taken_n = cond_track_tage_taken_q;
-      cond_sc_taken_n = cond_track_sc_taken_q;
-      cond_loop_taken_n = cond_track_loop_taken_q;
-      cond_tage_candidate_n = cond_track_tage_candidate_q;
-      cond_sc_candidate_n = cond_track_sc_candidate_q;
-      cond_loop_candidate_n = cond_track_loop_candidate_q;
-      tage_pop_override = 1'b0;
-      tage_pop_pred_taken = 1'b0;
-      tage_push_override = 1'b0;
-      sc_pop_override = 1'b0;
-      sc_pop_pred_taken = 1'b0;
-      sc_push_override = 1'b0;
-      loop_pop_override = 1'b0;
-      loop_pop_pred_taken = 1'b0;
-      loop_push_override = 1'b0;
-      cond_pop_provider = COND_PROVIDER_LEGACY;
-      cond_pop_selected_taken = 1'b0;
-      cond_pop_legacy_taken = 1'b0;
-      cond_pop_tage_taken = 1'b0;
-      cond_pop_sc_taken = 1'b0;
-      cond_pop_loop_taken = 1'b0;
-      cond_pop_tage_candidate = 1'b0;
-      cond_pop_sc_candidate = 1'b0;
-      cond_pop_loop_candidate = 1'b0;
-      cond_selected_pred_correct = 1'b0;
-      cond_alt_any_correct = 1'b0;
       pred_fire_w = ftq_enq_valid_o && ftq_enq_ready_i;
 
       if (redirect_valid_i) begin
@@ -961,174 +770,10 @@ module bpu #(
         pc_reg_q <= pred_npc_w;
       end
 
-      if (ftq_update_w.valid) begin
-        // FTB BTB 训练已移至 u_ftb；BHT/chooser 训练与 cond 计数已移至 u_bht。
-        // 此处只保留 FTB/ITTAGE 训练计数与架构历史（GHR/path）推进。
-
-        // FTB 训练计数：与 u_ftb 内 up_do_ftb_train 条件保持一致。
-        if (!ftq_update_w.is_cond || ftq_update_w.taken) begin
-          if (ftq_update_w.is_cond) begin
-            dbg_ftb_train_cond_total_q <= dbg_ftb_train_cond_total_q + 64'd1;
-          end else begin
-            dbg_ftb_train_jump_total_q <= dbg_ftb_train_jump_total_q + 64'd1;
-          end
-        end
-        if (ittage_update_w.valid) begin
-          dbg_ittage_train_total_q <= dbg_ittage_train_total_q + 64'd1;
-        end
-
-        if (ftq_update_w.is_cond) begin
-          arch_ghr_n = ghr_shift(arch_ghr_n, ftq_update_w.taken);
-          arch_path_hist_n = path_shift(arch_path_hist_n, ftq_update_w.pc, ftq_update_w.taken);
-        end
-
-        if (USE_TAGE && ftq_update_w.is_cond && (tage_count_n != '0)) begin
-          tage_pop_override = tage_override_n[tage_head_n];
-          tage_pop_pred_taken = tage_pred_taken_n[tage_head_n];
-          tage_head_n = tage_head_n + TAGE_TRACK_PTR_W'(1);
-          tage_count_n = tage_count_n - TAGE_TRACK_CNT_W'(1);
-          if (tage_pop_override && (tage_pop_pred_taken == ftq_update_w.taken)) begin
-            dbg_tage_override_correct_q <= dbg_tage_override_correct_q + 64'd1;
-          end
-        end
-        if (USE_SC && ftq_update_w.is_cond && (sc_count_n != '0)) begin
-          sc_pop_override = sc_override_n[sc_head_n];
-          sc_pop_pred_taken = sc_pred_taken_n[sc_head_n];
-          sc_head_n = sc_head_n + TAGE_TRACK_PTR_W'(1);
-          sc_count_n = sc_count_n - TAGE_TRACK_CNT_W'(1);
-          if (sc_pop_override && (sc_pop_pred_taken == ftq_update_w.taken)) begin
-            dbg_sc_override_correct_q <= dbg_sc_override_correct_q + 64'd1;
-          end
-        end
-        if (USE_LOOP && ftq_update_w.is_cond && (loop_count_n != '0)) begin
-          loop_pop_override = loop_override_n[loop_head_n];
-          loop_pop_pred_taken = loop_pred_taken_n[loop_head_n];
-          loop_head_n = loop_head_n + TAGE_TRACK_PTR_W'(1);
-          loop_count_n = loop_count_n - TAGE_TRACK_CNT_W'(1);
-          if (loop_pop_override && (loop_pop_pred_taken == ftq_update_w.taken)) begin
-            dbg_loop_override_correct_q <= dbg_loop_override_correct_q + 64'd1;
-          end
-        end
-        if (ftq_update_w.is_cond && (cond_count_n != '0)) begin
-          cond_pop_provider = cond_provider_n[cond_head_n];
-          cond_pop_selected_taken = cond_selected_taken_n[cond_head_n];
-          cond_pop_legacy_taken = cond_legacy_taken_n[cond_head_n];
-          cond_pop_tage_taken = cond_tage_taken_n[cond_head_n];
-          cond_pop_sc_taken = cond_sc_taken_n[cond_head_n];
-          cond_pop_loop_taken = cond_loop_taken_n[cond_head_n];
-          cond_pop_tage_candidate = cond_tage_candidate_n[cond_head_n];
-          cond_pop_sc_candidate = cond_sc_candidate_n[cond_head_n];
-          cond_pop_loop_candidate = cond_loop_candidate_n[cond_head_n];
-          cond_head_n = cond_head_n + TAGE_TRACK_PTR_W'(1);
-          cond_count_n = cond_count_n - TAGE_TRACK_CNT_W'(1);
-
-          cond_selected_pred_correct = (cond_pop_selected_taken == ftq_update_w.taken);
-          case (cond_pop_provider)
-            COND_PROVIDER_TAGE: begin
-              dbg_cond_provider_tage_selected_q <= dbg_cond_provider_tage_selected_q + 64'd1;
-              if (cond_selected_pred_correct) begin
-                dbg_cond_provider_tage_correct_q <= dbg_cond_provider_tage_correct_q + 64'd1;
-              end
-            end
-            COND_PROVIDER_SC: begin
-              dbg_cond_provider_sc_selected_q <= dbg_cond_provider_sc_selected_q + 64'd1;
-              if (cond_selected_pred_correct) begin
-                dbg_cond_provider_sc_correct_q <= dbg_cond_provider_sc_correct_q + 64'd1;
-              end
-            end
-            COND_PROVIDER_LOOP: begin
-              dbg_cond_provider_loop_selected_q <= dbg_cond_provider_loop_selected_q + 64'd1;
-              if (cond_selected_pred_correct) begin
-                dbg_cond_provider_loop_correct_q <= dbg_cond_provider_loop_correct_q + 64'd1;
-              end
-            end
-            default: begin
-              dbg_cond_provider_legacy_selected_q <= dbg_cond_provider_legacy_selected_q + 64'd1;
-              if (cond_selected_pred_correct) begin
-                dbg_cond_provider_legacy_correct_q <= dbg_cond_provider_legacy_correct_q + 64'd1;
-              end
-            end
-          endcase
-
-          if (!cond_selected_pred_correct) begin
-            cond_alt_any_correct = 1'b0;
-            if ((cond_pop_provider != COND_PROVIDER_LEGACY) &&
-                (cond_pop_legacy_taken == ftq_update_w.taken)) begin
-              dbg_cond_selected_wrong_alt_legacy_correct_q <=
-                  dbg_cond_selected_wrong_alt_legacy_correct_q + 64'd1;
-              cond_alt_any_correct = 1'b1;
-            end
-            if ((cond_pop_provider != COND_PROVIDER_TAGE) &&
-                cond_pop_tage_candidate &&
-                (cond_pop_tage_taken == ftq_update_w.taken)) begin
-              dbg_cond_selected_wrong_alt_tage_correct_q <=
-                  dbg_cond_selected_wrong_alt_tage_correct_q + 64'd1;
-              cond_alt_any_correct = 1'b1;
-            end
-            if ((cond_pop_provider != COND_PROVIDER_SC) &&
-                cond_pop_sc_candidate &&
-                (cond_pop_sc_taken == ftq_update_w.taken)) begin
-              dbg_cond_selected_wrong_alt_sc_correct_q <=
-                  dbg_cond_selected_wrong_alt_sc_correct_q + 64'd1;
-              cond_alt_any_correct = 1'b1;
-            end
-            if ((cond_pop_provider != COND_PROVIDER_LOOP) &&
-                cond_pop_loop_candidate &&
-                (cond_pop_loop_taken == ftq_update_w.taken)) begin
-              dbg_cond_selected_wrong_alt_loop_correct_q <=
-                  dbg_cond_selected_wrong_alt_loop_correct_q + 64'd1;
-              cond_alt_any_correct = 1'b1;
-            end
-            if (cond_alt_any_correct) begin
-              dbg_cond_selected_wrong_alt_any_correct_q <=
-                  dbg_cond_selected_wrong_alt_any_correct_q + 64'd1;
-            end
-          end
-        end
-      end
-
-      // RAS arch/spec push-pop now handled by u_ras (bpu_ras.sv).
-      if (flush_i) begin
-        spec_path_hist_n = arch_path_hist_n;
-      end
-
-      if (flush_i) begin
-        spec_ghr_n = arch_ghr_n;
-        tage_head_n = '0;
-        tage_tail_n = '0;
-        tage_count_n = '0;
-        tage_override_n = '0;
-        tage_pred_taken_n = '0;
-        sc_head_n = '0;
-        sc_tail_n = '0;
-        sc_count_n = '0;
-        sc_override_n = '0;
-        sc_pred_taken_n = '0;
-        loop_head_n = '0;
-        loop_tail_n = '0;
-        loop_count_n = '0;
-        loop_override_n = '0;
-        loop_pred_taken_n = '0;
-        cond_head_n = '0;
-        cond_tail_n = '0;
-        cond_count_n = '0;
-        cond_provider_n = '0;
-        cond_selected_taken_n = '0;
-        cond_legacy_taken_n = '0;
-        cond_tage_taken_n = '0;
-        cond_sc_taken_n = '0;
-        cond_loop_taken_n = '0;
-        cond_tage_candidate_n = '0;
-        cond_sc_candidate_n = '0;
-        cond_loop_candidate_n = '0;
-      end else if (pred_event_valid_q && pred_event_is_cond_q) begin
-        spec_ghr_n = ghr_shift(spec_ghr_n, pred_event_taken_q);
-        spec_path_hist_n = path_shift(spec_path_hist_n, pred_event_pc_q, pred_event_taken_q);
-      end
-      arch_ghr_q <= arch_ghr_n;
-      spec_ghr_q <= spec_ghr_n;
-      arch_path_hist_q <= arch_path_hist_n;
-      spec_path_hist_q <= spec_path_hist_n;
+      // FTB BTB 训练已移至 u_ftb；BHT/chooser 训练与 cond 计数已移至 u_bht；FTB/ITTAGE
+      // 训练计数与 override 追踪 FIFO 的出队/正确性比对已移至 u_track。
+      // arch/spec GHR + path 推进、flush 回滚已移至 u_history。
+      // RAS arch/spec push-pop now handled by u_ras (bpu_ras.sv)。
 
       if (flush_i) begin
         pred_event_valid_q <= 1'b0;
@@ -1140,100 +785,7 @@ module bpu #(
         pred_event_pc_q <= '0;
         pred_snap_valid_q <= '0;
       end else begin
-        if (USE_TAGE && pred_fire_w && pred_slot_is_cond_w) begin
-          dbg_tage_lookup_total_q <= dbg_tage_lookup_total_q + 64'd1;
-          if (tage_hit_w) begin
-            dbg_tage_hit_total_q <= dbg_tage_hit_total_q + 64'd1;
-          end
-          tage_push_override = cond_tage_override_w;
-          if (tage_push_override) begin
-            dbg_tage_override_total_q <= dbg_tage_override_total_q + 64'd1;
-          end
-          if (tage_count_n < TAGE_TRACK_DEPTH) begin
-            tage_override_n[tage_tail_n] = tage_push_override;
-            tage_pred_taken_n[tage_tail_n] = pred_slot_taken_w;
-            tage_tail_n = tage_tail_n + TAGE_TRACK_PTR_W'(1);
-            tage_count_n = tage_count_n + TAGE_TRACK_CNT_W'(1);
-          end
-        end
-        if (USE_SC && pred_fire_w && pred_slot_is_cond_w) begin
-          dbg_sc_lookup_total_q <= dbg_sc_lookup_total_q + 64'd1;
-          if (sc_confident_w) begin
-            dbg_sc_confident_total_q <= dbg_sc_confident_total_q + 64'd1;
-          end
-          sc_push_override = cond_sc_override_w;
-          if (sc_push_override) begin
-            dbg_sc_override_total_q <= dbg_sc_override_total_q + 64'd1;
-          end
-          if (sc_count_n < TAGE_TRACK_DEPTH) begin
-            sc_override_n[sc_tail_n] = sc_push_override;
-            sc_pred_taken_n[sc_tail_n] = pred_slot_taken_w;
-            sc_tail_n = sc_tail_n + TAGE_TRACK_PTR_W'(1);
-            sc_count_n = sc_count_n + TAGE_TRACK_CNT_W'(1);
-          end
-        end
-        if (USE_LOOP && pred_fire_w && pred_slot_is_cond_w) begin
-          dbg_loop_lookup_total_q <= dbg_loop_lookup_total_q + 64'd1;
-          if (loop_hit_w) begin
-            dbg_loop_hit_total_q <= dbg_loop_hit_total_q + 64'd1;
-          end
-          if (loop_confident_w) begin
-            dbg_loop_confident_total_q <= dbg_loop_confident_total_q + 64'd1;
-          end
-          loop_push_override = cond_loop_override_w;
-          if (loop_push_override) begin
-            dbg_loop_override_total_q <= dbg_loop_override_total_q + 64'd1;
-          end
-          if (loop_count_n < TAGE_TRACK_DEPTH) begin
-            loop_override_n[loop_tail_n] = loop_push_override;
-            loop_pred_taken_n[loop_tail_n] = pred_slot_taken_w;
-            loop_tail_n = loop_tail_n + TAGE_TRACK_PTR_W'(1);
-            loop_count_n = loop_count_n + TAGE_TRACK_CNT_W'(1);
-          end
-        end
-        if (pred_fire_comb_w) begin
-          dbg_ftb_lookup_total_q <= dbg_ftb_lookup_total_q + 64'd1;
-          if (dbg_snap_ftb_cond_hit_w) begin
-            dbg_ftb_cond_hit_total_q <= dbg_ftb_cond_hit_total_q + 64'd1;
-          end
-          if (dbg_snap_ftb_jump_hit_w) begin
-            dbg_ftb_jump_hit_total_q <= dbg_ftb_jump_hit_total_q + 64'd1;
-          end
-          if (dbg_snap_ftb_pick_cond_w) begin
-            dbg_ftb_cond_pick_total_q <= dbg_ftb_cond_pick_total_q + 64'd1;
-          end
-          if (dbg_snap_ftb_pick_jump_w) begin
-            dbg_ftb_jump_pick_total_q <= dbg_ftb_jump_pick_total_q + 64'd1;
-          end
-          if (dbg_snap_ftb_cond_tag_miss_w) begin
-            dbg_ftb_cond_tag_miss_total_q <= dbg_ftb_cond_tag_miss_total_q + 64'd1;
-          end
-          if (dbg_snap_ftb_jump_tag_miss_w) begin
-            dbg_ftb_jump_tag_miss_total_q <= dbg_ftb_jump_tag_miss_total_q + 64'd1;
-          end
-          if (dbg_snap_ftb_jump_indirect_w) begin
-            dbg_ittage_lookup_total_q <= dbg_ittage_lookup_total_q + 64'd1;
-            if (dbg_snap_ittage_raw_hit_w) begin
-              dbg_ittage_hit_total_q <= dbg_ittage_hit_total_q + 64'd1;
-            end
-          end
-          if (dbg_snap_ittage_use_w) begin
-            dbg_ittage_use_total_q <= dbg_ittage_use_total_q + 64'd1;
-          end
-        end
-        if (pred_fire_w && pred_slot_is_cond_w && (cond_count_n < TAGE_TRACK_DEPTH)) begin
-          cond_provider_n[cond_tail_n] = cond_selected_provider_w;
-          cond_selected_taken_n[cond_tail_n] = cond_selected_taken_w;
-          cond_legacy_taken_n[cond_tail_n] = cond_taken_legacy_w;
-          cond_tage_taken_n[cond_tail_n] = tage_taken_w;
-          cond_sc_taken_n[cond_tail_n] = sc_taken_w;
-          cond_loop_taken_n[cond_tail_n] = loop_taken_w;
-          cond_tage_candidate_n[cond_tail_n] = cond_tage_candidate_w;
-          cond_sc_candidate_n[cond_tail_n] = cond_sc_candidate_w;
-          cond_loop_candidate_n[cond_tail_n] = cond_loop_candidate_w;
-          cond_tail_n = cond_tail_n + TAGE_TRACK_PTR_W'(1);
-          cond_count_n = cond_count_n + TAGE_TRACK_CNT_W'(1);
-        end
+        // override 追踪 FIFO 入队与 dbg_* lookup/usage 计数已移至 u_track。
         pred_event_valid_q <= pred_fire_w;
         pred_event_is_call_q <= pred_fire_w && pred_slot_is_call_w;
         pred_event_is_ret_q <= pred_fire_w && pred_slot_is_ret_w;
@@ -1263,36 +815,6 @@ module bpu #(
           pred_snap_pick_jump_q[ftq_enq_id_i] <= dbg_snap_ftb_pick_jump_w;
         end
       end
-`ifndef SYNTHESIS
-
-`endif
-      tage_track_head_q <= tage_head_n;
-      tage_track_tail_q <= tage_tail_n;
-      tage_track_count_q <= tage_count_n;
-      tage_track_override_q <= tage_override_n;
-      tage_track_pred_taken_q <= tage_pred_taken_n;
-      sc_track_head_q <= sc_head_n;
-      sc_track_tail_q <= sc_tail_n;
-      sc_track_count_q <= sc_count_n;
-      sc_track_override_q <= sc_override_n;
-      sc_track_pred_taken_q <= sc_pred_taken_n;
-      loop_track_head_q <= loop_head_n;
-      loop_track_tail_q <= loop_tail_n;
-      loop_track_count_q <= loop_count_n;
-      loop_track_override_q <= loop_override_n;
-      loop_track_pred_taken_q <= loop_pred_taken_n;
-      cond_track_head_q <= cond_head_n;
-      cond_track_tail_q <= cond_tail_n;
-      cond_track_count_q <= cond_count_n;
-      cond_track_provider_q <= cond_provider_n;
-      cond_track_selected_taken_q <= cond_selected_taken_n;
-      cond_track_legacy_taken_q <= cond_legacy_taken_n;
-      cond_track_tage_taken_q <= cond_tage_taken_n;
-      cond_track_sc_taken_q <= cond_sc_taken_n;
-      cond_track_loop_taken_q <= cond_loop_taken_n;
-      cond_track_tage_candidate_q <= cond_tage_candidate_n;
-      cond_track_sc_candidate_q <= cond_sc_candidate_n;
-      cond_track_loop_candidate_q <= cond_loop_candidate_n;
     end
   end
 endmodule : bpu
