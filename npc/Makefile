@@ -57,6 +57,7 @@ PKG_VSRCS = \
 	$(abspath ./vsrc/include/global_config_pkg.sv) \
 	$(abspath ./vsrc/include/debug_bus_pkg.sv) \
 	$(abspath ./vsrc/include/core_contract_pkg.sv) \
+	$(abspath ./vsrc/include/bpu_pkg.sv) \
 	$(abspath ./vsrc/include/riscv_pkg.sv) \
 	$(abspath ./vsrc/include/decode_pkg.sv)
 
@@ -141,7 +142,7 @@ sim: $(BIN)
 	@LD_LIBRARY_PATH="$(SPIKE_REF_LD_PATH):$$LD_LIBRARY_PATH" $^ $(NPC_EXE)
 
 .PHONY: profile-report profile-task profile-baseline profile-index profile-dashboard profile-clean \
-	verify-unit verify-difftest verify-assert-programs verify-cover verify-all
+	verify-unit verify-difftest verify-assert-programs verify-cover verify-bpu-golden verify-all
 
 verify-unit:
 	bash $(abspath ./scripts/subshell/run_assert_unit.sh) $(or $(MODULE),all)
@@ -154,6 +155,12 @@ verify-assert-programs:
 
 verify-cover:
 	bash $(abspath ./scripts/subshell/run_cover_check.sh)
+
+verify-bpu-golden:
+	bash $(abspath ./scripts/subshell/run_bpu_golden.sh)
+
+verify-bpu-golden-update:
+	BPU_GOLDEN_UPDATE=1 bash $(abspath ./scripts/subshell/run_bpu_golden.sh)
 
 verify-all:
 	$(MAKE) verify-unit MODULE=all

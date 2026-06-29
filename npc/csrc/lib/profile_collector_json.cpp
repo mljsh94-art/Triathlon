@@ -269,6 +269,75 @@ void append_predict_section(std::ostringstream &os,
   os << "}},";
 }
 
+void append_dbg_bpu_section(std::ostringstream &os, const Vtb_triathlon *top) {
+  os << "\"dbg_bpu\":{";
+  os << "\"arch_ras_count\":" << static_cast<uint64_t>(top->dbg_bpu_arch_ras_count_o)
+     << ",\"spec_ras_count\":" << static_cast<uint64_t>(top->dbg_bpu_spec_ras_count_o)
+     << ",\"arch_ras_top\":" << static_cast<uint64_t>(top->dbg_bpu_arch_ras_top_o)
+     << ",\"spec_ras_top\":" << static_cast<uint64_t>(top->dbg_bpu_spec_ras_top_o)
+     << ",\"cond_update_total\":" << static_cast<uint64_t>(top->dbg_bpu_cond_update_total_o)
+     << ",\"cond_local_correct\":" << static_cast<uint64_t>(top->dbg_bpu_cond_local_correct_o)
+     << ",\"cond_global_correct\":" << static_cast<uint64_t>(top->dbg_bpu_cond_global_correct_o)
+     << ",\"cond_selected_correct\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_selected_correct_o)
+     << ",\"cond_choose_local\":" << static_cast<uint64_t>(top->dbg_bpu_cond_choose_local_o)
+     << ",\"cond_choose_global\":" << static_cast<uint64_t>(top->dbg_bpu_cond_choose_global_o)
+     << ",\"tage_lookup_total\":" << static_cast<uint64_t>(top->dbg_bpu_tage_lookup_total_o)
+     << ",\"tage_hit_total\":" << static_cast<uint64_t>(top->dbg_bpu_tage_hit_total_o)
+     << ",\"tage_override_total\":" << static_cast<uint64_t>(top->dbg_bpu_tage_override_total_o)
+     << ",\"tage_override_correct\":"
+     << static_cast<uint64_t>(top->dbg_bpu_tage_override_correct_o)
+     << ",\"sc_lookup_total\":" << static_cast<uint64_t>(top->dbg_bpu_sc_lookup_total_o)
+     << ",\"sc_confident_total\":" << static_cast<uint64_t>(top->dbg_bpu_sc_confident_total_o)
+     << ",\"sc_override_total\":" << static_cast<uint64_t>(top->dbg_bpu_sc_override_total_o)
+     << ",\"sc_override_correct\":" << static_cast<uint64_t>(top->dbg_bpu_sc_override_correct_o)
+     << ",\"loop_lookup_total\":" << static_cast<uint64_t>(top->dbg_bpu_loop_lookup_total_o)
+     << ",\"loop_hit_total\":" << static_cast<uint64_t>(top->dbg_bpu_loop_hit_total_o)
+     << ",\"loop_confident_total\":" << static_cast<uint64_t>(top->dbg_bpu_loop_confident_total_o)
+     << ",\"loop_override_total\":" << static_cast<uint64_t>(top->dbg_bpu_loop_override_total_o)
+     << ",\"loop_override_correct\":" << static_cast<uint64_t>(top->dbg_bpu_loop_override_correct_o)
+     << ",\"cond_provider_legacy_selected\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_provider_legacy_selected_o)
+     << ",\"cond_provider_tage_selected\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_provider_tage_selected_o)
+     << ",\"cond_provider_sc_selected\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_provider_sc_selected_o)
+     << ",\"cond_provider_loop_selected\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_provider_loop_selected_o)
+     << ",\"cond_provider_legacy_correct\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_provider_legacy_correct_o)
+     << ",\"cond_provider_tage_correct\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_provider_tage_correct_o)
+     << ",\"cond_provider_sc_correct\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_provider_sc_correct_o)
+     << ",\"cond_provider_loop_correct\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_provider_loop_correct_o)
+     << ",\"cond_selected_wrong_alt_legacy_correct\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_legacy_correct_o)
+     << ",\"cond_selected_wrong_alt_tage_correct\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_tage_correct_o)
+     << ",\"cond_selected_wrong_alt_sc_correct\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_sc_correct_o)
+     << ",\"cond_selected_wrong_alt_loop_correct\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_loop_correct_o)
+     << ",\"cond_selected_wrong_alt_any_correct\":"
+     << static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_any_correct_o)
+     << ",\"ftb_lookup_total\":" << static_cast<uint64_t>(top->dbg_bpu_ftb_lookup_total_o)
+     << ",\"ftb_cond_hit_total\":" << static_cast<uint64_t>(top->dbg_bpu_ftb_cond_hit_total_o)
+     << ",\"ftb_jump_hit_total\":" << static_cast<uint64_t>(top->dbg_bpu_ftb_jump_hit_total_o)
+     << ",\"ftb_cond_pick_total\":" << static_cast<uint64_t>(top->dbg_bpu_ftb_cond_pick_total_o)
+     << ",\"ftb_jump_pick_total\":" << static_cast<uint64_t>(top->dbg_bpu_ftb_jump_pick_total_o)
+     << ",\"ftb_cond_tag_miss_total\":" << static_cast<uint64_t>(top->dbg_bpu_ftb_cond_tag_miss_total_o)
+     << ",\"ftb_jump_tag_miss_total\":" << static_cast<uint64_t>(top->dbg_bpu_ftb_jump_tag_miss_total_o)
+     << ",\"ftb_train_cond_total\":" << static_cast<uint64_t>(top->dbg_bpu_ftb_train_cond_total_o)
+     << ",\"ftb_train_jump_total\":" << static_cast<uint64_t>(top->dbg_bpu_ftb_train_jump_total_o)
+     << ",\"ittage_lookup_total\":" << static_cast<uint64_t>(top->dbg_bpu_ittage_lookup_total_o)
+     << ",\"ittage_hit_total\":" << static_cast<uint64_t>(top->dbg_bpu_ittage_hit_total_o)
+     << ",\"ittage_use_total\":" << static_cast<uint64_t>(top->dbg_bpu_ittage_use_total_o)
+     << ",\"ittage_train_total\":" << static_cast<uint64_t>(top->dbg_bpu_ittage_train_total_o);
+  os << "},";
+}
+
 }  // namespace
 
 void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triathlon *top) {
@@ -510,6 +579,8 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
       ftb_jump_tag_miss_total, ittage_lookup_total, ittage_hit_total, ittage_use_total,
       cond_provider_legacy_selected, cond_provider_legacy_correct, cond_provider_tage_selected,
       cond_provider_tage_correct);
+
+  append_dbg_bpu_section(os, top);
 
   os << "\"hotspots\":{";
   os << "\"top_pc\":";

@@ -143,6 +143,7 @@ Full Makefile targets, profile workflow, DiffTest, Linux boot: **`docs/`** (Chin
 | [docs/sim-args.md](docs/sim-args.md) | Simulator CLI, snapshot, trace tags |
 | [docs/difftest.md](docs/difftest.md) | Spike DiffTest and `ASSERT` |
 | [docs/verification.md](docs/verification.md) | `verify-*` gates |
+| [docs/bpu-refactor.md](docs/bpu-refactor.md) | BPU refactor methodology, golden baseline |
 | [docs/debugging.md](docs/debugging.md) | NDJSON, linux-early-debug |
 | [docs/full-system.md](docs/full-system.md) | OpenSBI + Linux + `merge.py` |
 | [README.md](README.md) | Human quick start (Chinese) |

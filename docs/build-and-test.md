@@ -21,9 +21,11 @@
 | `verify-difftest` | `make verify-difftest` | ② DiffTest 门禁 |
 | `verify-assert-programs` | `make verify-assert-programs` | ③ 程序 ASSERT 全门禁 |
 | `verify-cover` | `make verify-cover` | ④ cover 壳子（Phase 7 占位） |
-| `verify-all` | `make verify-all` | ①→②→③→④ 发版全量回归 |
+| `verify-bpu-golden` | `make verify-bpu-golden` | ⑤ BPU golden：coremark+dhrystone 行为签名 diff |
+| `verify-bpu-golden-update` | `make verify-bpu-golden-update` | 刷新 `scripts/golden/bpu_baseline.json` |
+| `verify-all` | `make verify-all` | ①→②→③→④ 发版全量回归（不含 ⑤） |
 
-详见 [verification.md](verification.md)。
+详见 [verification.md](verification.md)。BPU 重构 golden 方法论见 [bpu-refactor.md](bpu-refactor.md)。
 
 ## Make 变量
 

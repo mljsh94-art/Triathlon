@@ -9,6 +9,7 @@
 | [sim-args.md](sim-args.md) | 仿真器 `ARGS` 参数、Snapshot、输出 Tag、镜像加载 |
 | [difftest.md](difftest.md) | Spike DiffTest、Verilator RTL 断言 |
 | [verification.md](verification.md) | verify-* 门禁、DiffTest 验收阶段 |
+| [bpu-refactor.md](bpu-refactor.md) | BPU 模块化重构方法论、golden baseline、分步计划 |
 | [debugging.md](debugging.md) | NDJSON 日志、linux-early-debug、排障流程 |
 | [full-system.md](full-system.md) | OpenSBI + Linux 构建、merge.py、DiffTest + Snapshot 全系统仿真 |
 

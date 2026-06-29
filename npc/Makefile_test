@@ -32,6 +32,7 @@ PKG_VSRCS = \
 	./vsrc/include/global_config_pkg.sv \
 	./vsrc/include/debug_bus_pkg.sv \
 	./vsrc/include/core_contract_pkg.sv \
+	./vsrc/include/bpu_pkg.sv \
 	./vsrc/include/riscv_pkg.sv \
 	./vsrc/include/decode_pkg.sv
 	

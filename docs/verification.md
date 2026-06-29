@@ -8,14 +8,19 @@
 | ② | DiffTest 门禁 | `run_difftest_suite.sh` |
 | ③ | 程序 ASSERT | `run_assert_programs.sh` |
 | ④ | cover 壳子 | `run_cover_check.sh` |
+| ⑤ | BPU golden 行为签名 | `run_bpu_golden.sh` |
 
 ```bash
 make -C npc verify-unit              # MODULE=rob/fe/issue/lsu/all
 make -C npc verify-difftest
 make -C npc verify-assert-programs
 make -C npc verify-cover
-make -C npc verify-all               # ①→②→③→④
+make -C npc verify-bpu-golden        # coremark+dhrystone：DiffTest + dbg_bpu + cycles
+make -C npc verify-bpu-golden-update # 刷新 scripts/golden/bpu_baseline.json
+make -C npc verify-all               # ①→②→③→④（不含 ⑤；BPU 重构步另跑）
 ```
+
+BPU 重构每步应额外跑 `verify-bpu-golden`；方法论与 baseline 说明见 [bpu-refactor.md](bpu-refactor.md)。
 
 ## DiffTest 验收阶段
 

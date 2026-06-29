@@ -63,9 +63,12 @@ make -C npc sim DIFFTEST= IMG=.../dhrystone-riscv32i-npc.bin \
 | `frontend` | `ifu_fq` Fetch Queue |
 | `control` | 控制流指令统计 |
 | `predict` | 分支预测（含 `ftb` / `ittage` / `cond_provider`） |
+| `dbg_bpu` | 原始 BPU 计数器（与 `tb_triathlon` 的 `dbg_bpu_*_o` 对应；供 golden baseline 抽取） |
 | `hotspots` | `top_pc` / `top_inst` / BPU 热点 |
 
 旧版扁平字段（v1）仍可通过 `npc/tools/profiler/profile_schema.py` 访问器读取；看板与回归脚本自动兼容。
+
+BPU 重构 **行为 golden**（cycles + `dbg_bpu` 逐字段 diff）见 [bpu-refactor.md](bpu-refactor.md)，与本文性能 profile 互补。
 
 `summary.html` 报告按 **KPI → Flush → Stall → Predict → Hotspots** 分区展示；dashboard Run Details 显示 Top stall 与 decode_blocked 前列。
 
