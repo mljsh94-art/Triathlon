@@ -321,6 +321,8 @@ module frontend #(
       .update_is_call_i      (be2fe_i.bpu_update_is_call),
       .update_is_ret_i       (be2fe_i.bpu_update_is_ret),
       .update_is_rvc_i       (be2fe_i.bpu_update_is_rvc),
+      .update_ftq_id_i       (be2fe_i.bpu_update_ftq_id),
+      .update_fetch_epoch_i  (be2fe_i.bpu_update_fetch_epoch),
       .ras_update_valid_i    (be2fe_i.bpu_ras_update_valid),
       .ras_update_is_call_i  (be2fe_i.bpu_ras_update_is_call),
       .ras_update_is_ret_i   (be2fe_i.bpu_ras_update_is_ret),

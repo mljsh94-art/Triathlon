@@ -68,6 +68,7 @@ module bpu_ftb #(
     output logic [2:0] dbg_snap_ftb_valid_count_o,
     output logic [2:0] dbg_snap_ftb_cond_count_o,
     output logic [2:0] dbg_snap_ftb_jump_count_o,
+    output logic [2:0] dbg_snap_ftb_in_range_cond_count_o,
     output logic       dbg_snap_ftb_cond_in_range_o,
     output logic       dbg_snap_ftb_jump_in_range_o,
     output logic       dbg_snap_ftb_cond_taken_pred_o,
@@ -135,6 +136,7 @@ module bpu_ftb #(
   logic [2:0] dbg_snap_ftb_valid_count_w;
   logic [2:0] dbg_snap_ftb_cond_count_w;
   logic [2:0] dbg_snap_ftb_jump_count_w;
+  logic [2:0] dbg_snap_ftb_in_range_cond_count_w;
   logic dbg_snap_ftb_cond_in_range_w;
   logic dbg_snap_ftb_jump_in_range_w;
   logic dbg_snap_ftb_cond_taken_pred_w;
@@ -256,6 +258,7 @@ module bpu_ftb #(
     dbg_snap_ftb_valid_count_w = '0;
     dbg_snap_ftb_cond_count_w = '0;
     dbg_snap_ftb_jump_count_w = '0;
+    dbg_snap_ftb_in_range_cond_count_w = '0;
     pick_valid = 1'b0;
     pick_idx = '0;
     pick_slot = '0;
@@ -351,6 +354,7 @@ module bpu_ftb #(
           end
           if (slot_in_range) begin
             cond_in_range_any = 1'b1;
+            dbg_snap_ftb_in_range_cond_count_w = dbg_snap_ftb_in_range_cond_count_w + 3'd1;
           end
           if (slot_taken_pred) begin
             cond_taken_pred_any = 1'b1;
@@ -458,6 +462,7 @@ module bpu_ftb #(
   assign dbg_snap_ftb_valid_count_o = dbg_snap_ftb_valid_count_w;
   assign dbg_snap_ftb_cond_count_o = dbg_snap_ftb_cond_count_w;
   assign dbg_snap_ftb_jump_count_o = dbg_snap_ftb_jump_count_w;
+  assign dbg_snap_ftb_in_range_cond_count_o = dbg_snap_ftb_in_range_cond_count_w;
   assign dbg_snap_ftb_cond_in_range_o = dbg_snap_ftb_cond_in_range_w;
   assign dbg_snap_ftb_jump_in_range_o = dbg_snap_ftb_jump_in_range_w;
   assign dbg_snap_ftb_cond_taken_pred_o = dbg_snap_ftb_cond_taken_pred_w;

@@ -46,6 +46,8 @@ module bpu #(
     input logic                update_is_call_i,
     input logic                update_is_ret_i,
     input logic                update_is_rvc_i,
+    input logic [global_config_pkg::FTQ_ID_W-1:0] update_ftq_id_i,
+    input logic [FETCH_EPOCH_W-1:0] update_fetch_epoch_i,
     input logic [Cfg.NRET-1:0] ras_update_valid_i,
     input logic [Cfg.NRET-1:0] ras_update_is_call_i,
     input logic [Cfg.NRET-1:0] ras_update_is_ret_i,
@@ -130,6 +132,7 @@ module bpu #(
   logic [2:0] dbg_snap_ftb_valid_count_w;
   logic [2:0] dbg_snap_ftb_cond_count_w;
   logic [2:0] dbg_snap_ftb_jump_count_w;
+  logic [2:0] dbg_snap_ftb_in_range_cond_count_w;
   logic dbg_snap_ftb_cond_in_range_w;
   logic dbg_snap_ftb_jump_in_range_w;
   logic dbg_snap_ftb_cond_taken_pred_w;
@@ -149,11 +152,14 @@ module bpu #(
   logic [FTQ_DEPTH-1:0][2:0] pred_snap_valid_count_q;
   logic [FTQ_DEPTH-1:0][2:0] pred_snap_cond_count_q;
   logic [FTQ_DEPTH-1:0][2:0] pred_snap_jump_count_q;
+  logic [FTQ_DEPTH-1:0][2:0] pred_snap_in_range_cond_count_q;
   logic [FTQ_DEPTH-1:0] pred_snap_cond_in_range_q;
   logic [FTQ_DEPTH-1:0] pred_snap_jump_in_range_q;
   logic [FTQ_DEPTH-1:0] pred_snap_cond_taken_pred_q;
+  logic [FTQ_DEPTH-1:0] pred_snap_pick_valid_q;
   logic [FTQ_DEPTH-1:0] pred_snap_pick_cond_q;
   logic [FTQ_DEPTH-1:0] pred_snap_pick_jump_q;
+  logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] pred_snap_pick_pc_q;
   logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] pred_snap_fetch_pc_q;
   logic [FTQ_DEPTH-1:0][FETCH_EPOCH_W-1:0] pred_snap_fetch_epoch_q;
   logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] pred_snap_cond_branch_pc_q;
@@ -228,6 +234,26 @@ module bpu #(
   predict_resp_t loop_pred_resp_w;
   predict_resp_t ittage_pred_resp_w;
   predict_resp_t pred_resp_w;
+  logic [63:0] dbg_ftb_multi_ir_cond_earlier_non_pick_taken_q;
+
+  function automatic logic ftb_branch_in_fetch_window(
+      input logic [Cfg.PLEN-1:0] fetch_pc,
+      input logic [Cfg.PLEN-1:0] branch_pc,
+      input logic is_rvc
+  );
+    logic [Cfg.PLEN-1:0] diff;
+    logic [Cfg.PLEN-1:0] start_rel;
+    logic [Cfg.PLEN-1:0] end_rel;
+    logic carry_end;
+    diff = branch_pc - fetch_pc;
+    start_rel = diff >> 1;
+    end_rel = start_rel + (is_rvc ? Cfg.PLEN'(0) : Cfg.PLEN'(1));
+    carry_end = !is_rvc && ((branch_pc + Cfg.PLEN'(2)) == fetch_pc);
+    ftb_branch_in_fetch_window = ((branch_pc >= fetch_pc) &&
+                                  (end_rel <= Cfg.PLEN'(PRED_SLOT_COUNT - 1))) ||
+                                 carry_end;
+  endfunction
+
   update_t       ftq_update_w;
   update_t       tage_update_w;
   update_t       sc_update_w;
@@ -481,6 +507,7 @@ module bpu #(
       .dbg_snap_ftb_valid_count_o(dbg_snap_ftb_valid_count_w),
       .dbg_snap_ftb_cond_count_o(dbg_snap_ftb_cond_count_w),
       .dbg_snap_ftb_jump_count_o(dbg_snap_ftb_jump_count_w),
+      .dbg_snap_ftb_in_range_cond_count_o(dbg_snap_ftb_in_range_cond_count_w),
       .dbg_snap_ftb_cond_in_range_o(dbg_snap_ftb_cond_in_range_w),
       .dbg_snap_ftb_jump_in_range_o(dbg_snap_ftb_jump_in_range_w),
       .dbg_snap_ftb_cond_taken_pred_o(dbg_snap_ftb_cond_taken_pred_w),
@@ -745,15 +772,19 @@ module bpu #(
       pred_snap_valid_count_q <= '0;
       pred_snap_cond_count_q <= '0;
       pred_snap_jump_count_q <= '0;
+      pred_snap_in_range_cond_count_q <= '0;
       pred_snap_cond_in_range_q <= '0;
       pred_snap_jump_in_range_q <= '0;
       pred_snap_cond_taken_pred_q <= '0;
+      pred_snap_pick_valid_q <= '0;
       pred_snap_pick_cond_q <= '0;
       pred_snap_pick_jump_q <= '0;
+      pred_snap_pick_pc_q <= '0;
       pred_snap_fetch_pc_q <= '0;
       pred_snap_fetch_epoch_q <= '0;
       pred_snap_cond_branch_pc_q <= '0;
       pred_snap_jump_branch_pc_q <= '0;
+      dbg_ftb_multi_ir_cond_earlier_non_pick_taken_q <= '0;
 `ifndef SYNTHESIS
 `endif
       // arch/spec GHR + path 复位已随历史迁入 u_history。
@@ -808,11 +839,47 @@ module bpu #(
           pred_snap_valid_count_q[ftq_enq_id_i] <= dbg_snap_ftb_valid_count_w;
           pred_snap_cond_count_q[ftq_enq_id_i] <= dbg_snap_ftb_cond_count_w;
           pred_snap_jump_count_q[ftq_enq_id_i] <= dbg_snap_ftb_jump_count_w;
+          pred_snap_in_range_cond_count_q[ftq_enq_id_i] <= dbg_snap_ftb_in_range_cond_count_w;
           pred_snap_cond_in_range_q[ftq_enq_id_i] <= dbg_snap_ftb_cond_in_range_w;
           pred_snap_jump_in_range_q[ftq_enq_id_i] <= dbg_snap_ftb_jump_in_range_w;
           pred_snap_cond_taken_pred_q[ftq_enq_id_i] <= dbg_snap_ftb_cond_taken_pred_w;
+          pred_snap_pick_valid_q[ftq_enq_id_i] <= ftb_pick_valid_w;
           pred_snap_pick_cond_q[ftq_enq_id_i] <= dbg_snap_ftb_pick_cond_w;
           pred_snap_pick_jump_q[ftq_enq_id_i] <= dbg_snap_ftb_pick_jump_w;
+          pred_snap_pick_pc_q[ftq_enq_id_i] <= ftb_pick_pc_w;
+        end
+
+        if (update_valid_i && update_is_cond_i && update_taken_i) begin
+          logic [FTQ_ID_W-1:0] upd_ftq;
+          logic snap_valid;
+          logic epoch_ok;
+          logic [2:0] ir_cond_cnt;
+          logic pick_valid;
+          logic [Cfg.PLEN-1:0] snap_fetch_pc;
+          logic [Cfg.PLEN-1:0] snap_pick_pc;
+          logic [FETCH_EPOCH_W-1:0] snap_epoch;
+          logic branch_in_window;
+          logic count_event;
+
+          upd_ftq = update_ftq_id_i;
+          snap_valid = pred_snap_valid_q[upd_ftq];
+          snap_epoch = pred_snap_fetch_epoch_q[upd_ftq];
+          epoch_ok = snap_epoch == update_fetch_epoch_i;
+          ir_cond_cnt = pred_snap_in_range_cond_count_q[upd_ftq];
+          pick_valid = pred_snap_pick_valid_q[upd_ftq];
+          snap_fetch_pc = pred_snap_fetch_pc_q[upd_ftq];
+          snap_pick_pc = pred_snap_pick_pc_q[upd_ftq];
+          branch_in_window =
+              ftb_branch_in_fetch_window(snap_fetch_pc, update_pc_i, update_is_rvc_i);
+          count_event = snap_valid && epoch_ok &&
+                        (ir_cond_cnt >= 3'd2) &&
+                        pick_valid &&
+                        branch_in_window &&
+                        (update_pc_i < snap_pick_pc);
+          if (count_event) begin
+            dbg_ftb_multi_ir_cond_earlier_non_pick_taken_q <=
+                dbg_ftb_multi_ir_cond_earlier_non_pick_taken_q + 64'd1;
+          end
         end
       end
     end

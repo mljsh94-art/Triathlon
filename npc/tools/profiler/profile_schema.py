@@ -163,6 +163,11 @@ def bench_predict(bench: dict) -> dict:
     return pred if isinstance(pred, dict) else {}
 
 
+def bench_dbg_bpu(bench: dict) -> dict:
+    dbg = bench.get("dbg_bpu")
+    return dbg if isinstance(dbg, dict) else {}
+
+
 def bench_predict_doc(bench: dict) -> dict[str, str]:
     doc = _dig(bench, "predict", "_doc")
     return doc if isinstance(doc, dict) else {}
@@ -398,6 +403,9 @@ def predict_ftb_part_totals(predict: dict) -> dict[str, tuple[float, float]]:
             rows[rate_key] = (float(ftb.get(part_key, 0) or 0), lookups)
         elif rate_val:
             rows[rate_key] = (float(rate_val) * lookups, lookups)
+    multi_ir = float(ftb.get("multi_ir_cond_earlier_non_pick_taken", 0) or 0)
+    if multi_ir > 0:
+        rows["multi_ir_cond_earlier_non_pick_taken"] = (multi_ir, lookups)
     return rows
 
 

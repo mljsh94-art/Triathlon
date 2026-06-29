@@ -412,6 +412,8 @@ module backend #(
   assign be2fe_o.bpu_update_is_call = be2fe_bpu_update_is_call_w;
   assign be2fe_o.bpu_update_is_ret = be2fe_bpu_update_is_ret_w;
   assign be2fe_o.bpu_update_is_rvc = be2fe_bpu_update_is_rvc_w;
+  assign be2fe_o.bpu_update_ftq_id = bpu_update_ftq_id_dbg;
+  assign be2fe_o.bpu_update_fetch_epoch = bpu_update_fetch_epoch_dbg;
   assign be2fe_o.bpu_ras_update_valid = be2fe_bpu_ras_update_valid_w;
   assign be2fe_o.bpu_ras_update_is_call = be2fe_bpu_ras_update_is_call_w;
   assign be2fe_o.bpu_ras_update_is_ret = be2fe_bpu_ras_update_is_ret_w;

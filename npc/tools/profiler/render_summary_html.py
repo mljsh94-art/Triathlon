@@ -208,6 +208,7 @@ TRANSLATIONS = {
     "ftb_hit_out_of_range": "FTB 命中窗口外",
     "ftb_hit_shadowed": "FTB 命中被遮蔽",
     "ftb_unclassified": "FTB 未分类",
+    "multi_ir_cond_earlier_non_pick_taken": "多 in-range cond 更早非 pick 实际 taken",
     "bht_direction": "BHT 方向错 (rollup, 不含 FTB NT)",
     "ftb_structural": "FTB 结构 (rollup)",
     "target_wrong": "Target 错 (rollup)",
@@ -381,6 +382,8 @@ def format_predict_dashboard_lines(predict: dict, flush: dict | None = None) -> 
             acc_bits.append(f"ftb_cond={fmt_part_total(part, total)}")
         elif rate_key == "jump_hit_per_lookup_rate":
             acc_bits.append(f"ftb_jump={fmt_part_total(part, total)}")
+        elif rate_key == "multi_ir_cond_earlier_non_pick_taken":
+            acc_bits.append(f"multi_ir_nt_pick={fmt_part_total(part, total)}")
     for rate_key, (part, total) in predict_ittage_part_totals(predict).items():
         if rate_key == "table_hit_per_lookup_rate":
             acc_bits.append(f"ittage={fmt_part_total(part, total)}")

@@ -28,6 +28,8 @@ package core_contract_pkg;
     logic bpu_update_is_call;
     logic bpu_update_is_ret;
     logic bpu_update_is_rvc;
+    logic [FTQ_ID_W-1:0] bpu_update_ftq_id;
+    logic [FETCH_EPOCH_W-1:0] bpu_update_fetch_epoch;
     logic [Cfg.NRET-1:0] bpu_ras_update_valid;
     logic [Cfg.NRET-1:0] bpu_ras_update_is_call;
     logic [Cfg.NRET-1:0] bpu_ras_update_is_ret;

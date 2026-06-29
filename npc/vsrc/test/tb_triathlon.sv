@@ -367,6 +367,7 @@ module tb_triathlon #(
     output logic [63:0]                        dbg_bpu_ftb_jump_tag_miss_total_o,
     output logic [63:0]                        dbg_bpu_ftb_train_cond_total_o,
     output logic [63:0]                        dbg_bpu_ftb_train_jump_total_o,
+    output logic [63:0]                        dbg_bpu_ftb_multi_ir_cond_earlier_non_pick_taken_total_o,
     output logic [63:0]                        dbg_bpu_ittage_lookup_total_o,
     output logic [63:0]                        dbg_bpu_ittage_hit_total_o,
     output logic [63:0]                        dbg_bpu_ittage_use_total_o,
@@ -931,6 +932,8 @@ module tb_triathlon #(
   assign dbg_bpu_ftb_jump_tag_miss_total_o = dut.u_frontend.i_bpu.u_track.dbg_ftb_jump_tag_miss_total_q;
   assign dbg_bpu_ftb_train_cond_total_o = dut.u_frontend.i_bpu.u_track.dbg_ftb_train_cond_total_q;
   assign dbg_bpu_ftb_train_jump_total_o = dut.u_frontend.i_bpu.u_track.dbg_ftb_train_jump_total_q;
+  assign dbg_bpu_ftb_multi_ir_cond_earlier_non_pick_taken_total_o =
+      dut.u_frontend.i_bpu.dbg_ftb_multi_ir_cond_earlier_non_pick_taken_q;
   assign dbg_bpu_ittage_lookup_total_o = dut.u_frontend.i_bpu.u_track.dbg_ittage_lookup_total_q;
   assign dbg_bpu_ittage_hit_total_o = dut.u_frontend.i_bpu.u_track.dbg_ittage_hit_total_q;
   assign dbg_bpu_ittage_use_total_o = dut.u_frontend.i_bpu.u_track.dbg_ittage_use_total_q;

@@ -64,6 +64,8 @@ module tb_bpu_ftb_boundary_a (
       .update_is_call_i(update_is_call_i),
       .update_is_ret_i(update_is_ret_i),
       .update_is_rvc_i(update_is_rvc_i),
+      .update_ftq_id_i('0),
+      .update_fetch_epoch_i('0),
       .ras_update_valid_i(ras_update_valid_i),
       .ras_update_is_call_i(ras_update_is_call_i),
       .ras_update_is_ret_i(ras_update_is_ret_i),

@@ -187,6 +187,7 @@ void append_predict_section(std::ostringstream &os,
                             uint64_t ftb_jump_pick_total,
                             uint64_t ftb_cond_tag_miss_total,
                             uint64_t ftb_jump_tag_miss_total,
+                            uint64_t ftb_multi_ir_cond_earlier_non_pick_taken_total,
                             uint64_t ittage_lookup_total,
                             uint64_t ittage_hit_total,
                             uint64_t ittage_use_total,
@@ -239,7 +240,9 @@ void append_predict_section(std::ostringstream &os,
        << ",\"jump_pick_rate\":"
        << safe_div(static_cast<double>(ftb_jump_pick_total), static_cast<double>(ftb_lookup_total))
        << ",\"cond_tag_miss\":" << ftb_cond_tag_miss_total
-       << ",\"jump_tag_miss\":" << ftb_jump_tag_miss_total;
+       << ",\"jump_tag_miss\":" << ftb_jump_tag_miss_total
+       << ",\"multi_ir_cond_earlier_non_pick_taken\":"
+       << ftb_multi_ir_cond_earlier_non_pick_taken_total;
     os << "}";
   }
   if (ittage_lookup_total > 0) {
@@ -331,6 +334,8 @@ void append_dbg_bpu_section(std::ostringstream &os, const Vtb_triathlon *top) {
      << ",\"ftb_jump_tag_miss_total\":" << static_cast<uint64_t>(top->dbg_bpu_ftb_jump_tag_miss_total_o)
      << ",\"ftb_train_cond_total\":" << static_cast<uint64_t>(top->dbg_bpu_ftb_train_cond_total_o)
      << ",\"ftb_train_jump_total\":" << static_cast<uint64_t>(top->dbg_bpu_ftb_train_jump_total_o)
+     << ",\"ftb_multi_ir_cond_earlier_non_pick_taken_total\":"
+     << static_cast<uint64_t>(top->dbg_bpu_ftb_multi_ir_cond_earlier_non_pick_taken_total_o)
      << ",\"ittage_lookup_total\":" << static_cast<uint64_t>(top->dbg_bpu_ittage_lookup_total_o)
      << ",\"ittage_hit_total\":" << static_cast<uint64_t>(top->dbg_bpu_ittage_hit_total_o)
      << ",\"ittage_use_total\":" << static_cast<uint64_t>(top->dbg_bpu_ittage_use_total_o)
@@ -368,6 +373,8 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
   const uint64_t ftb_jump_pick_total = static_cast<uint64_t>(top->dbg_bpu_ftb_jump_pick_total_o);
   const uint64_t ftb_cond_tag_miss_total = static_cast<uint64_t>(top->dbg_bpu_ftb_cond_tag_miss_total_o);
   const uint64_t ftb_jump_tag_miss_total = static_cast<uint64_t>(top->dbg_bpu_ftb_jump_tag_miss_total_o);
+  const uint64_t ftb_multi_ir_cond_earlier_non_pick_taken_total =
+      static_cast<uint64_t>(top->dbg_bpu_ftb_multi_ir_cond_earlier_non_pick_taken_total_o);
   const uint64_t ittage_lookup_total = static_cast<uint64_t>(top->dbg_bpu_ittage_lookup_total_o);
   const uint64_t ittage_hit_total = static_cast<uint64_t>(top->dbg_bpu_ittage_hit_total_o);
   const uint64_t ittage_use_total = static_cast<uint64_t>(top->dbg_bpu_ittage_use_total_o);
@@ -576,7 +583,8 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
       pred_jump_indirect_miss_, pred_ret_miss_, cond_update_total, cond_selected_correct,
       tage_lookup_total, tage_hit_total, tage_override_total, tage_override_correct,
       ftb_lookup_total, ftb_cond_pick_total, ftb_jump_pick_total, ftb_cond_tag_miss_total,
-      ftb_jump_tag_miss_total, ittage_lookup_total, ittage_hit_total, ittage_use_total,
+      ftb_jump_tag_miss_total, ftb_multi_ir_cond_earlier_non_pick_taken_total,
+      ittage_lookup_total, ittage_hit_total, ittage_use_total,
       cond_provider_legacy_selected, cond_provider_legacy_correct, cond_provider_tage_selected,
       cond_provider_tage_correct);
 
