@@ -213,6 +213,31 @@ module bpu #(
   logic tage_strong_w;
   logic [1:0] tage_provider_w;
   logic [1:0] tage_useful_w;
+  // TAGE 2-lane 读出（cond 候选 lane0/lane1），顶层 pick 后按 picked lane mux 成上面的单 lane。
+  logic [1:0] tage_hit_lane_w;
+  logic [1:0] tage_taken_lane_w;
+  logic [1:0] tage_strong_lane_w;
+  logic [1:0][1:0] tage_provider_lane_w;
+  logic [1:0][1:0] tage_useful_lane_w;
+  // FTB 候选导出（2 cond + 2 jump）+ cond 槽 BHT-local base（TAGE miss 回退）。
+  logic [1:0] cond_cand_valid_w;
+  logic [1:0][Cfg.PLEN-1:0] cond_cand_pc_w;
+  logic [1:0][SLOT_IDX_W-1:0] cond_cand_end_idx_w;
+  logic [1:0] cond_cand_is_rvc_w;
+  logic [1:0] cond_cand_is_backward_w;
+  logic [1:0][Cfg.PLEN-1:0] cond_cand_target_w;
+  logic [1:0] cond_base_taken_w;
+  logic [1:0] jump_cand_valid_w;
+  logic [1:0][Cfg.PLEN-1:0] jump_cand_pc_w;
+  logic [1:0][SLOT_IDX_W-1:0] jump_cand_end_idx_w;
+  logic [1:0] jump_cand_is_rvc_w;
+  logic [1:0] jump_cand_is_call_w;
+  logic [1:0] jump_cand_is_ret_w;
+  logic [1:0] jump_cand_is_indirect_w;
+  logic [1:0][Cfg.PLEN-1:0] jump_cand_target_w;
+  // FTB legacy cond/jump branch PC（仅作 pick 无 cond/indirect 时的回退与 debug）。
+  logic [Cfg.PLEN-1:0] ftb_cond_branch_pc_w;
+  logic [Cfg.PLEN-1:0] ftb_jump_branch_pc_w;
   logic sc_taken_w;
   logic sc_confident_w;
   logic loop_hit_w;
@@ -289,9 +314,11 @@ module bpu #(
                             ftq_update_w.taken && !ftq_update_w.is_call && !ftq_update_w.is_ret;
   end
 
+  // TAGE 2-lane（仅 cond）：直接读 FTB 导出的 2 个 cond 候选 PC，共享 spec_ghr。
+  // 折叠历史在子模块内每表算一次（不依赖 lane/PC），写端口仍单端口。
   tage #(
       .Cfg(Cfg),
-      .INSTR_PER_FETCH(1),
+      .LANES(2),
       .GHR_BITS(GHR_BITS),
       .TABLE_ENTRIES(Cfg.BPU_BHT_ENTRIES),
       .TAG_BITS(TAGE_TAG_BITS),
@@ -302,13 +329,13 @@ module bpu #(
   ) u_tage (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .predict_base_pc_i(cond_pred_req_w.pc),
-      .predict_ghr_i(cond_pred_req_w.ghr),
-      .predict_hit_o(tage_hit_w),
-      .predict_taken_o(tage_taken_w),
-      .predict_strong_o(tage_strong_w),
-      .predict_provider_o(tage_provider_w),
-      .predict_useful_o(tage_useful_w),
+      .predict_pc_i(cond_cand_pc_w),
+      .predict_ghr_i(spec_ghr_q),
+      .predict_hit_o(tage_hit_lane_w),
+      .predict_taken_o(tage_taken_lane_w),
+      .predict_strong_o(tage_strong_lane_w),
+      .predict_provider_o(tage_provider_lane_w),
+      .predict_useful_o(tage_useful_lane_w),
       .update_valid_i(tage_update_w.valid),
       .update_pc_i(tage_update_w.pc),
       .update_ghr_i(tage_update_w.meta.ghr),
@@ -485,19 +512,36 @@ module bpu #(
       .update_is_call_i(ftq_update_w.is_call),
       .update_is_ret_i(ftq_update_w.is_ret),
       .update_is_rvc_i(ftq_update_w.is_rvc),
-      .ftb_pick_valid_o(ftb_pick_valid_w),
-      .ftb_pick_is_cond_o(ftb_pick_is_cond_w),
-      .ftb_pick_is_call_o(ftb_pick_is_call_w),
-      .ftb_pick_is_ret_o(ftb_pick_is_ret_w),
-      .ftb_pick_is_rvc_o(ftb_pick_is_rvc_w),
-      .ftb_pick_is_backward_o(ftb_pick_is_backward_w),
-      .ftb_pick_is_indirect_o(ftb_pick_is_indirect_w),
-      .ftb_pick_end_idx_o(ftb_pick_end_idx_w),
-      .ftb_pick_pc_o(ftb_pick_pc_w),
-      .ftb_pick_target_o(ftb_pick_target_w),
-      .cond_branch_pc_o(cond_branch_pc_w),
-      .jump_branch_pc_o(jump_branch_pc_w),
-      .cond_taken_legacy_o(cond_taken_legacy_w),
+      // legacy pick 不再驱动顶层（顶层用 TAGE 方向自己 pick），保留 FTB 内部计算但不连出。
+      .ftb_pick_valid_o(),
+      .ftb_pick_is_cond_o(),
+      .ftb_pick_is_call_o(),
+      .ftb_pick_is_ret_o(),
+      .ftb_pick_is_rvc_o(),
+      .ftb_pick_is_backward_o(),
+      .ftb_pick_is_indirect_o(),
+      .ftb_pick_end_idx_o(),
+      .ftb_pick_pc_o(),
+      .ftb_pick_target_o(),
+      // 候选导出（2 cond + 2 jump）+ cond BHT-local base，喂顶层 pick。
+      .cond_cand_valid_o(cond_cand_valid_w),
+      .cond_cand_pc_o(cond_cand_pc_w),
+      .cond_cand_end_idx_o(cond_cand_end_idx_w),
+      .cond_cand_is_rvc_o(cond_cand_is_rvc_w),
+      .cond_cand_is_backward_o(cond_cand_is_backward_w),
+      .cond_cand_target_o(cond_cand_target_w),
+      .cond_base_taken_o(cond_base_taken_w),
+      .jump_cand_valid_o(jump_cand_valid_w),
+      .jump_cand_pc_o(jump_cand_pc_w),
+      .jump_cand_end_idx_o(jump_cand_end_idx_w),
+      .jump_cand_is_rvc_o(jump_cand_is_rvc_w),
+      .jump_cand_is_call_o(jump_cand_is_call_w),
+      .jump_cand_is_ret_o(jump_cand_is_ret_w),
+      .jump_cand_is_indirect_o(jump_cand_is_indirect_w),
+      .jump_cand_target_o(jump_cand_target_w),
+      .cond_branch_pc_o(ftb_cond_branch_pc_w),
+      .jump_branch_pc_o(ftb_jump_branch_pc_w),
+      .cond_taken_legacy_o(),
       .dbg_snap_ftb_cond_hit_o(dbg_snap_ftb_cond_hit_w),
       .dbg_snap_ftb_jump_hit_o(dbg_snap_ftb_jump_hit_w),
       .dbg_snap_ftb_pick_cond_o(dbg_snap_ftb_pick_cond_w),
@@ -561,6 +605,112 @@ module bpu #(
       .dbg_snap_ittage_raw_hit_i(dbg_snap_ittage_raw_hit_w),
       .dbg_snap_ittage_use_i(dbg_snap_ittage_use_w)
   );
+
+  // ---- 顶层 pick：用 TAGE 2-lane 方向喂回，在 4 候选（2 cond + 2 jump）里选最早 in-range taken ----
+  // cond 槽方向 = classic TAGE（命中用 TAGE，否则用 BHT-local base）；jump 槽无条件 taken。
+  // 候选已由 FTB 保证 in-range 且各自按 PC 升序（lane0=最早），这里只比 4 个 PC 选最小 taken。
+  always_comb begin
+    logic [1:0] cond_dir;
+    logic [3:0] cand_valid;
+    logic [3:0] cand_taken;
+    logic [3:0][Cfg.PLEN-1:0] cand_pc;
+    int picked;
+    int jl;
+    logic picked_is_cond;
+    int picked_cond_lane;
+
+    for (int k = 0; k < 2; k++) begin
+      cond_dir[k] = tage_hit_lane_w[k] ? tage_taken_lane_w[k] : cond_base_taken_w[k];
+    end
+
+    cand_valid[0] = cond_cand_valid_w[0];
+    cand_valid[1] = cond_cand_valid_w[1];
+    cand_valid[2] = jump_cand_valid_w[0];
+    cand_valid[3] = jump_cand_valid_w[1];
+    cand_taken[0] = cond_cand_valid_w[0] && cond_dir[0];
+    cand_taken[1] = cond_cand_valid_w[1] && cond_dir[1];
+    cand_taken[2] = jump_cand_valid_w[0];
+    cand_taken[3] = jump_cand_valid_w[1];
+    cand_pc[0] = cond_cand_pc_w[0];
+    cand_pc[1] = cond_cand_pc_w[1];
+    cand_pc[2] = jump_cand_pc_w[0];
+    cand_pc[3] = jump_cand_pc_w[1];
+
+    picked = -1;
+    for (int c = 0; c < 4; c++) begin
+      if (cand_valid[c] && cand_taken[c] && ((picked < 0) || (cand_pc[c] < cand_pc[picked]))) begin
+        picked = c;
+      end
+    end
+
+    picked_is_cond   = (picked == 0) || (picked == 1);
+    picked_cond_lane = (picked == 1) ? 1 : 0;
+    jl               = (picked == 3) ? 1 : 0;
+
+    ftb_pick_valid_w       = (picked >= 0);
+    ftb_pick_is_cond_w     = 1'b0;
+    ftb_pick_is_call_w     = 1'b0;
+    ftb_pick_is_ret_w      = 1'b0;
+    ftb_pick_is_rvc_w      = 1'b0;
+    ftb_pick_is_backward_w = 1'b0;
+    ftb_pick_is_indirect_w = 1'b0;
+    ftb_pick_end_idx_w     = '0;
+    ftb_pick_pc_w          = '0;
+    ftb_pick_target_w      = '0;
+
+    if (picked_is_cond) begin
+      ftb_pick_is_cond_w     = 1'b1;
+      ftb_pick_is_rvc_w      = cond_cand_is_rvc_w[picked_cond_lane];
+      ftb_pick_is_backward_w = cond_cand_is_backward_w[picked_cond_lane];
+      ftb_pick_end_idx_w     = cond_cand_end_idx_w[picked_cond_lane];
+      ftb_pick_pc_w          = cond_cand_pc_w[picked_cond_lane];
+      ftb_pick_target_w      = cond_cand_target_w[picked_cond_lane];
+    end else if (picked >= 0) begin
+      ftb_pick_is_call_w     = jump_cand_is_call_w[jl];
+      ftb_pick_is_ret_w      = jump_cand_is_ret_w[jl];
+      ftb_pick_is_indirect_w = jump_cand_is_indirect_w[jl];
+      ftb_pick_is_rvc_w      = jump_cand_is_rvc_w[jl];
+      ftb_pick_end_idx_w     = jump_cand_end_idx_w[jl];
+      ftb_pick_pc_w          = jump_cand_pc_w[jl];
+      ftb_pick_target_w      = jump_cand_target_w[jl];
+    end
+
+    // picked cond lane 的 TAGE meta mux 给现有 override 逻辑（非 cond pick 时清零）。
+    if (picked_is_cond) begin
+      tage_hit_w      = tage_hit_lane_w[picked_cond_lane];
+      tage_taken_w    = tage_taken_lane_w[picked_cond_lane];
+      tage_strong_w   = tage_strong_lane_w[picked_cond_lane];
+      tage_provider_w = tage_provider_lane_w[picked_cond_lane];
+      tage_useful_w   = tage_useful_lane_w[picked_cond_lane];
+    end else begin
+      tage_hit_w      = 1'b0;
+      tage_taken_w    = 1'b0;
+      tage_strong_w   = 1'b0;
+      tage_provider_w = '0;
+      tage_useful_w   = '0;
+    end
+
+    // override 的 base = picked cond 的 classic TAGE 方向（SC/Loop 在其上叠加，优先级不变）。
+    cond_taken_legacy_w = picked_is_cond ? cond_dir[picked_cond_lane] : 1'b0;
+
+    // SC/Loop/BHT 单 lane，输入 picked cond PC（无 cond pick 时回退最早 cond 候选 / FTB 值）。
+    if (picked_is_cond) begin
+      cond_branch_pc_w = cond_cand_pc_w[picked_cond_lane];
+    end else if (cond_cand_valid_w[0]) begin
+      cond_branch_pc_w = cond_cand_pc_w[0];
+    end else begin
+      cond_branch_pc_w = ftb_cond_branch_pc_w;
+    end
+
+    // ITTAGE 单 lane，输入最早 in-range indirect 候选 PC。
+    if (jump_cand_valid_w[0] && jump_cand_is_indirect_w[0]) begin
+      jump_branch_pc_w = jump_cand_pc_w[0];
+    end else if (jump_cand_valid_w[1] && jump_cand_is_indirect_w[1]) begin
+      jump_branch_pc_w = jump_cand_pc_w[1];
+    end else begin
+      jump_branch_pc_w = ftb_jump_branch_pc_w;
+    end
+  end
 
   always_comb begin
     cond_pred_req_w.valid = !flush_i && !redirect_valid_i;

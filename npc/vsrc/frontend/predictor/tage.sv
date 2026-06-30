@@ -2,7 +2,7 @@ import config_pkg::*;
 
 module tage #(
     parameter config_pkg::cfg_t Cfg = config_pkg::EmptyCfg,
-    parameter int unsigned INSTR_PER_FETCH = Cfg.INSTR_PER_FETCH,
+    parameter int unsigned LANES = 2,
     parameter int unsigned GHR_BITS = 8,
     parameter int unsigned TABLE_ENTRIES = 128,
     parameter int unsigned TAG_BITS = 8,
@@ -18,13 +18,13 @@ module tage #(
     input logic clk_i,
     input logic rst_i,
 
-    input  logic [Cfg.PLEN-1:0] predict_base_pc_i,
+    input  logic [LANES-1:0][Cfg.PLEN-1:0] predict_pc_i,
     input  logic [((GHR_BITS > 0) ? GHR_BITS : 1)-1:0] predict_ghr_i,
-    output logic [INSTR_PER_FETCH-1:0] predict_hit_o,
-    output logic [INSTR_PER_FETCH-1:0] predict_taken_o,
-    output logic [INSTR_PER_FETCH-1:0] predict_strong_o,
-    output logic [INSTR_PER_FETCH-1:0][1:0] predict_provider_o,
-    output logic [INSTR_PER_FETCH-1:0][USEFUL_BITS-1:0] predict_useful_o,
+    output logic [LANES-1:0] predict_hit_o,
+    output logic [LANES-1:0] predict_taken_o,
+    output logic [LANES-1:0] predict_strong_o,
+    output logic [LANES-1:0][1:0] predict_provider_o,
+    output logic [LANES-1:0][USEFUL_BITS-1:0] predict_useful_o,
 
     input logic update_valid_i,
     input logic [Cfg.PLEN-1:0] update_pc_i,
@@ -33,7 +33,6 @@ module tage #(
 );
 
   localparam int unsigned NUM_TABLES = 4;
-  localparam int unsigned INSTR_BYTES = Cfg.ILEN / 8;
   localparam int unsigned INSTR_ADDR_LSB = 1;
   localparam int unsigned IDX_W = (TABLE_ENTRIES > 1) ? $clog2(TABLE_ENTRIES) : 1;
   localparam int unsigned GHR_W = (GHR_BITS > 0) ? GHR_BITS : 1;
@@ -51,11 +50,11 @@ module tage #(
   localparam int unsigned TAG_SALT  [NUM_TABLES] = '{1, 2, 4, 6};
   localparam int unsigned TAG_HSALT [NUM_TABLES] = '{3, 5, 7, 11};
 
-  logic [INSTR_PER_FETCH-1:0][IDX_W-1:0]   pred_idx [NUM_TABLES];
-  logic [INSTR_PER_FETCH-1:0][TAG_BITS-1:0] pred_tag [NUM_TABLES];
-  logic [INSTR_PER_FETCH-1:0]              hit      [NUM_TABLES];
-  logic [INSTR_PER_FETCH-1:0][CTR_BITS-1:0]         ctr      [NUM_TABLES];
-  logic [INSTR_PER_FETCH-1:0][USEFUL_BITS-1:0] useful [NUM_TABLES];
+  logic [LANES-1:0][IDX_W-1:0]   pred_idx [NUM_TABLES];
+  logic [LANES-1:0][TAG_BITS-1:0] pred_tag [NUM_TABLES];
+  logic [LANES-1:0]              hit      [NUM_TABLES];
+  logic [LANES-1:0][CTR_BITS-1:0]         ctr      [NUM_TABLES];
+  logic [LANES-1:0][USEFUL_BITS-1:0] useful [NUM_TABLES];
 
   logic [IDX_W-1:0]            upd_idx [NUM_TABLES];
   logic [TAG_BITS-1:0]         upd_tag [NUM_TABLES];
@@ -149,15 +148,20 @@ module tage #(
     is_strong = (s == CTR_MAX) || (s == CTR_MIN);
   endfunction
 
+  // 折叠历史只依赖共享 GHR，与 lane/PC 无关：每表算一次，lane 内只算 PC 折叠再异或。
+  logic [IDX_W-1:0]   hist_idx_fold [NUM_TABLES];
+  logic [TAG_BITS-1:0] hist_tag_fold [NUM_TABLES];
+
   always_comb begin
-    for (int i = 0; i < INSTR_PER_FETCH; i++) begin
-      logic [Cfg.PLEN-1:0] slot_pc;
-      slot_pc = predict_base_pc_i + Cfg.PLEN'(INSTR_BYTES * i);
+    for (int t = 0; t < NUM_TABLES; t++) begin
+      hist_idx_fold[t] = fold_hist_idx(predict_ghr_i, HIST_LEN[t], IDX_HSALT[t]);
+      hist_tag_fold[t] = fold_hist_tag(predict_ghr_i, HIST_LEN[t], TAG_HSALT[t]);
+    end
+
+    for (int i = 0; i < LANES; i++) begin
       for (int t = 0; t < NUM_TABLES; t++) begin
-        pred_idx[t][i] = fold_pc_idx(slot_pc, IDX_SALT[t]) ^
-                         fold_hist_idx(predict_ghr_i, HIST_LEN[t], IDX_HSALT[t]);
-        pred_tag[t][i] = fold_pc_tag(slot_pc, TAG_SALT[t]) ^
-                         fold_hist_tag(predict_ghr_i, HIST_LEN[t], TAG_HSALT[t]);
+        pred_idx[t][i] = fold_pc_idx(predict_pc_i[i], IDX_SALT[t]) ^ hist_idx_fold[t];
+        pred_tag[t][i] = fold_pc_tag(predict_pc_i[i], TAG_SALT[t]) ^ hist_tag_fold[t];
       end
     end
 
@@ -172,7 +176,7 @@ module tage #(
   generate
     for (genvar t = 0; t < NUM_TABLES; t++) begin : g_table
       tage_table #(
-          .INSTR_PER_FETCH(INSTR_PER_FETCH),
+          .INSTR_PER_FETCH(LANES),
           .ENTRIES(TABLE_ENTRIES),
           .TAG_BITS(TAG_BITS),
           .CTR_BITS(CTR_BITS),
@@ -203,7 +207,7 @@ module tage #(
 
   // ---- 预测：最长命中表为 provider，次长命中表为 alt；新分配弱条目先信 alt ----
   always_comb begin
-    for (int i = 0; i < INSTR_PER_FETCH; i++) begin
+    for (int i = 0; i < LANES; i++) begin
       logic       prov_found, alt_found;
       logic [1:0] prov_t, alt_t;
       logic [CTR_BITS-1:0] prov_ctr_v, alt_ctr_v;

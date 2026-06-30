@@ -52,6 +52,26 @@ module bpu_ftb #(
     output logic [global_config_pkg::PRED_SLOT_IDX_W-1:0] ftb_pick_end_idx_o,
     output logic [Cfg.PLEN-1:0]           ftb_pick_pc_o,
     output logic [Cfg.PLEN-1:0]           ftb_pick_target_o,
+
+    // Candidate export (fixed 4 slots = 2 cond + 2 other). 顶层用 TAGE 方向做最终
+    // pick；cond/jump 候选各 2 路按 in-range PC 升序导出（lane0 = 最早）。
+    output logic [1:0]                                          cond_cand_valid_o,
+    output logic [1:0][Cfg.PLEN-1:0]                            cond_cand_pc_o,
+    output logic [1:0][global_config_pkg::PRED_SLOT_IDX_W-1:0]  cond_cand_end_idx_o,
+    output logic [1:0]                                          cond_cand_is_rvc_o,
+    output logic [1:0]                                          cond_cand_is_backward_o,
+    output logic [1:0][Cfg.PLEN-1:0]                            cond_cand_target_o,
+    // BHT-local base 方向（bimodal + backward 启发, 非 tournament），TAGE miss 回退用。
+    output logic [1:0]                                          cond_base_taken_o,
+    output logic [1:0]                                          jump_cand_valid_o,
+    output logic [1:0][Cfg.PLEN-1:0]                            jump_cand_pc_o,
+    output logic [1:0][global_config_pkg::PRED_SLOT_IDX_W-1:0]  jump_cand_end_idx_o,
+    output logic [1:0]                                          jump_cand_is_rvc_o,
+    output logic [1:0]                                          jump_cand_is_call_o,
+    output logic [1:0]                                          jump_cand_is_ret_o,
+    output logic [1:0]                                          jump_cand_is_indirect_o,
+    output logic [1:0][Cfg.PLEN-1:0]                            jump_cand_target_o,
+
     output logic [Cfg.PLEN-1:0]           cond_branch_pc_o,
     output logic [Cfg.PLEN-1:0]           jump_branch_pc_o,
     output logic                          cond_taken_legacy_o,
@@ -125,6 +145,23 @@ module bpu_ftb #(
   logic [Cfg.PLEN-1:0] ftb_pick_pc_w;
   logic [Cfg.PLEN-1:0] ftb_pick_target_w;
   logic cond_taken_legacy_w;
+
+  // Candidate scan results：cond/jump 各 2 路，lane0 为 in-range 最早（PC 最小）。
+  logic [1:0]                  cond_cand_valid_w;
+  logic [1:0][Cfg.PLEN-1:0]    cond_cand_pc_w;
+  logic [1:0][SLOT_IDX_W-1:0]  cond_cand_end_idx_w;
+  logic [1:0]                  cond_cand_is_rvc_w;
+  logic [1:0]                  cond_cand_is_backward_w;
+  logic [1:0][Cfg.PLEN-1:0]    cond_cand_target_w;
+  logic [1:0]                  cond_base_taken_w;
+  logic [1:0]                  jump_cand_valid_w;
+  logic [1:0][Cfg.PLEN-1:0]    jump_cand_pc_w;
+  logic [1:0][SLOT_IDX_W-1:0]  jump_cand_end_idx_w;
+  logic [1:0]                  jump_cand_is_rvc_w;
+  logic [1:0]                  jump_cand_is_call_w;
+  logic [1:0]                  jump_cand_is_ret_w;
+  logic [1:0]                  jump_cand_is_indirect_w;
+  logic [1:0][Cfg.PLEN-1:0]    jump_cand_target_w;
   logic dbg_snap_ftb_cond_hit_w;
   logic dbg_snap_ftb_jump_hit_w;
   logic dbg_snap_ftb_pick_cond_w;
@@ -208,6 +245,19 @@ module bpu_ftb #(
     end
   endfunction
 
+  // BHT-local base 方向：只看 local（bimodal）计数 + backward 启发，不做 tournament
+  // 选择。作为 TAGE miss 时的 T0 回退方向喂给顶层 pick。
+  function automatic logic bht_local_taken(input logic [Cfg.PLEN-1:0] pc,
+                                           input logic is_backward);
+    logic [BHT_IDX_W-1:0] local_idx;
+    logic [1:0] local_ctr;
+    begin
+      local_idx = bht_pc_index(pc);
+      local_ctr = local_bht_q[local_idx];
+      bht_local_taken = local_ctr[1] || ((local_ctr == 2'b01) && is_backward);
+    end
+  endfunction
+
   // FTB 查询：用 16B 对齐的 block_base 索引 BTB；lookup 扫描 4 个统一 slot。
   assign aligned_base_w = pc_reg_q & BLOCK_ALIGN_MASK;
   assign scan_next_block_w = |pc_reg_q[BLOCK_ADDR_LSB-1:0];
@@ -270,6 +320,21 @@ module bpu_ftb #(
     pick_is_rvc = 1'b0;
     pick_is_backward = 1'b0;
     pick_is_indirect = 1'b0;
+    cond_cand_valid_w = '0;
+    cond_cand_pc_w = '0;
+    cond_cand_end_idx_w = '0;
+    cond_cand_is_rvc_w = '0;
+    cond_cand_is_backward_w = '0;
+    cond_cand_target_w = '0;
+    cond_base_taken_w = '0;
+    jump_cand_valid_w = '0;
+    jump_cand_pc_w = '0;
+    jump_cand_end_idx_w = '0;
+    jump_cand_is_rvc_w = '0;
+    jump_cand_is_call_w = '0;
+    jump_cand_is_ret_w = '0;
+    jump_cand_is_indirect_w = '0;
+    jump_cand_target_w = '0;
     cond_snap_set = 1'b0;
     jump_snap_set = 1'b0;
     cond_snap_pc = aligned_base_w;
@@ -378,7 +443,68 @@ module bpu_ftb #(
           pick_branch_pc = slot_pc;
           pick_end_idx = slot_end_idx;
         end
+
+        // ---- 候选导出：cond/jump 各保留 2 路 in-range 最早（PC 升序插入）----
+        if (slot_in_range && btb_slot_is_cond_q[lookup_idx][s]) begin
+          if (!cond_cand_valid_w[0] || (slot_pc < cond_cand_pc_w[0])) begin
+            cond_cand_valid_w[1]       = cond_cand_valid_w[0];
+            cond_cand_pc_w[1]          = cond_cand_pc_w[0];
+            cond_cand_end_idx_w[1]     = cond_cand_end_idx_w[0];
+            cond_cand_is_rvc_w[1]      = cond_cand_is_rvc_w[0];
+            cond_cand_is_backward_w[1] = cond_cand_is_backward_w[0];
+            cond_cand_target_w[1]      = cond_cand_target_w[0];
+            cond_cand_valid_w[0]       = 1'b1;
+            cond_cand_pc_w[0]          = slot_pc;
+            cond_cand_end_idx_w[0]     = slot_end_idx;
+            cond_cand_is_rvc_w[0]      = btb_slot_is_rvc_q[lookup_idx][s];
+            cond_cand_is_backward_w[0] = btb_slot_is_backward_q[lookup_idx][s];
+            cond_cand_target_w[0]      = btb_slot_target_q[lookup_idx][s];
+          end else if (!cond_cand_valid_w[1] || (slot_pc < cond_cand_pc_w[1])) begin
+            cond_cand_valid_w[1]       = 1'b1;
+            cond_cand_pc_w[1]          = slot_pc;
+            cond_cand_end_idx_w[1]     = slot_end_idx;
+            cond_cand_is_rvc_w[1]      = btb_slot_is_rvc_q[lookup_idx][s];
+            cond_cand_is_backward_w[1] = btb_slot_is_backward_q[lookup_idx][s];
+            cond_cand_target_w[1]      = btb_slot_target_q[lookup_idx][s];
+          end
+        end else if (slot_in_range) begin
+          if (!jump_cand_valid_w[0] || (slot_pc < jump_cand_pc_w[0])) begin
+            jump_cand_valid_w[1]       = jump_cand_valid_w[0];
+            jump_cand_pc_w[1]          = jump_cand_pc_w[0];
+            jump_cand_end_idx_w[1]     = jump_cand_end_idx_w[0];
+            jump_cand_is_rvc_w[1]      = jump_cand_is_rvc_w[0];
+            jump_cand_is_call_w[1]     = jump_cand_is_call_w[0];
+            jump_cand_is_ret_w[1]      = jump_cand_is_ret_w[0];
+            jump_cand_is_indirect_w[1] = jump_cand_is_indirect_w[0];
+            jump_cand_target_w[1]      = jump_cand_target_w[0];
+            jump_cand_valid_w[0]       = 1'b1;
+            jump_cand_pc_w[0]          = slot_pc;
+            jump_cand_end_idx_w[0]     = slot_end_idx;
+            jump_cand_is_rvc_w[0]      = btb_slot_is_rvc_q[lookup_idx][s];
+            jump_cand_is_call_w[0]     = btb_slot_is_call_q[lookup_idx][s];
+            jump_cand_is_ret_w[0]      = btb_slot_is_ret_q[lookup_idx][s];
+            jump_cand_is_indirect_w[0] = !btb_slot_is_call_q[lookup_idx][s] &&
+                                         !btb_slot_is_ret_q[lookup_idx][s];
+            jump_cand_target_w[0]      = btb_slot_target_q[lookup_idx][s];
+          end else if (!jump_cand_valid_w[1] || (slot_pc < jump_cand_pc_w[1])) begin
+            jump_cand_valid_w[1]       = 1'b1;
+            jump_cand_pc_w[1]          = slot_pc;
+            jump_cand_end_idx_w[1]     = slot_end_idx;
+            jump_cand_is_rvc_w[1]      = btb_slot_is_rvc_q[lookup_idx][s];
+            jump_cand_is_call_w[1]     = btb_slot_is_call_q[lookup_idx][s];
+            jump_cand_is_ret_w[1]      = btb_slot_is_ret_q[lookup_idx][s];
+            jump_cand_is_indirect_w[1] = !btb_slot_is_call_q[lookup_idx][s] &&
+                                         !btb_slot_is_ret_q[lookup_idx][s];
+            jump_cand_target_w[1]      = btb_slot_target_q[lookup_idx][s];
+          end
+        end
       end
+    end
+
+    // cond 候选 BHT-local base 方向（TAGE miss 回退）。
+    for (int k = 0; k < 2; k++) begin
+      cond_base_taken_w[k] = cond_cand_valid_w[k] &&
+                             bht_local_taken(cond_cand_pc_w[k], cond_cand_is_backward_w[k]);
     end
 
     if (cond_snap_set) begin
@@ -448,6 +574,21 @@ module bpu_ftb #(
   assign ftb_pick_end_idx_o = ftb_pick_end_idx_w;
   assign ftb_pick_pc_o = ftb_pick_pc_w;
   assign ftb_pick_target_o = ftb_pick_target_w;
+  assign cond_cand_valid_o = cond_cand_valid_w;
+  assign cond_cand_pc_o = cond_cand_pc_w;
+  assign cond_cand_end_idx_o = cond_cand_end_idx_w;
+  assign cond_cand_is_rvc_o = cond_cand_is_rvc_w;
+  assign cond_cand_is_backward_o = cond_cand_is_backward_w;
+  assign cond_cand_target_o = cond_cand_target_w;
+  assign cond_base_taken_o = cond_base_taken_w;
+  assign jump_cand_valid_o = jump_cand_valid_w;
+  assign jump_cand_pc_o = jump_cand_pc_w;
+  assign jump_cand_end_idx_o = jump_cand_end_idx_w;
+  assign jump_cand_is_rvc_o = jump_cand_is_rvc_w;
+  assign jump_cand_is_call_o = jump_cand_is_call_w;
+  assign jump_cand_is_ret_o = jump_cand_is_ret_w;
+  assign jump_cand_is_indirect_o = jump_cand_is_indirect_w;
+  assign jump_cand_target_o = jump_cand_target_w;
   assign cond_branch_pc_o = cond_branch_pc_w;
   assign jump_branch_pc_o = jump_branch_pc_w;
   assign cond_taken_legacy_o = cond_taken_legacy_w;
