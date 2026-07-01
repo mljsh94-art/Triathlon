@@ -15,9 +15,7 @@ int main(int argc, char **argv) {
   top->i_XLEN = 32;
   top->i_VLEN = 32;
   top->i_ILEN = 32;
-  top->i_BPU_USE_GSHARE = 1;
   top->i_BPU_USE_TAGE = 1;
-  top->i_BPU_USE_TOURNAMENT = 1;
   top->i_BPU_BTB_HASH_ENABLE = 1;
   top->i_BPU_BHT_HASH_ENABLE = 1;
   top->i_BPU_BTB_ENTRIES = 1024;
@@ -27,7 +25,6 @@ int main(int argc, char **argv) {
   top->i_BPU_USE_SC = 1;
   top->i_BPU_SC_ENTRIES = 1024;
   top->i_BPU_SC_CONF_THRESH = 3;
-  top->i_BPU_SC_REQUIRE_DISAGREE = 1;
   top->i_BPU_SC_REQUIRE_BOTH_WEAK = 1;
   top->i_BPU_SC_BLOCK_ON_TAGE_HIT = 1;
   top->i_BPU_USE_LOOP = 1;
@@ -68,10 +65,8 @@ int main(int argc, char **argv) {
   std::cout << "Checking ICACHE_SET_ASSOC_WIDTH..." << std::endl;
   assert(top->o_ICACHE_SET_ASSOC_WIDTH == expected_assoc_width);
 
-  std::cout << "Checking BPU_USE_GSHARE..." << std::endl;
-  assert(top->o_BPU_USE_GSHARE == 1);
+  std::cout << "Checking BPU_USE_TAGE..." << std::endl;
   assert(top->o_BPU_USE_TAGE == 1);
-  assert(top->o_BPU_USE_TOURNAMENT == 1);
   assert(top->o_BPU_BTB_HASH_ENABLE == 1);
   assert(top->o_BPU_BHT_HASH_ENABLE == 1);
   assert(top->o_BPU_BTB_ENTRIES == 1024);
@@ -81,7 +76,6 @@ int main(int argc, char **argv) {
   assert(top->o_BPU_USE_SC == 1);
   assert(top->o_BPU_SC_ENTRIES == 1024);
   assert(top->o_BPU_SC_CONF_THRESH == 3);
-  assert(top->o_BPU_SC_REQUIRE_DISAGREE == 1);
   assert(top->o_BPU_SC_REQUIRE_BOTH_WEAK == 1);
   assert(top->o_BPU_SC_BLOCK_ON_TAGE_HIT == 1);
   assert(top->o_BPU_USE_LOOP == 1);

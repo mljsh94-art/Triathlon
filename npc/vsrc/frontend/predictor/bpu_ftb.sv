@@ -5,31 +5,18 @@
 // that previously lived in bpu.sv: logic was moved out unchanged, only
 // scope/wiring differs.
 //
-// The lookup scan needs per-slot conditional direction (legacy BHT) to pick
-// the earliest taken branch, so the BHT counter arrays are passed in as
-// read-only inputs for now. BHT storage/update stays in bpu.sv; a later
-// refactor step extracts the BHT into its own module.
+// Cond base 方向由 bpu.sv 顶层用 TAGE T0 计算；FTB 只导出 in-range 候选。
 import global_config_pkg::*;
 module bpu_ftb #(
     parameter config_pkg::cfg_t Cfg = config_pkg::EmptyCfg,
     parameter int unsigned BTB_ENTRIES = 64,
-    parameter int unsigned BHT_ENTRIES = 128,
-    parameter bit BTB_HASH_ENABLE = 1'b1,
-    parameter bit BHT_HASH_ENABLE = 1'b1,
-    parameter bit USE_GSHARE = 1'b0,
-    parameter bit USE_TOURNAMENT = 1'b1,
-    parameter int unsigned GHR_BITS = 8
+    parameter bit BTB_HASH_ENABLE = 1'b1
 ) (
     input logic clk_i,
     input logic rst_i,
 
     // Predict-time inputs.
     input logic [Cfg.PLEN-1:0] pc_reg_i,
-    input logic [((GHR_BITS > 0) ? GHR_BITS : 1)-1:0] spec_ghr_i,
-    // BHT counter arrays (read-only; storage owned by bpu.sv).
-    input logic [BHT_ENTRIES-1:0][1:0] local_bht_i,
-    input logic [BHT_ENTRIES-1:0][1:0] global_bht_i,
-    input logic [BHT_ENTRIES-1:0][1:0] chooser_i,
 
     // Commit-time FTB training (from FTQ commit update).
     input logic                update_valid_i,
@@ -61,8 +48,6 @@ module bpu_ftb #(
     output logic [1:0]                                          cond_cand_is_rvc_o,
     output logic [1:0]                                          cond_cand_is_backward_o,
     output logic [1:0][Cfg.PLEN-1:0]                            cond_cand_target_o,
-    // BHT-local base 方向（bimodal + backward 启发, 非 tournament），TAGE miss 回退用。
-    output logic [1:0]                                          cond_base_taken_o,
     output logic [1:0]                                          jump_cand_valid_o,
     output logic [1:0][Cfg.PLEN-1:0]                            jump_cand_pc_o,
     output logic [1:0][global_config_pkg::PRED_SLOT_IDX_W-1:0]  jump_cand_end_idx_o,
@@ -74,13 +59,10 @@ module bpu_ftb #(
 
     output logic [Cfg.PLEN-1:0]           cond_branch_pc_o,
     output logic [Cfg.PLEN-1:0]           jump_branch_pc_o,
-    output logic                          cond_taken_legacy_o,
 
     // Diagnostic snapshot outputs (consumed by bpu.sv counters/pred_snap).
     output logic       dbg_snap_ftb_cond_hit_o,
     output logic       dbg_snap_ftb_jump_hit_o,
-    output logic       dbg_snap_ftb_pick_cond_o,
-    output logic       dbg_snap_ftb_pick_jump_o,
     output logic       dbg_snap_ftb_cond_tag_miss_o,
     output logic       dbg_snap_ftb_jump_tag_miss_o,
     output logic       dbg_snap_ftb_any_valid_o,
@@ -90,20 +72,15 @@ module bpu_ftb #(
     output logic [2:0] dbg_snap_ftb_jump_count_o,
     output logic [2:0] dbg_snap_ftb_in_range_cond_count_o,
     output logic       dbg_snap_ftb_cond_in_range_o,
-    output logic       dbg_snap_ftb_jump_in_range_o,
-    output logic       dbg_snap_ftb_cond_taken_pred_o,
-    output logic       dbg_snap_ftb_jump_indirect_o
+    output logic       dbg_snap_ftb_jump_in_range_o
 );
 
   localparam int unsigned SLOT_IDX_W = global_config_pkg::PRED_SLOT_IDX_W;
   localparam int unsigned PRED_SLOT_COUNT = global_config_pkg::PRED_SLOT_COUNT;
   localparam logic [Cfg.PLEN-1:0] BLOCK_ALIGN_MASK = ~(Cfg.PLEN'(Cfg.FETCH_WIDTH - 1));
   localparam int unsigned BTB_IDX_W = (BTB_ENTRIES > 1) ? $clog2(BTB_ENTRIES) : 1;
-  localparam int unsigned BHT_IDX_W = (BHT_ENTRIES > 1) ? $clog2(BHT_ENTRIES) : 1;
-  localparam int unsigned INSTR_ADDR_LSB = 1;
   localparam int unsigned BLOCK_ADDR_LSB = $clog2(Cfg.FETCH_WIDTH);
   localparam int unsigned BTB_TAG_W = Cfg.PLEN - BTB_IDX_W - BLOCK_ADDR_LSB;
-  localparam int unsigned GHR_W = (GHR_BITS > 0) ? GHR_BITS : 1;
   localparam int unsigned FTB_SLOTS = 4;
   localparam int unsigned FTB_SLOT_IDX_W = (FTB_SLOTS > 1) ? $clog2(FTB_SLOTS) : 1;
   localparam int unsigned FTB_AGE_W = (FTB_SLOTS > 1) ? $clog2(FTB_SLOTS) : 1;
@@ -121,12 +98,7 @@ module bpu_ftb #(
   logic [BTB_ENTRIES-1:0][FTB_SLOTS-1:0][Cfg.PLEN-1:0] btb_slot_target_q;
   logic [BTB_ENTRIES-1:0][FTB_SLOTS-1:0][FTB_AGE_W-1:0] btb_slot_age_q;
 
-  // Aliases let the moved scan/training code keep its original signal names.
-  wire [Cfg.PLEN-1:0]            pc_reg_q = pc_reg_i;
-  wire [GHR_W-1:0]               spec_ghr_q = spec_ghr_i;
-  wire [BHT_ENTRIES-1:0][1:0]    local_bht_q = local_bht_i;
-  wire [BHT_ENTRIES-1:0][1:0]    global_bht_q = global_bht_i;
-  wire [BHT_ENTRIES-1:0][1:0]    chooser_q = chooser_i;
+  wire [Cfg.PLEN-1:0] pc_reg_q = pc_reg_i;
 
   logic [Cfg.PLEN-1:0] aligned_base_w;
   logic scan_next_block_w;
@@ -144,7 +116,6 @@ module bpu_ftb #(
   logic [SLOT_IDX_W-1:0] ftb_pick_end_idx_w;
   logic [Cfg.PLEN-1:0] ftb_pick_pc_w;
   logic [Cfg.PLEN-1:0] ftb_pick_target_w;
-  logic cond_taken_legacy_w;
 
   // Candidate scan results：cond/jump 各 2 路，lane0 为 in-range 最早（PC 最小）。
   logic [1:0]                  cond_cand_valid_w;
@@ -153,7 +124,6 @@ module bpu_ftb #(
   logic [1:0]                  cond_cand_is_rvc_w;
   logic [1:0]                  cond_cand_is_backward_w;
   logic [1:0][Cfg.PLEN-1:0]    cond_cand_target_w;
-  logic [1:0]                  cond_base_taken_w;
   logic [1:0]                  jump_cand_valid_w;
   logic [1:0][Cfg.PLEN-1:0]    jump_cand_pc_w;
   logic [1:0][SLOT_IDX_W-1:0]  jump_cand_end_idx_w;
@@ -164,8 +134,6 @@ module bpu_ftb #(
   logic [1:0][Cfg.PLEN-1:0]    jump_cand_target_w;
   logic dbg_snap_ftb_cond_hit_w;
   logic dbg_snap_ftb_jump_hit_w;
-  logic dbg_snap_ftb_pick_cond_w;
-  logic dbg_snap_ftb_pick_jump_w;
   logic dbg_snap_ftb_cond_tag_miss_w;
   logic dbg_snap_ftb_jump_tag_miss_w;
   logic dbg_snap_ftb_any_valid_w;
@@ -176,8 +144,6 @@ module bpu_ftb #(
   logic [2:0] dbg_snap_ftb_in_range_cond_count_w;
   logic dbg_snap_ftb_cond_in_range_w;
   logic dbg_snap_ftb_jump_in_range_w;
-  logic dbg_snap_ftb_cond_taken_pred_w;
-  logic dbg_snap_ftb_jump_indirect_w;
 
   function automatic logic [BTB_IDX_W-1:0] btb_index(input logic [Cfg.PLEN-1:0] pc);
     logic [BTB_IDX_W-1:0] pc_idx;
@@ -196,95 +162,21 @@ module bpu_ftb #(
     btb_tag = pc[Cfg.PLEN-1:BLOCK_ADDR_LSB+BTB_IDX_W];
   endfunction
 
-  function automatic logic [BHT_IDX_W-1:0] bht_pc_index(input logic [Cfg.PLEN-1:0] pc);
-    logic [BHT_IDX_W-1:0] pc_idx;
-    logic [BHT_IDX_W-1:0] fold_idx;
-    logic [BHT_IDX_W-1:0] mixed_pc_idx;
-    begin
-      pc_idx = pc[INSTR_ADDR_LSB+:BHT_IDX_W];
-      fold_idx = '0;
-      for (int i = INSTR_ADDR_LSB + BHT_IDX_W; i < Cfg.PLEN; i++) begin
-        fold_idx[(i - (INSTR_ADDR_LSB + BHT_IDX_W)) % BHT_IDX_W] ^= pc[i];
-      end
-      mixed_pc_idx = BHT_HASH_ENABLE ? (pc_idx ^ fold_idx) : pc_idx;
-      bht_pc_index = mixed_pc_idx;
-    end
-  endfunction
-
-  function automatic logic [BHT_IDX_W-1:0] bht_global_index(input logic [Cfg.PLEN-1:0] pc,
-                                                             input logic [GHR_W-1:0] ghr);
-    logic [BHT_IDX_W-1:0] ghr_idx;
-    begin
-      ghr_idx = '0;
-      for (int i = 0; i < BHT_IDX_W; i++) begin
-        ghr_idx[i] = ghr[i%GHR_W];
-      end
-      bht_global_index = bht_pc_index(pc) ^ ghr_idx;
-    end
-  endfunction
-
-  function automatic logic bht_predict_taken(input logic [Cfg.PLEN-1:0] pc,
-                                             input logic [GHR_W-1:0] ghr,
-                                             input logic is_backward);
-    logic [BHT_IDX_W-1:0] local_idx;
-    logic [BHT_IDX_W-1:0] global_idx;
-    logic [1:0] local_ctr;
-    logic [1:0] global_ctr;
-    logic local_taken;
-    logic global_taken;
-    logic use_global;
-    begin
-      local_idx = bht_pc_index(pc);
-      global_idx = bht_global_index(pc, ghr);
-      local_ctr = local_bht_q[local_idx];
-      global_ctr = global_bht_q[global_idx];
-      local_taken = local_ctr[1] || ((local_ctr == 2'b01) && is_backward);
-      global_taken = global_ctr[1] || ((global_ctr == 2'b01) && is_backward);
-      use_global = USE_GSHARE && (!USE_TOURNAMENT || chooser_q[local_idx][1]);
-      bht_predict_taken = use_global ? global_taken : local_taken;
-    end
-  endfunction
-
-  // BHT-local base 方向：只看 local（bimodal）计数 + backward 启发，不做 tournament
-  // 选择。作为 TAGE miss 时的 T0 回退方向喂给顶层 pick。
-  function automatic logic bht_local_taken(input logic [Cfg.PLEN-1:0] pc,
-                                           input logic is_backward);
-    logic [BHT_IDX_W-1:0] local_idx;
-    logic [1:0] local_ctr;
-    begin
-      local_idx = bht_pc_index(pc);
-      local_ctr = local_bht_q[local_idx];
-      bht_local_taken = local_ctr[1] || ((local_ctr == 2'b01) && is_backward);
-    end
-  endfunction
-
   // FTB 查询：用 16B 对齐的 block_base 索引 BTB；lookup 扫描 4 个统一 slot。
   assign aligned_base_w = pc_reg_q & BLOCK_ALIGN_MASK;
   assign scan_next_block_w = |pc_reg_q[BLOCK_ADDR_LSB-1:0];
 
   // FTB 预测：动态 fetch 窗口可能从 16B block 中间开始，因此窗口会跨到下一
-  // 个 FTB block。lookup 同时扫描 fetch_start block 和必要时的 next block，
-  // 再按真实 slot_pc 落在 [pc_reg_q, pc_reg_q+15] 内选最早 taken。
-  // 32-bit 指令低半字若在上一 fetch 尾部，当前 fetch 的 slot0 是其高半字；
-  // 这种 carry-end 分支按 slot0 预测，契约仍是“末半字索引”。
+  // 个 FTB block。lookup 扫描 fetch block 并导出 in-range 候选；cond 方向与
+  // 最终 pick 由 bpu.sv 顶层用 TAGE 完成。内部 legacy pick 仅用于 jump（无条件 taken）。
   always_comb begin
     logic [BTB_IDX_W-1:0] pick_idx;
-    logic [BHT_IDX_W-1:0] local_idx;
-    logic [BHT_IDX_W-1:0] global_idx;
-    logic [BHT_IDX_W-1:0] chooser_idx;
-    logic [1:0] local_ctr_pred;
-    logic [1:0] global_ctr_pred;
-    logic local_taken_pred;
-    logic global_taken_pred;
-    logic cond_taken_pred;
-    logic use_global_pred;
     logic any_valid;
     logic tag_hit;
     logic cond_hit_any;
     logic jump_hit_any;
     logic cond_in_range_any;
     logic jump_in_range_any;
-    logic cond_taken_pred_any;
     logic pick_valid;
     logic [FTB_SLOT_IDX_W-1:0] pick_slot;
     logic [Cfg.PLEN-1:0] pick_branch_pc;
@@ -304,7 +196,6 @@ module bpu_ftb #(
     jump_hit_any = 1'b0;
     cond_in_range_any = 1'b0;
     jump_in_range_any = 1'b0;
-    cond_taken_pred_any = 1'b0;
     dbg_snap_ftb_valid_count_w = '0;
     dbg_snap_ftb_cond_count_w = '0;
     dbg_snap_ftb_jump_count_w = '0;
@@ -326,7 +217,6 @@ module bpu_ftb #(
     cond_cand_is_rvc_w = '0;
     cond_cand_is_backward_w = '0;
     cond_cand_target_w = '0;
-    cond_base_taken_w = '0;
     jump_cand_valid_w = '0;
     jump_cand_pc_w = '0;
     jump_cand_end_idx_w = '0;
@@ -407,9 +297,7 @@ module bpu_ftb #(
                         (((slot_pc >= pc_reg_q) &&
                           (slot_end_rel <= Cfg.PLEN'(PRED_SLOT_COUNT - 1))) ||
                          slot_carry_end);
-        slot_taken_pred = !btb_slot_is_cond_q[lookup_idx][s] ||
-                          bht_predict_taken(slot_pc, spec_ghr_q,
-                                            btb_slot_is_backward_q[lookup_idx][s]);
+        slot_taken_pred = !btb_slot_is_cond_q[lookup_idx][s];
 
         if (slot_hit && btb_slot_is_cond_q[lookup_idx][s]) begin
           cond_hit_any = 1'b1;
@@ -420,9 +308,6 @@ module bpu_ftb #(
           if (slot_in_range) begin
             cond_in_range_any = 1'b1;
             dbg_snap_ftb_in_range_cond_count_w = dbg_snap_ftb_in_range_cond_count_w + 3'd1;
-          end
-          if (slot_taken_pred) begin
-            cond_taken_pred_any = 1'b1;
           end
         end else if (slot_hit) begin
           jump_hit_any = 1'b1;
@@ -501,12 +386,6 @@ module bpu_ftb #(
       end
     end
 
-    // cond 候选 BHT-local base 方向（TAGE miss 回退）。
-    for (int k = 0; k < 2; k++) begin
-      cond_base_taken_w[k] = cond_cand_valid_w[k] &&
-                             bht_local_taken(cond_cand_pc_w[k], cond_cand_is_backward_w[k]);
-    end
-
     if (cond_snap_set) begin
       cond_branch_pc_w = cond_snap_pc;
     end
@@ -537,31 +416,12 @@ module bpu_ftb #(
     ftb_pick_pc_w = pick_valid ? pick_branch_pc : '0;
     ftb_pick_target_w = pick_valid ? btb_slot_target_q[pick_idx][pick_slot] : '0;
 
-    local_idx = bht_pc_index(cond_branch_pc_w);
-    global_idx = bht_global_index(cond_branch_pc_w, spec_ghr_q);
-    chooser_idx = local_idx;
-
-    // ---- cond legacy BHT 方向，供 debug/统计记录 ----
-    local_ctr_pred = local_bht_q[local_idx];
-    global_ctr_pred = global_bht_q[global_idx];
-    local_taken_pred = local_ctr_pred[1] ||
-                       ((local_ctr_pred == 2'b01) && ftb_pick_is_backward_w);
-    global_taken_pred = global_ctr_pred[1] ||
-                        ((global_ctr_pred == 2'b01) && ftb_pick_is_backward_w);
-    use_global_pred = USE_GSHARE && (!USE_TOURNAMENT || chooser_q[chooser_idx][1]);
-    cond_taken_pred = use_global_pred ? global_taken_pred : local_taken_pred;
-    cond_taken_legacy_w = cond_taken_pred;
-
     dbg_snap_ftb_cond_hit_w = cond_hit_any;
     dbg_snap_ftb_jump_hit_w = jump_hit_any;
     dbg_snap_ftb_any_valid_w = any_valid;
     dbg_snap_ftb_tag_hit_w = tag_hit;
-    dbg_snap_ftb_pick_cond_w = pick_valid && pick_is_cond;
-    dbg_snap_ftb_pick_jump_w = pick_valid && !pick_is_cond;
     dbg_snap_ftb_cond_in_range_w = cond_in_range_any;
     dbg_snap_ftb_jump_in_range_w = jump_in_range_any;
-    dbg_snap_ftb_cond_taken_pred_w = cond_taken_pred_any;
-    dbg_snap_ftb_jump_indirect_w = pick_is_indirect;
   end
 
   assign ftb_pick_valid_o = ftb_pick_valid_w;
@@ -580,7 +440,6 @@ module bpu_ftb #(
   assign cond_cand_is_rvc_o = cond_cand_is_rvc_w;
   assign cond_cand_is_backward_o = cond_cand_is_backward_w;
   assign cond_cand_target_o = cond_cand_target_w;
-  assign cond_base_taken_o = cond_base_taken_w;
   assign jump_cand_valid_o = jump_cand_valid_w;
   assign jump_cand_pc_o = jump_cand_pc_w;
   assign jump_cand_end_idx_o = jump_cand_end_idx_w;
@@ -591,11 +450,8 @@ module bpu_ftb #(
   assign jump_cand_target_o = jump_cand_target_w;
   assign cond_branch_pc_o = cond_branch_pc_w;
   assign jump_branch_pc_o = jump_branch_pc_w;
-  assign cond_taken_legacy_o = cond_taken_legacy_w;
   assign dbg_snap_ftb_cond_hit_o = dbg_snap_ftb_cond_hit_w;
   assign dbg_snap_ftb_jump_hit_o = dbg_snap_ftb_jump_hit_w;
-  assign dbg_snap_ftb_pick_cond_o = dbg_snap_ftb_pick_cond_w;
-  assign dbg_snap_ftb_pick_jump_o = dbg_snap_ftb_pick_jump_w;
   assign dbg_snap_ftb_cond_tag_miss_o = dbg_snap_ftb_cond_tag_miss_w;
   assign dbg_snap_ftb_jump_tag_miss_o = dbg_snap_ftb_jump_tag_miss_w;
   assign dbg_snap_ftb_any_valid_o = dbg_snap_ftb_any_valid_w;
@@ -606,8 +462,6 @@ module bpu_ftb #(
   assign dbg_snap_ftb_in_range_cond_count_o = dbg_snap_ftb_in_range_cond_count_w;
   assign dbg_snap_ftb_cond_in_range_o = dbg_snap_ftb_cond_in_range_w;
   assign dbg_snap_ftb_jump_in_range_o = dbg_snap_ftb_jump_in_range_w;
-  assign dbg_snap_ftb_cond_taken_pred_o = dbg_snap_ftb_cond_taken_pred_w;
-  assign dbg_snap_ftb_jump_indirect_o = dbg_snap_ftb_jump_indirect_w;
 
   // FTB 训练：BTB 按 16B 对齐 block_base 索引/打 tag；同 offset 更新、空槽插入、否则替换 LRU。
   always_ff @(posedge clk_i or posedge rst_i) begin

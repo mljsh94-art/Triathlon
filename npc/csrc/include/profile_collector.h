@@ -168,7 +168,6 @@ class ProfileCollector {
   uint64_t mispredict_diag_ftb_hit_shadowed_ = 0;
   uint64_t mispredict_diag_ftb_snap_epoch_mismatch_ = 0;
   uint64_t mispredict_diag_ftb_hit_out_of_range_epoch_ok_ = 0;
-  uint64_t mispredict_diag_ftb_hit_shadowed_epoch_ok_ = 0;
   uint64_t mispredict_diag_ftb_unclassified_ = 0;
   uint64_t mispredict_diag_other_ = 0;
   uint64_t mispredict_diag_no_commit_slot_ = 0;

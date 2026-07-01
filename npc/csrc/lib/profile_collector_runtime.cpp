@@ -472,7 +472,6 @@ void ProfileCollector::record_mispredict_diag(const Vtb_triathlon *top,
         }
         case FtbFallthroughCause::kHitShadowed:
           mispredict_diag_ftb_hit_shadowed_++;
-          if (epoch_ok) mispredict_diag_ftb_hit_shadowed_epoch_ok_++;
           break;
         default:
           mispredict_diag_ftb_unclassified_++;

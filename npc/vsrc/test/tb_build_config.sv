@@ -10,9 +10,7 @@ module tb_build_config (
     input int unsigned i_XLEN,
     input int unsigned i_VLEN,
     input int unsigned i_ILEN,
-    input int unsigned i_BPU_USE_GSHARE,
     input int unsigned i_BPU_USE_TAGE,
-    input int unsigned i_BPU_USE_TOURNAMENT,
     input int unsigned i_BPU_BTB_HASH_ENABLE,
     input int unsigned i_BPU_BHT_HASH_ENABLE,
     input int unsigned i_BPU_BTB_ENTRIES,
@@ -22,7 +20,6 @@ module tb_build_config (
     input int unsigned i_BPU_USE_SC,
     input int unsigned i_BPU_SC_ENTRIES,
     input int unsigned i_BPU_SC_CONF_THRESH,
-    input int unsigned i_BPU_SC_REQUIRE_DISAGREE,
     input int unsigned i_BPU_SC_REQUIRE_BOTH_WEAK,
     input int unsigned i_BPU_SC_BLOCK_ON_TAGE_HIT,
     input int unsigned i_BPU_USE_LOOP,
@@ -53,9 +50,7 @@ module tb_build_config (
     output int unsigned o_PLEN,
     output int unsigned o_GPLEN,
     output int unsigned o_INSTR_PER_FETCH,
-    output int unsigned o_BPU_USE_GSHARE,
     output int unsigned o_BPU_USE_TAGE,
-    output int unsigned o_BPU_USE_TOURNAMENT,
     output int unsigned o_BPU_BTB_HASH_ENABLE,
     output int unsigned o_BPU_BHT_HASH_ENABLE,
     output int unsigned o_BPU_BTB_ENTRIES,
@@ -65,7 +60,6 @@ module tb_build_config (
     output int unsigned o_BPU_USE_SC,
     output int unsigned o_BPU_SC_ENTRIES,
     output int unsigned o_BPU_SC_CONF_THRESH,
-    output int unsigned o_BPU_SC_REQUIRE_DISAGREE,
     output int unsigned o_BPU_SC_REQUIRE_BOTH_WEAK,
     output int unsigned o_BPU_SC_BLOCK_ON_TAGE_HIT,
     output int unsigned o_BPU_USE_LOOP,
@@ -107,9 +101,7 @@ module tb_build_config (
   assign user_cfg_in.XLEN              = i_XLEN;
   assign user_cfg_in.VLEN              = i_VLEN;
   assign user_cfg_in.ILEN              = i_ILEN;
-  assign user_cfg_in.BPU_USE_GSHARE    = i_BPU_USE_GSHARE;
   assign user_cfg_in.BPU_USE_TAGE      = i_BPU_USE_TAGE;
-  assign user_cfg_in.BPU_USE_TOURNAMENT = i_BPU_USE_TOURNAMENT;
   assign user_cfg_in.BPU_BTB_HASH_ENABLE = i_BPU_BTB_HASH_ENABLE;
   assign user_cfg_in.BPU_BHT_HASH_ENABLE = i_BPU_BHT_HASH_ENABLE;
   assign user_cfg_in.BPU_BTB_ENTRIES = i_BPU_BTB_ENTRIES;
@@ -119,7 +111,6 @@ module tb_build_config (
   assign user_cfg_in.BPU_USE_SC = i_BPU_USE_SC;
   assign user_cfg_in.BPU_SC_ENTRIES = i_BPU_SC_ENTRIES;
   assign user_cfg_in.BPU_SC_CONF_THRESH = i_BPU_SC_CONF_THRESH;
-  assign user_cfg_in.BPU_SC_REQUIRE_DISAGREE = i_BPU_SC_REQUIRE_DISAGREE;
   assign user_cfg_in.BPU_SC_REQUIRE_BOTH_WEAK = i_BPU_SC_REQUIRE_BOTH_WEAK;
   assign user_cfg_in.BPU_SC_BLOCK_ON_TAGE_HIT = i_BPU_SC_BLOCK_ON_TAGE_HIT;
   assign user_cfg_in.BPU_USE_LOOP = i_BPU_USE_LOOP;
@@ -160,9 +151,7 @@ module tb_build_config (
   assign o_PLEN                   = cfg_out.PLEN;
   assign o_GPLEN                  = cfg_out.GPLEN;
   assign o_INSTR_PER_FETCH        = cfg_out.INSTR_PER_FETCH;
-  assign o_BPU_USE_GSHARE         = cfg_out.BPU_USE_GSHARE;
   assign o_BPU_USE_TAGE           = cfg_out.BPU_USE_TAGE;
-  assign o_BPU_USE_TOURNAMENT     = cfg_out.BPU_USE_TOURNAMENT;
   assign o_BPU_BTB_HASH_ENABLE    = cfg_out.BPU_BTB_HASH_ENABLE;
   assign o_BPU_BHT_HASH_ENABLE    = cfg_out.BPU_BHT_HASH_ENABLE;
   assign o_BPU_BTB_ENTRIES        = cfg_out.BPU_BTB_ENTRIES;
@@ -172,7 +161,6 @@ module tb_build_config (
   assign o_BPU_USE_SC           = cfg_out.BPU_USE_SC;
   assign o_BPU_SC_ENTRIES       = cfg_out.BPU_SC_ENTRIES;
   assign o_BPU_SC_CONF_THRESH   = cfg_out.BPU_SC_CONF_THRESH;
-  assign o_BPU_SC_REQUIRE_DISAGREE = cfg_out.BPU_SC_REQUIRE_DISAGREE;
   assign o_BPU_SC_REQUIRE_BOTH_WEAK = cfg_out.BPU_SC_REQUIRE_BOTH_WEAK;
   assign o_BPU_SC_BLOCK_ON_TAGE_HIT = cfg_out.BPU_SC_BLOCK_ON_TAGE_HIT;
   assign o_BPU_USE_LOOP = cfg_out.BPU_USE_LOOP;

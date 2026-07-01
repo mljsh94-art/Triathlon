@@ -6,7 +6,7 @@
 // inline tracking that previously lived in bpu.sv: the logic was moved out
 // unchanged, only scope/wiring differs. The testbench reads the dbg_*_q
 // counters by hierarchy (dut.u_frontend.i_bpu.u_track.dbg_*_q), exactly as it
-// already does for u_bht/u_ras, so the dbg_bpu_* profile signature is preserved.
+// already does for u_tage/u_ras, so the dbg_bpu_* profile signature is preserved.
 module bpu_track #(
     parameter bit USE_TAGE = 1'b0,
     parameter bit USE_SC = 1'b0,

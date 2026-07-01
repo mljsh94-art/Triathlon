@@ -15,9 +15,7 @@ package build_config_pkg;
     cfg.ILEN = user_cfg.ILEN;
     cfg.RESET_VECTOR = (user_cfg.RESET_VECTOR != 0) ? user_cfg.RESET_VECTOR : 32'h80000000;
     cfg.FETCH_WIDTH = user_cfg.INSTR_PER_FETCH * user_cfg.ILEN / 8;
-    cfg.BPU_USE_GSHARE = user_cfg.BPU_USE_GSHARE;
     cfg.BPU_USE_TAGE = user_cfg.BPU_USE_TAGE;
-    cfg.BPU_USE_TOURNAMENT = user_cfg.BPU_USE_TOURNAMENT;
     cfg.BPU_BTB_HASH_ENABLE = user_cfg.BPU_BTB_HASH_ENABLE;
     cfg.BPU_BHT_HASH_ENABLE = user_cfg.BPU_BHT_HASH_ENABLE;
     cfg.BPU_BTB_ENTRIES = (user_cfg.BPU_BTB_ENTRIES >= 16) ? user_cfg.BPU_BTB_ENTRIES : 512;
@@ -28,7 +26,6 @@ package build_config_pkg;
     cfg.BPU_SC_ENTRIES = (user_cfg.BPU_SC_ENTRIES >= 64) ? user_cfg.BPU_SC_ENTRIES : 512;
     cfg.BPU_SC_CONF_THRESH = (user_cfg.BPU_SC_CONF_THRESH <= 7) ?
         user_cfg.BPU_SC_CONF_THRESH : 3;
-    cfg.BPU_SC_REQUIRE_DISAGREE = (user_cfg.BPU_SC_REQUIRE_DISAGREE != 0) ? 1 : 0;
     cfg.BPU_SC_REQUIRE_BOTH_WEAK = (user_cfg.BPU_SC_REQUIRE_BOTH_WEAK != 0) ? 1 : 0;
     cfg.BPU_SC_BLOCK_ON_TAGE_HIT = (user_cfg.BPU_SC_BLOCK_ON_TAGE_HIT != 0) ? 1 : 0;
     cfg.BPU_USE_LOOP = (user_cfg.BPU_USE_LOOP != 0) ? 1 : 0;

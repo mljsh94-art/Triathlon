@@ -261,7 +261,6 @@ void ProfileCollector::emit_pred_summary(const Vtb_triathlon *top) const {
             << " mispredict_diag_ftb_snap_epoch_mismatch=" << mispredict_diag_ftb_snap_epoch_mismatch_
             << " mispredict_diag_ftb_hit_out_of_range_epoch_ok="
             << mispredict_diag_ftb_hit_out_of_range_epoch_ok_
-            << " mispredict_diag_ftb_hit_shadowed_epoch_ok=" << mispredict_diag_ftb_hit_shadowed_epoch_ok_
             << " mispredict_diag_ftb_unclassified=" << mispredict_diag_ftb_unclassified_
             << " mispredict_diag_other=" << mispredict_diag_other_
             << " mispredict_diag_no_commit_slot=" << mispredict_diag_no_commit_slot_

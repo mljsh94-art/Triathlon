@@ -25,6 +25,7 @@ from profile_schema import (
     bench_ifu_fq,
     bench_ipc,
     bench_mispredict_diag,
+    bench_mispredict_diag_rollup,
     bench_predict,
     bench_predict_doc,
     bench_stall_category,
@@ -170,15 +171,16 @@ TRANSLATIONS = {
     "ret_miss_rate": "返回误预测率 (提交侧)",
     "jump_direct_miss_rate": "直接跳转误预测率",
     "jump_indirect_miss_rate": "间接跳转误预测率",
-    "cond_selected_accuracy": "BHT 训练自检 (非取指精度)",
+    "cond_selected_accuracy": "TAGE 训练自检 (非取指精度)",
     "tage_table_hit_rate": "TAGE 表命中 / lookup",
-    "tage_override_accuracy": "TAGE override 事后正确率",
     "cond_pick_rate": "FTB 选用 cond / lookup",
     "jump_pick_rate": "FTB 选用 jump / lookup",
     "table_hit_per_lookup_rate": "ITTAGE 表命中 / lookup",
     "use_per_lookup_rate": "ITTAGE 采用 / lookup",
-    "legacy_accuracy": "Legacy provider 准确率",
-    "tage_accuracy": "TAGE provider 准确率",
+    "t0_base_accuracy": "T0 base provider 准确率",
+    "tage_override_accuracy": "TAGE override provider 准确率",
+    "legacy_accuracy": "T0 base provider 准确率",
+    "tage_accuracy": "TAGE override provider 准确率",
     "fq_occ_avg": "平均占用量",
     "fq_occ_max": "最大占用量",
     "fq_bypass_ratio": "Bypass 比例",
@@ -200,16 +202,17 @@ TRANSLATIONS = {
     "jump_direct": "直接跳转误预测",
     "jump_indirect": "间接跳转误预测",
     "ret": "返回误预测",
-    "dir_wrong": "方向错 (BHT)",
+    "dir_wrong": "方向错 (TAGE)",
     "dir_ok_target_wrong": "方向对 target 错",
     "slot_offset_bind": "半字 offset 绑定",
     "ftb_no_entry_tag_miss": "FTB 无条目/tag miss",
-    "ftb_hit_cond_nt": "FTB 命中 BHT 判 NT",
+    "ftb_hit_cond_nt": "FTB 命中 T0 判 NT",
     "ftb_hit_out_of_range": "FTB 命中窗口外",
     "ftb_hit_shadowed": "FTB 命中被遮蔽",
     "ftb_unclassified": "FTB 未分类",
     "multi_ir_cond_earlier_non_pick_taken": "多 in-range cond 更早非 pick 实际 taken",
-    "bht_direction": "BHT 方向错 (rollup, 不含 FTB NT)",
+    "tage_direction": "TAGE 方向错 (rollup, 不含 FTB NT)",
+    "bht_direction": "TAGE 方向错 (rollup, 不含 FTB NT)",
     "ftb_structural": "FTB 结构 (rollup)",
     "target_wrong": "Target 错 (rollup)",
     "unclassified": "未分类 (rollup)",
@@ -372,7 +375,8 @@ def format_predict_dashboard_lines(predict: dict, flush: dict | None = None) -> 
     for rate_key, (part, total) in predict_accuracy_part_totals(predict).items():
         label = {
             "cond_selected_accuracy": "sel",
-            "cond_local_accuracy": "local",
+            "cond_tage_accuracy": "tage_train",
+            "cond_local_accuracy": "tage_train",
             "cond_global_accuracy": "global",
             "tage_table_hit_rate": "tage_hit",
         }.get(rate_key, rate_key)
@@ -512,7 +516,7 @@ def render_benchmark_section(bench_name: str, raw: dict) -> str:
         for k, v in mispredict_diag.items()
         if k not in ("rollup", "classified_total") and v
     }
-    rollup = mispredict_diag.get("rollup") or {}
+    rollup = bench_mispredict_diag_rollup(raw)
     diag_rollup = {tr(k): v for k, v in rollup.items() if not k.endswith("_ratio") and v}
     diag_total = float(mispredict_diag.get("classified_total", 0) or mispredict.get("flush_count", 0) or 1.0)
     flush_count_total = float(flush.get("count", 0) or 1.0)
@@ -526,7 +530,7 @@ def render_benchmark_section(bench_name: str, raw: dict) -> str:
         f"<div class='metric-grid'>{flush_metrics}</div>"
         f"{bar_table('误预测分类', {tr(k): v for k, v in mispredict.items() if k != 'flush_count' and v}, mispredict_total)}"
         f"{bar_table('误预测根因细分', diag_detail, diag_total) if diag_detail else ''}"
-        f"{bar_table('误预测根因汇总 (FTB vs BHT)', diag_rollup, diag_total) if diag_rollup else ''}"
+        f"{bar_table('误预测根因汇总 (FTB vs TAGE)', diag_rollup, diag_total) if diag_rollup else ''}"
         f"{bar_table('Flush 原因', flush.get('reason_histogram') or {}, flush_count_total)}"
         f"{bar_table('Commit 宽度分布', {str(k): v for k, v in commit_hist.items()}, float(cycles))}"
         f"</div>"
@@ -541,7 +545,7 @@ def render_benchmark_section(bench_name: str, raw: dict) -> str:
         f"<div class='two-col'>"
         f"<div>{part_total_bar_table('提交侧误预测 (flush.mispredict / retire_executed)', predict_miss_rows)}"
         f"{part_total_bar_table('BPU 训练自检', predict_acc_rows) if predict_acc_rows else ''}"
-        f"{part_total_bar_table('Cond Provider', provider_rows) if provider_rows else ''}</div>"
+        f"{part_total_bar_table('Cond Provider (T0 / override)', provider_rows) if provider_rows else ''}</div>"
         f"<div>{part_total_bar_table('FTB (lookup 侧)', ftb_rows) if ftb_rows else ''}"
         f"{part_total_bar_table('ITTAGE', ittage_rows) if ittage_rows else ''}"
         f"{kv_table('控制流统计', control, total=commits_total, ratio_keys={'control_ratio'})}"

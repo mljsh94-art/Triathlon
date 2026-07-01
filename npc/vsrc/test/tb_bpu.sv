@@ -31,8 +31,6 @@ module tb_bpu (
     output logic [Cfg.BPU_GHR_BITS-1:0] dbg_ghr_o
 );
   // Keep tb_bpu deterministic for legacy hysteresis tests.
-  // Frontend integration uses Cfg.BPU_USE_GSHARE.
-  localparam bit TB_BPU_USE_GSHARE = 1'b0;
   localparam bit TB_BPU_USE_TAGE = 1'b0;
   localparam bit TB_BPU_USE_ITTAGE = 1'b1;
   localparam int unsigned TB_BPU_BTB_ENTRIES = 128;
@@ -54,7 +52,6 @@ module tb_bpu (
       .BHT_ENTRIES(TB_BPU_BHT_ENTRIES),
       .BTB_HASH_ENABLE(TB_BPU_BTB_HASH_ENABLE),
       .BHT_HASH_ENABLE(TB_BPU_BHT_HASH_ENABLE),
-      .USE_GSHARE(TB_BPU_USE_GSHARE),
       .USE_TAGE(TB_BPU_USE_TAGE),
       .USE_ITTAGE(TB_BPU_USE_ITTAGE)
   ) i_BPU (
@@ -70,7 +67,6 @@ module tb_bpu (
       .update_is_rvc_i(update_is_rvc_i),
       .update_ftq_id_i('0),
       .update_fetch_epoch_i('0),
-      .update_ghr_i('0),
       .update_ghr_i('0),
       .ras_update_valid_i(ras_update_valid_i),
       .ras_update_is_call_i(ras_update_is_call_i),
@@ -89,7 +85,6 @@ module tb_bpu (
       .ftq_enq_pred_slot_idx_o(ftq_enq_pred_slot_idx),
       .ftq_enq_pred_target_o(ftq_enq_pred_target),
       .ftq_enq_pred_npc_o(ftq_enq_pred_npc),
-      .ftq_enq_pred_ghr_o(),
       .ftq_enq_pred_ghr_o()
   );
   assign npc_o = ftq_enq_pred_npc;

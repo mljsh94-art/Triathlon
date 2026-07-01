@@ -7,14 +7,11 @@ module bpu #(
     parameter int unsigned RAS_DEPTH = 16,
     parameter bit BTB_HASH_ENABLE = 1'b1,
     parameter bit BHT_HASH_ENABLE = 1'b1,
-    parameter bit USE_GSHARE = 1'b0,
     parameter bit USE_TAGE = 1'b0,
     parameter bit USE_SC = 1'b0,
-    parameter bit USE_TOURNAMENT = 1'b1,
     parameter int unsigned GHR_BITS = 8,
     parameter int unsigned SC_ENTRIES = 512,
     parameter int unsigned SC_CONF_THRESH = 3,
-    parameter bit SC_REQUIRE_DISAGREE = 1'b1,
     parameter bit SC_REQUIRE_BOTH_WEAK = 1'b1,
     parameter bit SC_BLOCK_ON_TAGE_HIT = 1'b1,
     parameter bit USE_LOOP = 1'b0,
@@ -77,9 +74,6 @@ module bpu #(
   // fetch block 16B 对齐掩码：block_base = pc & ~(FETCH_WIDTH-1)。
   localparam logic [Cfg.PLEN-1:0] BLOCK_ALIGN_MASK = ~(Cfg.PLEN'(Cfg.FETCH_WIDTH - 1));
   localparam int unsigned BTB_IDX_W = (BTB_ENTRIES > 1) ? $clog2(BTB_ENTRIES) : 1;
-  localparam int unsigned BHT_IDX_W = (BHT_ENTRIES > 1) ? $clog2(BHT_ENTRIES) : 1;
-  // RV32C instructions are 16-bit aligned. BHT indexing must include pc[1].
-  localparam int unsigned INSTR_ADDR_LSB = 1;
   // FTB/BTB entries are keyed by fetch-block base, not individual halfword PCs.
   localparam int unsigned BLOCK_ADDR_LSB = $clog2(Cfg.FETCH_WIDTH);
   localparam int unsigned BTB_TAG_W = Cfg.PLEN - BTB_IDX_W - BLOCK_ADDR_LSB;
@@ -95,15 +89,7 @@ module bpu #(
   localparam logic [FTB_AGE_W-1:0] FTB_AGE_MAX = FTB_AGE_W'(FTB_SLOTS - 1);
   logic [Cfg.PLEN-1:0] pc_reg_q;
   // FTB/BTB storage、index/tag、lookup 扫描与训练已抽到 u_ftb (bpu_ftb.sv)。
-  // BHT/chooser storage、index 函数、tournament 训练与 cond 计数已抽到 u_bht (bpu_bht.sv)；
-  // 顶层只保留只读数组连线与预测期 legacy 方向 sideband。
-  logic [BHT_ENTRIES-1:0][1:0] local_bht_w;
-  logic [BHT_ENTRIES-1:0][1:0] global_bht_w;
-  logic [BHT_ENTRIES-1:0][1:0] chooser_w;
-  logic bht_predict_local_legacy_strong_w;
-  logic bht_predict_global_legacy_strong_w;
-  logic bht_predict_local_global_disagree_w;
-  logic bht_predict_selected_legacy_strong_w;
+  // T0 base 存储与训练已并入 u_tage (tage.sv)；cond base 方向在顶层 pick 块计算。
   // RAS state (arch/spec stacks + counts) lives in u_ras (bpu_ras.sv).
   logic pred_event_valid_q;
   logic pred_event_is_call_q;
@@ -118,8 +104,7 @@ module bpu #(
   logic [GHR_W-1:0] spec_ghr_q;
   logic [GHR_W-1:0] ghr_q;
   logic [PATH_HIST_W-1:0] ittage_predict_ctx_w;
-  // dbg_cond_* (update/local/global/selected correct, choose local/global) 计数已随
-  // tournament 训练迁入 u_bht (bpu_bht.sv)；tb 经 i_bpu.u_bht.dbg_cond_*_q 层级引用读取。
+  // dbg_cond_* 计数已迁入 u_tage T0 base 训练路径；tb 经 i_bpu.u_tage.dbg_cond_* 层级引用。
   // dbg_tage_*/dbg_sc_*/dbg_loop_*/dbg_cond_provider_*/dbg_ftb_*/dbg_ittage_* 计数器与
   // 各 provider 的 override 追踪 FIFO 已随 update 逻辑迁入 u_track (bpu_track.sv)；
   // tb 经 i_bpu.u_track.dbg_*_q 层级引用读取，dbg_bpu_* profile 签名不变。
@@ -168,7 +153,7 @@ module bpu #(
   logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] pred_snap_jump_branch_pc_q;
   logic pred_fire_comb_w;
 
-  // bht_pc_index / bht_global_index / sat_inc / sat_dec 已随 BHT 抽入 u_bht (bpu_bht.sv)。
+  // base_pc_index / ctr_sat_inc/dec 已并入 u_tage T0 base (tage.sv)。
   // ghr_shift / path_shift 已随历史抽入 u_history (bpu_history.sv)。
 
   // FTB 单分支预测：原 [INSTR_PER_FETCH] per-slot 向量收敛为单分支标量。
@@ -219,14 +204,16 @@ module bpu #(
   logic [1:0] tage_strong_lane_w;
   logic [1:0][1:0] tage_provider_lane_w;
   logic [1:0][1:0] tage_useful_lane_w;
-  // FTB 候选导出（2 cond + 2 jump）+ cond 槽 BHT-local base（TAGE miss 回退）。
+  logic [1:0] tage_base_strong_lane_w;
+  logic [1:0] tage_base_weak_lane_w;
+  logic picked_cond_lane_w;
+  // FTB 候选导出（2 cond + 2 jump）；cond base 方向由 u_tage T0 提供。
   logic [1:0] cond_cand_valid_w;
   logic [1:0][Cfg.PLEN-1:0] cond_cand_pc_w;
   logic [1:0][SLOT_IDX_W-1:0] cond_cand_end_idx_w;
   logic [1:0] cond_cand_is_rvc_w;
   logic [1:0] cond_cand_is_backward_w;
   logic [1:0][Cfg.PLEN-1:0] cond_cand_target_w;
-  logic [1:0] cond_base_taken_w;
   logic [1:0] jump_cand_valid_w;
   logic [1:0][Cfg.PLEN-1:0] jump_cand_pc_w;
   logic [1:0][SLOT_IDX_W-1:0] jump_cand_end_idx_w;
@@ -304,7 +291,7 @@ module bpu #(
     ftq_update_w.meta.path = ittage_predict_ctx_w;
 
     tage_update_w = ftq_update_w;
-    tage_update_w.valid = ftq_update_w.valid && ftq_update_w.is_cond && USE_TAGE;
+    tage_update_w.valid = ftq_update_w.valid && ftq_update_w.is_cond;
     sc_update_w = ftq_update_w;
     sc_update_w.valid = ftq_update_w.valid && ftq_update_w.is_cond && USE_SC;
     loop_update_w = ftq_update_w;
@@ -336,10 +323,19 @@ module bpu #(
       .predict_strong_o(tage_strong_lane_w),
       .predict_provider_o(tage_provider_lane_w),
       .predict_useful_o(tage_useful_lane_w),
+      .predict_base_strong_o(tage_base_strong_lane_w),
+      .predict_base_weak_o(tage_base_weak_lane_w),
       .update_valid_i(tage_update_w.valid),
+      .tagged_en_i(USE_TAGE),
       .update_pc_i(tage_update_w.pc),
       .update_ghr_i(tage_update_w.meta.ghr),
-      .update_taken_i(tage_update_w.taken)
+      .update_taken_i(tage_update_w.taken),
+      .dbg_cond_update_total_o(),
+      .dbg_cond_local_correct_o(),
+      .dbg_cond_global_correct_o(),
+      .dbg_cond_selected_correct_o(),
+      .dbg_cond_choose_local_o(),
+      .dbg_cond_choose_global_o()
   );
 
   stat_corr #(
@@ -448,62 +444,15 @@ module bpu #(
       .ittage_predict_ctx_o(ittage_predict_ctx_w)
   );
 
-  // BHT/chooser storage、index 函数、tournament 训练与 cond 计数。预测期暴露 legacy
-  // 方向 sideband 给顶层做 SC override 门控；计数数组只读输出给 u_ftb 复用。
-  bpu_bht #(
-      .Cfg(Cfg),
-      .BHT_ENTRIES(BHT_ENTRIES),
-      .BHT_HASH_ENABLE(BHT_HASH_ENABLE),
-      .USE_GSHARE(USE_GSHARE),
-      .USE_TOURNAMENT(USE_TOURNAMENT),
-      .GHR_BITS(GHR_BITS)
-  ) u_bht (
-      .clk_i(clk_i),
-      .rst_i(rst_i),
-      .local_bht_o(local_bht_w),
-      .global_bht_o(global_bht_w),
-      .chooser_o(chooser_w),
-      .predict_pc_i(cond_branch_pc_w),
-      .predict_ghr_i(spec_ghr_q),
-      .predict_is_backward_i(ftb_pick_is_backward_w),
-      .predict_local_legacy_strong_o(bht_predict_local_legacy_strong_w),
-      .predict_global_legacy_strong_o(bht_predict_global_legacy_strong_w),
-      .predict_local_global_disagree_o(bht_predict_local_global_disagree_w),
-      .predict_selected_legacy_strong_o(bht_predict_selected_legacy_strong_w),
-      .update_valid_i(ftq_update_w.valid),
-      .update_is_cond_i(ftq_update_w.is_cond),
-      .update_pc_i(ftq_update_w.pc),
-      .update_taken_i(ftq_update_w.taken),
-      .update_target_i(ftq_update_w.target),
-      .update_ghr_i(update_ghr_i),
-      .dbg_cond_update_total_o(),
-      .dbg_cond_local_correct_o(),
-      .dbg_cond_global_correct_o(),
-      .dbg_cond_selected_correct_o(),
-      .dbg_cond_choose_local_o(),
-      .dbg_cond_choose_global_o()
-  );
-
   // FTB/BTB storage、index/tag、predict-time lookup 扫描与 commit-time 训练。
-  // FTB pick 需要 cond 槽的 legacy BHT 方向来选最早 taken，故把 u_bht 的计数器
-  // 数组只读传入。
   bpu_ftb #(
       .Cfg(Cfg),
       .BTB_ENTRIES(BTB_ENTRIES),
-      .BHT_ENTRIES(BHT_ENTRIES),
-      .BTB_HASH_ENABLE(BTB_HASH_ENABLE),
-      .BHT_HASH_ENABLE(BHT_HASH_ENABLE),
-      .USE_GSHARE(USE_GSHARE),
-      .USE_TOURNAMENT(USE_TOURNAMENT),
-      .GHR_BITS(GHR_BITS)
+      .BTB_HASH_ENABLE(BTB_HASH_ENABLE)
   ) u_ftb (
       .clk_i(clk_i),
       .rst_i(rst_i),
       .pc_reg_i(pc_reg_q),
-      .spec_ghr_i(spec_ghr_q),
-      .local_bht_i(local_bht_w),
-      .global_bht_i(global_bht_w),
-      .chooser_i(chooser_w),
       .update_valid_i(ftq_update_w.valid),
       .update_pc_i(ftq_update_w.pc),
       .update_taken_i(ftq_update_w.taken),
@@ -523,14 +472,13 @@ module bpu #(
       .ftb_pick_end_idx_o(),
       .ftb_pick_pc_o(),
       .ftb_pick_target_o(),
-      // 候选导出（2 cond + 2 jump）+ cond BHT-local base，喂顶层 pick。
+      // 候选导出（2 cond + 2 jump）；cond 方向由顶层 TAGE pick 计算。
       .cond_cand_valid_o(cond_cand_valid_w),
       .cond_cand_pc_o(cond_cand_pc_w),
       .cond_cand_end_idx_o(cond_cand_end_idx_w),
       .cond_cand_is_rvc_o(cond_cand_is_rvc_w),
       .cond_cand_is_backward_o(cond_cand_is_backward_w),
       .cond_cand_target_o(cond_cand_target_w),
-      .cond_base_taken_o(cond_base_taken_w),
       .jump_cand_valid_o(jump_cand_valid_w),
       .jump_cand_pc_o(jump_cand_pc_w),
       .jump_cand_end_idx_o(jump_cand_end_idx_w),
@@ -541,11 +489,8 @@ module bpu #(
       .jump_cand_target_o(jump_cand_target_w),
       .cond_branch_pc_o(ftb_cond_branch_pc_w),
       .jump_branch_pc_o(ftb_jump_branch_pc_w),
-      .cond_taken_legacy_o(),
       .dbg_snap_ftb_cond_hit_o(dbg_snap_ftb_cond_hit_w),
       .dbg_snap_ftb_jump_hit_o(dbg_snap_ftb_jump_hit_w),
-      .dbg_snap_ftb_pick_cond_o(dbg_snap_ftb_pick_cond_w),
-      .dbg_snap_ftb_pick_jump_o(dbg_snap_ftb_pick_jump_w),
       .dbg_snap_ftb_cond_tag_miss_o(dbg_snap_ftb_cond_tag_miss_w),
       .dbg_snap_ftb_jump_tag_miss_o(dbg_snap_ftb_jump_tag_miss_w),
       .dbg_snap_ftb_any_valid_o(dbg_snap_ftb_any_valid_w),
@@ -555,9 +500,7 @@ module bpu #(
       .dbg_snap_ftb_jump_count_o(dbg_snap_ftb_jump_count_w),
       .dbg_snap_ftb_in_range_cond_count_o(dbg_snap_ftb_in_range_cond_count_w),
       .dbg_snap_ftb_cond_in_range_o(dbg_snap_ftb_cond_in_range_w),
-      .dbg_snap_ftb_jump_in_range_o(dbg_snap_ftb_jump_in_range_w),
-      .dbg_snap_ftb_cond_taken_pred_o(dbg_snap_ftb_cond_taken_pred_w),
-      .dbg_snap_ftb_jump_indirect_o(dbg_snap_ftb_jump_indirect_w)
+      .dbg_snap_ftb_jump_in_range_o(dbg_snap_ftb_jump_in_range_w)
   );
 
   // Override 追踪 FIFO（tage/sc/loop/cond）+ 全部 dbg_* 计数器。预测期由 pred_fire +
@@ -607,7 +550,7 @@ module bpu #(
   );
 
   // ---- 顶层 pick：用 TAGE 2-lane 方向喂回，在 4 候选（2 cond + 2 jump）里选最早 in-range taken ----
-  // cond 槽方向 = classic TAGE（命中用 TAGE，否则用 BHT-local base）；jump 槽无条件 taken。
+  // cond 槽方向 = classic TAGE（命中用 provider/alt，否则 T0 base + backward 启发）；jump 无条件 taken。
   // 候选已由 FTB 保证 in-range 且各自按 PC 升序（lane0=最早），这里只比 4 个 PC 选最小 taken。
   always_comb begin
     logic [1:0] cond_dir;
@@ -620,7 +563,9 @@ module bpu #(
     int picked_cond_lane;
 
     for (int k = 0; k < 2; k++) begin
-      cond_dir[k] = tage_hit_lane_w[k] ? tage_taken_lane_w[k] : cond_base_taken_w[k];
+      cond_dir[k] = tage_hit_lane_w[k] ? tage_taken_lane_w[k] :
+                    (tage_taken_lane_w[k] ||
+                     (tage_base_weak_lane_w[k] && cond_cand_is_backward_w[k]));
     end
 
     cand_valid[0] = cond_cand_valid_w[0];
@@ -643,9 +588,10 @@ module bpu #(
       end
     end
 
-    picked_is_cond   = (picked == 0) || (picked == 1);
-    picked_cond_lane = (picked == 1) ? 1 : 0;
-    jl               = (picked == 3) ? 1 : 0;
+    picked_is_cond    = (picked == 0) || (picked == 1);
+    picked_cond_lane  = (picked == 1) ? 1 : 0;
+    picked_cond_lane_w = (picked == 1);
+    jl                = (picked == 3) ? 1 : 0;
 
     ftb_pick_valid_w       = (picked >= 0);
     ftb_pick_is_cond_w     = 1'b0;
@@ -710,6 +656,13 @@ module bpu #(
     end else begin
       jump_branch_pc_w = ftb_jump_branch_pc_w;
     end
+
+    // pick 相关 dbg snap：与顶层 TAGE 方向一致（不再由 FTB 内部 BHT 计算）。
+    dbg_snap_ftb_cond_taken_pred_w =
+        (cond_cand_valid_w[0] && cond_dir[0]) || (cond_cand_valid_w[1] && cond_dir[1]);
+    dbg_snap_ftb_pick_cond_w = ftb_pick_valid_w && ftb_pick_is_cond_w;
+    dbg_snap_ftb_pick_jump_w = ftb_pick_valid_w && !ftb_pick_is_cond_w;
+    dbg_snap_ftb_jump_indirect_w = ftb_pick_valid_w && ftb_pick_is_indirect_w;
   end
 
   always_comb begin
@@ -725,10 +678,7 @@ module bpu #(
   end
 
   always_comb begin
-    logic local_legacy_strong;
-    logic global_legacy_strong;
-    logic local_global_disagree;
-    logic selected_legacy_strong;
+    logic legacy_strong;
     logic tage_provider_ok;
     logic tage_pred_nt_w;
     logic tage_strong_nt_w;
@@ -737,11 +687,8 @@ module bpu #(
     logic tage_allow_override;
     logic sc_allow_override;
 
-    // 预测期 legacy 方向 sideband 由 u_bht 直接给出（逻辑与原内联读表完全一致）。
-    local_legacy_strong = bht_predict_local_legacy_strong_w;
-    global_legacy_strong = bht_predict_global_legacy_strong_w;
-    local_global_disagree = bht_predict_local_global_disagree_w;
-    selected_legacy_strong = bht_predict_selected_legacy_strong_w;
+    // 预测期 legacy-strong sideband 由 u_tage T0 base 给出（3-bit 饱和强置信）。
+    legacy_strong = ftb_pick_is_cond_w && tage_base_strong_lane_w[picked_cond_lane_w];
 
     cond_tage_override_w = 1'b0;
     cond_sc_override_w = 1'b0;
@@ -760,16 +707,13 @@ module bpu #(
     cond_tage_candidate_w = ftb_pick_is_cond_w && tage_allow_override;
 
     sc_allow_override = USE_SC && sc_confident_w;
-    if (selected_legacy_strong) begin
+    if (legacy_strong) begin
       sc_allow_override = 1'b0;
     end
     if (SC_BLOCK_ON_TAGE_HIT && USE_TAGE && tage_hit_w) begin
       sc_allow_override = 1'b0;
     end
-    if (SC_REQUIRE_DISAGREE && !local_global_disagree) begin
-      sc_allow_override = 1'b0;
-    end
-    if (SC_REQUIRE_BOTH_WEAK && (local_legacy_strong || global_legacy_strong)) begin
+    if (SC_REQUIRE_BOTH_WEAK && legacy_strong) begin
       sc_allow_override = 1'b0;
     end
     cond_sc_candidate_w = ftb_pick_is_cond_w && sc_allow_override;
@@ -941,7 +885,7 @@ module bpu #(
 `ifndef SYNTHESIS
 `endif
       // arch/spec GHR + path 复位已随历史迁入 u_history。
-      // BHT/chooser 复位（2'b01 弱不跳）已随存储迁入 u_bht。
+      // T0 base 复位已随存储迁入 u_tage。
       // dbg_* 计数器与 override 追踪 FIFO 复位已随逻辑迁入 u_track。
     end else begin
       logic pred_fire_w;
@@ -954,7 +898,7 @@ module bpu #(
         pc_reg_q <= pred_npc_w;
       end
 
-      // FTB BTB 训练已移至 u_ftb；BHT/chooser 训练与 cond 计数已移至 u_bht；FTB/ITTAGE
+      // FTB BTB 训练已移至 u_ftb；T0 base 训练与 cond 计数已移至 u_tage；FTB/ITTAGE
       // 训练计数与 override 追踪 FIFO 的出队/正确性比对已移至 u_track。
       // arch/spec GHR + path 推进、flush 回滚已移至 u_history。
       // RAS arch/spec push-pop now handled by u_ras (bpu_ras.sv)。

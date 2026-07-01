@@ -20,16 +20,32 @@ module tage #(
 
     input  logic [LANES-1:0][Cfg.PLEN-1:0] predict_pc_i,
     input  logic [((GHR_BITS > 0) ? GHR_BITS : 1)-1:0] predict_ghr_i,
+    // predict_hit_o: tagged provider 命中（顶层 override 门控用，语义不含 base）。
     output logic [LANES-1:0] predict_hit_o,
+    // predict_taken_o: 最终方向（tagged provider/alt 或 T0 base 回退，始终有效）。
     output logic [LANES-1:0] predict_taken_o,
     output logic [LANES-1:0] predict_strong_o,
     output logic [LANES-1:0][1:0] predict_provider_o,
     output logic [LANES-1:0][USEFUL_BITS-1:0] predict_useful_o,
+    // T0 base 侧带（供顶层 SC legacy_strong 门控与 backward 启发）。
+    output logic [LANES-1:0] predict_base_strong_o,
+    output logic [LANES-1:0] predict_base_weak_o,
 
     input logic update_valid_i,
+    // tagged_en_i=0 时仅训练 T0 base，TAGE 退化为纯 bimodal（完全替代 BHT）。
+    input logic tagged_en_i,
     input logic [Cfg.PLEN-1:0] update_pc_i,
     input logic [((GHR_BITS > 0) ? GHR_BITS : 1)-1:0] update_ghr_i,
-    input logic update_taken_i
+    input logic update_taken_i,
+
+    // Diagnostic cond accuracy counters (T0 base；tb 经 i_bpu.u_tage 层级引用)。
+    output logic [63:0] dbg_cond_update_total_o,
+    output logic [63:0] dbg_cond_local_correct_o,
+    // Legacy profiler hooks (tournament removed; tie off or alias)。
+    output logic [63:0] dbg_cond_global_correct_o,
+    output logic [63:0] dbg_cond_selected_correct_o,
+    output logic [63:0] dbg_cond_choose_local_o,
+    output logic [63:0] dbg_cond_choose_global_o
 );
 
   localparam int unsigned NUM_TABLES = 4;
@@ -42,6 +58,10 @@ module tage #(
   localparam logic signed [CTR_BITS-1:0] CTR_MIN =
       {1'b1, {(CTR_BITS - 1) {1'b0}}};
   localparam logic signed [CTR_BITS-1:0] CTR_WEAK_NT = -$signed(1);
+
+  // T0 base：untagged、PC-only 索引的 bimodal 表（与 tagged 表共用 3-bit 有符号计数器）。
+  localparam int unsigned BASE_ENTRIES = TABLE_ENTRIES;
+  localparam int unsigned BASE_IDX_W = (BASE_ENTRIES > 1) ? $clog2(BASE_ENTRIES) : 1;
 
   // 几何递增历史长度与各表的撒盐常数（盐用于打散 PC/历史的折叠位置）。
   localparam int unsigned HIST_LEN  [NUM_TABLES] = '{HIST_LEN0, HIST_LEN1, HIST_LEN2, HIST_LEN3};
@@ -82,6 +102,11 @@ module tage #(
   logic       upd_use_alt, upd_final_taken, upd_mispred;
   logic       upd_alloc_found;
   logic [1:0] upd_alloc_t;
+
+  // update 侧 T0 base 读端（alt 缺失时回退，及每 cond 训练用）。
+  logic [BASE_IDX_W-1:0] upd_base_idx;
+  logic [CTR_BITS-1:0]   upd_base_ctr;
+  logic                  upd_base_taken;
 
   // ---- 折叠哈希（PC 与历史各自折叠后再异或；历史侧 lim 限制实现长历史折叠） ----
   function automatic logic [IDX_W-1:0] fold_hist_idx(input logic [GHR_W-1:0] hist,
@@ -148,6 +173,41 @@ module tage #(
     is_strong = (s == CTR_MAX) || (s == CTR_MIN);
   endfunction
 
+  function automatic logic [CTR_BITS-1:0] ctr_sat_inc(input logic [CTR_BITS-1:0] c);
+    ctr_sat_inc = ($signed(c) == CTR_MAX) ? c : (c + 1'b1);
+  endfunction
+
+  function automatic logic [CTR_BITS-1:0] ctr_sat_dec(input logic [CTR_BITS-1:0] c);
+    ctr_sat_dec = ($signed(c) == CTR_MIN) ? c : (c - 1'b1);
+  endfunction
+
+  // T0 base 索引：PC-only 折叠，风格对齐旧 bimodal（低位取 PC[1+:IDX]，高位异或折叠），与 GHR 无关。
+  function automatic logic [BASE_IDX_W-1:0] base_pc_index(input logic [Cfg.PLEN-1:0] pc);
+    logic [BASE_IDX_W-1:0] pc_idx;
+    logic [BASE_IDX_W-1:0] fold_idx;
+    begin
+      pc_idx   = pc[INSTR_ADDR_LSB+:BASE_IDX_W];
+      fold_idx = '0;
+      for (int i = INSTR_ADDR_LSB + BASE_IDX_W; i < Cfg.PLEN; i++) begin
+        fold_idx[(i-(INSTR_ADDR_LSB+BASE_IDX_W))%BASE_IDX_W] ^= pc[i];
+      end
+      base_pc_index = pc_idx ^ fold_idx;
+    end
+  endfunction
+
+  // T0 base 计数器阵列：无 tag/valid，复位为弱 not-taken。
+  logic [CTR_BITS-1:0] base_ctr_q [BASE_ENTRIES];
+
+  logic [63:0] dbg_cond_update_total_q;
+  logic [63:0] dbg_cond_local_correct_q;
+
+  assign dbg_cond_update_total_o    = dbg_cond_update_total_q;
+  assign dbg_cond_local_correct_o   = dbg_cond_local_correct_q;
+  assign dbg_cond_global_correct_o  = 64'd0;
+  assign dbg_cond_selected_correct_o = dbg_cond_local_correct_q;
+  assign dbg_cond_choose_local_o    = dbg_cond_update_total_q;
+  assign dbg_cond_choose_global_o   = 64'd0;
+
   // 折叠历史只依赖共享 GHR，与 lane/PC 无关：每表算一次，lane 内只算 PC 折叠再异或。
   logic [IDX_W-1:0]   hist_idx_fold [NUM_TABLES];
   logic [TAG_BITS-1:0] hist_tag_fold [NUM_TABLES];
@@ -205,17 +265,26 @@ module tage #(
     end
   endgenerate
 
-  // ---- 预测：最长命中表为 provider，次长命中表为 alt；新分配弱条目先信 alt ----
+  // ---- 预测：最长命中表为 provider，次长命中表为 alt；alt 缺失回退 T0 base；
+  //      无 tagged 命中则直接用 T0 base 方向（predict_taken_o 始终有效）----
   always_comb begin
     for (int i = 0; i < LANES; i++) begin
       logic       prov_found, alt_found;
       logic [1:0] prov_t, alt_t;
-      logic [CTR_BITS-1:0] prov_ctr_v, alt_ctr_v;
+      logic [CTR_BITS-1:0] prov_ctr_v, alt_ctr_v, base_ctr_v;
       logic       prov_weak, use_alt_sel;
+      logic       base_taken;
 
+      // T0 base 读端：PC-only 索引，恒有效。
+      base_ctr_v = base_ctr_q[base_pc_index(predict_pc_i[i])];
+      base_taken = ctr_taken(base_ctr_v);
+      predict_base_strong_o[i] = is_strong(base_ctr_v);
+      predict_base_weak_o[i]   = !is_strong(base_ctr_v);
+
+      // 默认：无 tagged 命中，采用 T0 base 方向。
       predict_hit_o[i]      = 1'b0;
-      predict_taken_o[i]    = 1'b0;
-      predict_strong_o[i]   = 1'b0;
+      predict_taken_o[i]    = base_taken;
+      predict_strong_o[i]   = is_strong(base_ctr_v);
       predict_provider_o[i] = '0;
       predict_useful_o[i]   = '0;
 
@@ -224,7 +293,7 @@ module tage #(
       prov_t      = '0;
       alt_t       = '0;
       prov_ctr_v  = CTR_BITS'(CTR_WEAK_NT);
-      alt_ctr_v   = CTR_BITS'(CTR_WEAK_NT);
+      alt_ctr_v   = base_ctr_v;
       prov_weak   = 1'b0;
       use_alt_sel = 1'b0;
       for (int t = NUM_TABLES - 1; t >= 0; t--) begin
@@ -242,13 +311,14 @@ module tage #(
       if (prov_found) begin
         prov_ctr_v  = ctr[prov_t][i];
         prov_weak   = !is_strong(prov_ctr_v);
-        use_alt_sel = prov_weak && use_alt_on_na_q[USE_ALT_BITS-1] && alt_found;
+        // alt 始终存在（tagged 次长命中，或缺失时回退 T0 base）。
+        use_alt_sel = prov_weak && use_alt_on_na_q[USE_ALT_BITS-1];
 
         predict_hit_o[i]      = 1'b1;
         predict_provider_o[i] = prov_t;
         predict_useful_o[i]   = useful[prov_t][i];
         if (use_alt_sel) begin
-          alt_ctr_v           = ctr[alt_t][i];
+          alt_ctr_v           = alt_found ? ctr[alt_t][i] : base_ctr_v;
           predict_taken_o[i]  = ctr_taken(alt_ctr_v);
           predict_strong_o[i] = is_strong(alt_ctr_v);
         end else begin
@@ -285,13 +355,20 @@ module tage #(
       end
     end
 
+    // T0 base 读端（PC-only）：alt 缺失时充当回退，与预测端对称。
+    upd_base_idx    = base_pc_index(update_pc_i);
+    upd_base_ctr    = base_ctr_q[upd_base_idx];
+    upd_base_taken  = ctr_taken(upd_base_ctr);
+
     upd_prov_ctr    = upd_prov_found ? upd_ctr[upd_prov_t] : CTR_BITS'(CTR_WEAK_NT);
     upd_prov_taken  = ctr_taken(upd_prov_ctr);
     upd_prov_strong = is_strong(upd_prov_ctr);
     upd_prov_weak   = !upd_prov_strong;
-    upd_alt_taken   = upd_alt_found ? ctr_taken(upd_ctr[upd_alt_t]) : 1'b0;
-    upd_use_alt     = upd_prov_weak && use_alt_on_na_q[USE_ALT_BITS-1] && upd_alt_found;
-    upd_final_taken = upd_use_alt ? upd_alt_taken : upd_prov_taken;
+    // alt 始终存在（tagged 次长命中，或缺失时回退 T0 base）。
+    upd_alt_taken   = upd_alt_found ? ctr_taken(upd_ctr[upd_alt_t]) : upd_base_taken;
+    upd_use_alt     = upd_prov_weak && use_alt_on_na_q[USE_ALT_BITS-1];
+    upd_final_taken = upd_prov_found ? (upd_use_alt ? upd_alt_taken : upd_prov_taken)
+                                     : upd_base_taken;
     upd_mispred     = !upd_prov_found || (upd_final_taken != update_taken_i);
 
     // 牺牲项：在比 provider 更长的表里挑第一个 useful==0 的条目。
@@ -304,7 +381,7 @@ module tage #(
       end
     end
 
-    if (update_valid_i) begin
+    if (update_valid_i && tagged_en_i) begin
       // provider：强化方向计数；与 alt 分歧时按命中与否调整 useful。
       if (upd_prov_found) begin
         upd_t_valid[upd_prov_t] = 1'b1;
@@ -335,27 +412,53 @@ module tage #(
     end
   end
 
-  assign upd_age = update_valid_i && (age_cnt_q == AGE_W'(AGING_PERIOD - 1));
+  assign upd_age = update_valid_i && tagged_en_i && (age_cnt_q == AGE_W'(AGING_PERIOD - 1));
 
   always_ff @(posedge clk_i or posedge rst_i) begin
     if (rst_i) begin
       // MSB 置 1：初始倾向于对新分配弱条目使用 alt。
       use_alt_on_na_q <= {1'b1, {(USE_ALT_BITS - 1) {1'b0}}};
       age_cnt_q       <= '0;
-    end else if (update_valid_i) begin
-      if (upd_prov_found && upd_alt_found && upd_prov_weak &&
-          (upd_prov_taken != upd_alt_taken)) begin
-        if ((upd_alt_taken == update_taken_i) && (upd_prov_taken != update_taken_i)) begin
-          if (use_alt_on_na_q != '1) use_alt_on_na_q <= use_alt_on_na_q + 1'b1;
-        end else if ((upd_prov_taken == update_taken_i) && (upd_alt_taken != update_taken_i)) begin
-          if (use_alt_on_na_q != '0) use_alt_on_na_q <= use_alt_on_na_q - 1'b1;
+      dbg_cond_update_total_q  <= '0;
+      dbg_cond_local_correct_q <= '0;
+      // T0 base：复位为弱 not-taken（与 tagged 表一致）。
+      for (int b = 0; b < BASE_ENTRIES; b++) begin
+        base_ctr_q[b] = CTR_BITS'(CTR_WEAK_NT);
+      end
+    end else begin
+      // T0 base：每条 cond commit 都训练（不受 tagged_en_i 门控），3-bit 饱和。
+      if (update_valid_i) begin
+        logic base_pred_before;
+        logic base_correct;
+
+        base_pred_before = ctr_taken(upd_base_ctr);
+        base_correct     = (base_pred_before == update_taken_i);
+
+        dbg_cond_update_total_q <= dbg_cond_update_total_q + 64'd1;
+        if (base_correct) begin
+          dbg_cond_local_correct_q <= dbg_cond_local_correct_q + 64'd1;
         end
+
+        base_ctr_q[upd_base_idx] <= update_taken_i ? ctr_sat_inc(upd_base_ctr)
+                                                   : ctr_sat_dec(upd_base_ctr);
       end
 
-      if (age_cnt_q == AGE_W'(AGING_PERIOD - 1)) begin
-        age_cnt_q <= '0;
-      end else begin
-        age_cnt_q <= age_cnt_q + 1'b1;
+      // use_alt / 老化：仅在 tagged 使能时更新（alt 缺失回退 T0 亦参与训练）。
+      if (update_valid_i && tagged_en_i) begin
+        if (upd_prov_found && upd_prov_weak &&
+            (upd_prov_taken != upd_alt_taken)) begin
+          if ((upd_alt_taken == update_taken_i) && (upd_prov_taken != update_taken_i)) begin
+            if (use_alt_on_na_q != '1) use_alt_on_na_q <= use_alt_on_na_q + 1'b1;
+          end else if ((upd_prov_taken == update_taken_i) && (upd_alt_taken != update_taken_i)) begin
+            if (use_alt_on_na_q != '0) use_alt_on_na_q <= use_alt_on_na_q - 1'b1;
+          end
+        end
+
+        if (age_cnt_q == AGE_W'(AGING_PERIOD - 1)) begin
+          age_cnt_q <= '0;
+        end else begin
+          age_cnt_q <= age_cnt_q + 1'b1;
+        end
       end
     end
   end

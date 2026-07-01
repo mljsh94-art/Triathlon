@@ -31,7 +31,6 @@ module tb_bpu_ftb_boundary_a (
     output logic [Cfg.XLEN-1:0] pred_slot_target_o,
     output logic [Cfg.PLEN-1:0] ftq_enq_pc_o
 );
-  localparam bit TB_BPU_USE_GSHARE = 1'b0;
   localparam bit TB_BPU_USE_TAGE = 1'b0;
   localparam bit TB_BPU_USE_ITTAGE = 1'b0;
 
@@ -50,7 +49,6 @@ module tb_bpu_ftb_boundary_a (
       .BHT_ENTRIES(512),
       .BTB_HASH_ENABLE(1'b1),
       .BHT_HASH_ENABLE(1'b1),
-      .USE_GSHARE(TB_BPU_USE_GSHARE),
       .USE_TAGE(TB_BPU_USE_TAGE),
       .USE_ITTAGE(TB_BPU_USE_ITTAGE)
   ) u_bpu (
@@ -66,7 +64,6 @@ module tb_bpu_ftb_boundary_a (
       .update_is_rvc_i(update_is_rvc_i),
       .update_ftq_id_i('0),
       .update_fetch_epoch_i('0),
-      .update_ghr_i('0),
       .update_ghr_i('0),
       .ras_update_valid_i(ras_update_valid_i),
       .ras_update_is_call_i(ras_update_is_call_i),
@@ -85,7 +82,6 @@ module tb_bpu_ftb_boundary_a (
       .ftq_enq_pred_slot_idx_o(ftq_enq_pred_slot_idx),
       .ftq_enq_pred_target_o(ftq_enq_pred_target),
       .ftq_enq_pred_npc_o(ftq_enq_pred_npc),
-      .ftq_enq_pred_ghr_o(),
       .ftq_enq_pred_ghr_o()
   );
 

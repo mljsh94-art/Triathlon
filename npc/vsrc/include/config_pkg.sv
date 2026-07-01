@@ -23,12 +23,8 @@ package config_pkg;
     int unsigned ILEN;
     // Reset vector
     int unsigned RESET_VECTOR;
-    // Branch predictor mode: 1 enables gshare, 0 uses PC-only index
-    int unsigned BPU_USE_GSHARE;
     // Branch predictor mode: 1 enables TAGE conditional predictor
     int unsigned BPU_USE_TAGE;
-    // Branch predictor mode: 1 enables tournament chooser
-    int unsigned BPU_USE_TOURNAMENT;
     // Branch predictor index hash controls
     int unsigned BPU_BTB_HASH_ENABLE;
     int unsigned BPU_BHT_HASH_ENABLE;
@@ -41,7 +37,6 @@ package config_pkg;
     int unsigned BPU_USE_SC;
     int unsigned BPU_SC_ENTRIES;
     int unsigned BPU_SC_CONF_THRESH;
-    int unsigned BPU_SC_REQUIRE_DISAGREE;
     int unsigned BPU_SC_REQUIRE_BOTH_WEAK;
     int unsigned BPU_SC_BLOCK_ON_TAGE_HIT;
     // Loop predictor controls
@@ -133,12 +128,8 @@ package config_pkg;
     int unsigned INSTR_PER_FETCH;
     // Fetch width (in bits)
     int unsigned FETCH_WIDTH;
-    // Branch predictor mode: 1 enables gshare, 0 uses PC-only index
-    int unsigned BPU_USE_GSHARE;
     // Branch predictor mode: 1 enables TAGE conditional predictor
     int unsigned BPU_USE_TAGE;
-    // Branch predictor mode: 1 enables tournament chooser
-    int unsigned BPU_USE_TOURNAMENT;
     // Branch predictor index hash controls
     int unsigned BPU_BTB_HASH_ENABLE;
     int unsigned BPU_BHT_HASH_ENABLE;
@@ -151,7 +142,6 @@ package config_pkg;
     int unsigned BPU_USE_SC;
     int unsigned BPU_SC_ENTRIES;
     int unsigned BPU_SC_CONF_THRESH;
-    int unsigned BPU_SC_REQUIRE_DISAGREE;
     int unsigned BPU_SC_REQUIRE_BOTH_WEAK;
     int unsigned BPU_SC_BLOCK_ON_TAGE_HIT;
     // Loop predictor controls

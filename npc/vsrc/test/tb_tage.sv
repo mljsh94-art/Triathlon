@@ -39,10 +39,19 @@ module tb_tage (
       .predict_strong_o(predict_strong_o),
       .predict_provider_o(predict_provider_o),
       .predict_useful_o(predict_useful_o),
+      .predict_base_strong_o(),
+      .predict_base_weak_o(),
       .update_valid_i(update_valid_i),
+      .tagged_en_i(1'b1),
       .update_pc_i(update_pc_i),
       .update_ghr_i(update_ghr_i),
-      .update_taken_i(update_taken_i)
+      .update_taken_i(update_taken_i),
+      .dbg_cond_update_total_o(),
+      .dbg_cond_local_correct_o(),
+      .dbg_cond_global_correct_o(),
+      .dbg_cond_selected_correct_o(),
+      .dbg_cond_choose_local_o(),
+      .dbg_cond_choose_global_o()
   );
 
 endmodule

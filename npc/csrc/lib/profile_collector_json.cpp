@@ -157,11 +157,11 @@ void append_predict_doc(std::ostringstream &os) {
   os << "\"_doc\":{";
   os << "\"retire_executed\":\"已退休控制流指令数(误预测率分母). 误预测次数见 flush.mispredict\",";
   os << "\"retire_miss_rate\":\"提交侧误预测率=flush.mispredict/retire_executed. 衡量 IPC 影响的主 KPI\",";
-  os << "\"bpu_train\":\"BPU 训练更新时 BHT 自检(更新前预测 vs 实际 taken). 非取指时刻预测精度\",";
+  os << "\"bpu_train\":\"BPU 训练更新时 TAGE 方向自检(更新前预测 vs 实际 taken). 非取指时刻预测精度\",";
   os << "\"tage\":\"取指 cond 槽 TAGE lookup. table_hit_rate=表命中/lookup, 非提交误预测率\",";
   os << "\"ftb\":\"FTB 在 BPU lookup 中的选用率与 tag miss(结构缺失)\",";
   os << "\"ittage\":\"间接跳转目标预测. table_hit_rate=表命中, use_rate=实际采用 ITTAGE 目标\",";
-  os << "\"provider\":\"取指时 cond 方向最终 provider 及训练回溯准确率(样本=selected)\"";
+  os << "\"provider\":\"取指时 cond 方向 provider(T0 base / TAGE override) 及训练回溯准确率(样本=selected)\"";
   os << "}";
 }
 
@@ -191,8 +191,8 @@ void append_predict_section(std::ostringstream &os,
                             uint64_t ittage_lookup_total,
                             uint64_t ittage_hit_total,
                             uint64_t ittage_use_total,
-                            uint64_t legacy_selected,
-                            uint64_t legacy_correct,
+                            uint64_t t0_base_selected,
+                            uint64_t t0_base_correct,
                             uint64_t tage_selected,
                             uint64_t tage_correct) {
   os << "\"predict\":{";
@@ -257,13 +257,13 @@ void append_predict_section(std::ostringstream &os,
     os << "}";
   }
   os << ",\"provider\":{";
-  os << "\"legacy\":{";
-  os << "\"selected\":" << legacy_selected << ",\"correct\":" << legacy_correct
+  os << "\"t0_base\":{";
+  os << "\"selected\":" << t0_base_selected << ",\"correct\":" << t0_base_correct
      << ",\"accuracy\":"
-     << safe_div(static_cast<double>(legacy_correct), static_cast<double>(legacy_selected));
+     << safe_div(static_cast<double>(t0_base_correct), static_cast<double>(t0_base_selected));
   os << "}";
   if (tage_selected > 0) {
-    os << ",\"tage\":{";
+    os << ",\"tage_override\":{";
     os << "\"selected\":" << tage_selected << ",\"correct\":" << tage_correct
        << ",\"accuracy\":"
        << safe_div(static_cast<double>(tage_correct), static_cast<double>(tage_selected));
@@ -279,12 +279,10 @@ void append_dbg_bpu_section(std::ostringstream &os, const Vtb_triathlon *top) {
      << ",\"arch_ras_top\":" << static_cast<uint64_t>(top->dbg_bpu_arch_ras_top_o)
      << ",\"spec_ras_top\":" << static_cast<uint64_t>(top->dbg_bpu_spec_ras_top_o)
      << ",\"cond_update_total\":" << static_cast<uint64_t>(top->dbg_bpu_cond_update_total_o)
-     << ",\"cond_local_correct\":" << static_cast<uint64_t>(top->dbg_bpu_cond_local_correct_o)
-     << ",\"cond_global_correct\":" << static_cast<uint64_t>(top->dbg_bpu_cond_global_correct_o)
+     << ",\"cond_tage_correct\":" << static_cast<uint64_t>(top->dbg_bpu_cond_local_correct_o)
      << ",\"cond_selected_correct\":"
      << static_cast<uint64_t>(top->dbg_bpu_cond_selected_correct_o)
-     << ",\"cond_choose_local\":" << static_cast<uint64_t>(top->dbg_bpu_cond_choose_local_o)
-     << ",\"cond_choose_global\":" << static_cast<uint64_t>(top->dbg_bpu_cond_choose_global_o)
+     << ",\"cond_t0_selected\":" << static_cast<uint64_t>(top->dbg_bpu_cond_choose_local_o)
      << ",\"tage_lookup_total\":" << static_cast<uint64_t>(top->dbg_bpu_tage_lookup_total_o)
      << ",\"tage_hit_total\":" << static_cast<uint64_t>(top->dbg_bpu_tage_hit_total_o)
      << ",\"tage_override_total\":" << static_cast<uint64_t>(top->dbg_bpu_tage_override_total_o)
@@ -299,7 +297,7 @@ void append_dbg_bpu_section(std::ostringstream &os, const Vtb_triathlon *top) {
      << ",\"loop_confident_total\":" << static_cast<uint64_t>(top->dbg_bpu_loop_confident_total_o)
      << ",\"loop_override_total\":" << static_cast<uint64_t>(top->dbg_bpu_loop_override_total_o)
      << ",\"loop_override_correct\":" << static_cast<uint64_t>(top->dbg_bpu_loop_override_correct_o)
-     << ",\"cond_provider_legacy_selected\":"
+     << ",\"cond_provider_t0_selected\":"
      << static_cast<uint64_t>(top->dbg_bpu_cond_provider_legacy_selected_o)
      << ",\"cond_provider_tage_selected\":"
      << static_cast<uint64_t>(top->dbg_bpu_cond_provider_tage_selected_o)
@@ -307,7 +305,7 @@ void append_dbg_bpu_section(std::ostringstream &os, const Vtb_triathlon *top) {
      << static_cast<uint64_t>(top->dbg_bpu_cond_provider_sc_selected_o)
      << ",\"cond_provider_loop_selected\":"
      << static_cast<uint64_t>(top->dbg_bpu_cond_provider_loop_selected_o)
-     << ",\"cond_provider_legacy_correct\":"
+     << ",\"cond_provider_t0_correct\":"
      << static_cast<uint64_t>(top->dbg_bpu_cond_provider_legacy_correct_o)
      << ",\"cond_provider_tage_correct\":"
      << static_cast<uint64_t>(top->dbg_bpu_cond_provider_tage_correct_o)
@@ -315,7 +313,7 @@ void append_dbg_bpu_section(std::ostringstream &os, const Vtb_triathlon *top) {
      << static_cast<uint64_t>(top->dbg_bpu_cond_provider_sc_correct_o)
      << ",\"cond_provider_loop_correct\":"
      << static_cast<uint64_t>(top->dbg_bpu_cond_provider_loop_correct_o)
-     << ",\"cond_selected_wrong_alt_legacy_correct\":"
+     << ",\"cond_selected_wrong_alt_t0_correct\":"
      << static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_legacy_correct_o)
      << ",\"cond_selected_wrong_alt_tage_correct\":"
      << static_cast<uint64_t>(top->dbg_bpu_cond_selected_wrong_alt_tage_correct_o)
@@ -378,11 +376,11 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
   const uint64_t ittage_lookup_total = static_cast<uint64_t>(top->dbg_bpu_ittage_lookup_total_o);
   const uint64_t ittage_hit_total = static_cast<uint64_t>(top->dbg_bpu_ittage_hit_total_o);
   const uint64_t ittage_use_total = static_cast<uint64_t>(top->dbg_bpu_ittage_use_total_o);
-  const uint64_t cond_provider_legacy_selected =
+  const uint64_t cond_provider_t0_selected =
       static_cast<uint64_t>(top->dbg_bpu_cond_provider_legacy_selected_o);
   const uint64_t cond_provider_tage_selected =
       static_cast<uint64_t>(top->dbg_bpu_cond_provider_tage_selected_o);
-  const uint64_t cond_provider_legacy_correct =
+  const uint64_t cond_provider_t0_correct =
       static_cast<uint64_t>(top->dbg_bpu_cond_provider_legacy_correct_o);
   const uint64_t cond_provider_tage_correct =
       static_cast<uint64_t>(top->dbg_bpu_cond_provider_tage_correct_o);
@@ -456,18 +454,17 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
   const uint64_t md_ftb_hit_shadowed = mispredict_diag_ftb_hit_shadowed_;
   const uint64_t md_ftb_snap_epoch_mismatch = mispredict_diag_ftb_snap_epoch_mismatch_;
   const uint64_t md_ftb_hit_oor_epoch_ok = mispredict_diag_ftb_hit_out_of_range_epoch_ok_;
-  const uint64_t md_ftb_hit_shadowed_epoch_ok = mispredict_diag_ftb_hit_shadowed_epoch_ok_;
   const uint64_t md_ftb_unclassified = mispredict_diag_ftb_unclassified_;
   const uint64_t md_other = mispredict_diag_other_;
   const uint64_t md_no_commit_slot = mispredict_diag_no_commit_slot_;
-  const uint64_t md_bht_direction = md_dir_wrong;
+  const uint64_t md_tage_direction = md_dir_wrong;
   const uint64_t md_ftb_structural =
       md_ftb_no_entry + md_ftb_hit_cond_nt + md_ftb_hit_oor + md_ftb_hit_shadowed + md_slot_offset_bind;
   const uint64_t md_target_wrong = md_dir_ok_target_wrong;
   const uint64_t md_unclassified =
       md_ftb_unclassified + md_other + md_no_commit_slot + md_ftb_snap_epoch_mismatch;
   const uint64_t md_classified_total =
-      md_bht_direction + md_ftb_structural + md_target_wrong + md_unclassified;
+      md_tage_direction + md_ftb_structural + md_target_wrong + md_unclassified;
   os << "\"mispredict_diag\":{";
   os << "\"dir_wrong\":" << md_dir_wrong
      << ",\"dir_ok_target_wrong\":" << md_dir_ok_target_wrong
@@ -478,15 +475,14 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
      << ",\"ftb_hit_shadowed\":" << md_ftb_hit_shadowed
      << ",\"ftb_snap_epoch_mismatch\":" << md_ftb_snap_epoch_mismatch
      << ",\"ftb_hit_out_of_range_epoch_ok\":" << md_ftb_hit_oor_epoch_ok
-     << ",\"ftb_hit_shadowed_epoch_ok\":" << md_ftb_hit_shadowed_epoch_ok
      << ",\"ftb_unclassified\":" << md_ftb_unclassified
      << ",\"other\":" << md_other
      << ",\"no_commit_slot\":" << md_no_commit_slot
      << ",\"classified_total\":" << md_classified_total
      << ",\"rollup\":{"
-     << "\"bht_direction\":" << md_bht_direction
-     << ",\"bht_direction_ratio\":"
-     << safe_div(static_cast<double>(md_bht_direction), static_cast<double>(mispredict_flush_count_))
+     << "\"tage_direction\":" << md_tage_direction
+     << ",\"tage_direction_ratio\":"
+     << safe_div(static_cast<double>(md_tage_direction), static_cast<double>(mispredict_flush_count_))
      << ",\"ftb_structural\":" << md_ftb_structural
      << ",\"ftb_structural_ratio\":"
      << safe_div(static_cast<double>(md_ftb_structural), static_cast<double>(mispredict_flush_count_))
@@ -585,7 +581,7 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
       ftb_lookup_total, ftb_cond_pick_total, ftb_jump_pick_total, ftb_cond_tag_miss_total,
       ftb_jump_tag_miss_total, ftb_multi_ir_cond_earlier_non_pick_taken_total,
       ittage_lookup_total, ittage_hit_total, ittage_use_total,
-      cond_provider_legacy_selected, cond_provider_legacy_correct, cond_provider_tage_selected,
+      cond_provider_t0_selected, cond_provider_t0_correct, cond_provider_tage_selected,
       cond_provider_tage_correct);
 
   append_dbg_bpu_section(os, top);

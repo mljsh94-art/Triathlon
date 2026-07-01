@@ -37,7 +37,7 @@ PREDICT_FTB_RATE_KEYS = ("cond_pick_rate", "jump_pick_rate")
 
 PREDICT_ITTAGE_KEYS = ("table_hit_rate", "use_rate")
 
-PREDICT_PROVIDER_KEYS = ("legacy_accuracy", "tage_accuracy")
+PREDICT_PROVIDER_KEYS = ("t0_base_accuracy", "tage_override_accuracy")
 
 
 def _dig(data: dict | None, *path: str, default: Any = None) -> Any:
@@ -239,13 +239,25 @@ def bench_flush(bench: dict) -> dict:
 def bench_mispredict_diag(bench: dict) -> dict:
     flush = bench_flush(bench)
     diag = flush.get("mispredict_diag")
-    return diag if isinstance(diag, dict) else {}
+    if not isinstance(diag, dict):
+        return {}
+    out = dict(diag)
+    out.pop("ftb_hit_shadowed_epoch_ok", None)
+    return out
 
 
 def bench_mispredict_diag_rollup(bench: dict) -> dict:
     diag = bench_mispredict_diag(bench)
     rollup = diag.get("rollup")
-    return rollup if isinstance(rollup, dict) else {}
+    if not isinstance(rollup, dict):
+        return {}
+    out = dict(rollup)
+    # v2 profile JSON used BHT naming before TAGE-only BPU.
+    if "tage_direction" not in out and "bht_direction" in out:
+        out["tage_direction"] = out["bht_direction"]
+    if "tage_direction_ratio" not in out and "bht_direction_ratio" in out:
+        out["tage_direction_ratio"] = out["bht_direction_ratio"]
+    return out
 
 
 def bench_meta(bench: dict) -> dict:
@@ -356,6 +368,7 @@ def predict_accuracy_part_totals(predict: dict) -> dict[str, tuple[float, float]
         if pair is not None:
             rows["cond_selected_accuracy"] = pair
         for rate_key, part_key, total_key in (
+            ("cond_tage_accuracy", "cond_tage_correct", "cond_update_total"),
             ("cond_local_accuracy", "cond_local_correct", "cond_update_total"),
             ("cond_global_accuracy", "cond_global_correct", "cond_update_total"),
         ):
@@ -426,11 +439,18 @@ def predict_ittage_part_totals(predict: dict) -> dict[str, tuple[float, float]]:
 
 def predict_provider_part_totals(predict: dict) -> dict[str, tuple[float, float]]:
     provider = predict.get("provider")
-    if isinstance(provider, dict) and "legacy" in provider:
+    if isinstance(provider, dict):
         rows: dict[str, tuple[float, float]] = {}
-        for name, rate_key in (("legacy", "legacy_accuracy"), ("tage", "tage_accuracy")):
+        for name, rate_key in (
+            ("t0_base", "t0_base_accuracy"),
+            ("legacy", "t0_base_accuracy"),
+            ("tage_override", "tage_override_accuracy"),
+            ("tage", "tage_override_accuracy"),
+        ):
             block = provider.get(name)
             if not isinstance(block, dict):
+                continue
+            if rate_key in rows:
                 continue
             pair = part_total_pair(block, "correct", "selected")
             if pair is None:
@@ -440,19 +460,21 @@ def predict_provider_part_totals(predict: dict) -> dict[str, tuple[float, float]
                     rows[rate_key] = (acc * selected, selected)
             else:
                 rows[rate_key] = pair
-        return rows
+        if rows:
+            return rows
     legacy_provider = predict.get("cond_provider")
     if not isinstance(legacy_provider, dict):
         return {}
-    rows: dict[str, tuple[float, float]] = {}
+    rows = {}
     for rate_key, part_key, total_key in (
+        ("t0_base_accuracy", "t0_correct", "t0_selected"),
         ("legacy_accuracy", "legacy_correct", "legacy_selected"),
-        ("tage_accuracy", "tage_correct", "tage_selected"),
+        ("tage_override_accuracy", "tage_correct", "tage_selected"),
         ("sc_accuracy", "sc_correct", "sc_selected"),
         ("loop_accuracy", "loop_correct", "loop_selected"),
     ):
         pair = part_total_pair(legacy_provider, part_key, total_key)
-        if pair is not None:
+        if pair is not None and rate_key not in rows:
             rows[rate_key] = pair
     return rows
 
