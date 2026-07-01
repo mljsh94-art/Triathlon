@@ -15,6 +15,7 @@ module tb_build_config (
     input int unsigned i_BPU_BHT_HASH_ENABLE,
     input int unsigned i_BPU_BTB_ENTRIES,
     input int unsigned i_BPU_BHT_ENTRIES,
+    input int unsigned i_BPU_TAGE_BASE_ENTRIES,
     input int unsigned i_BPU_RAS_DEPTH,
     input int unsigned i_BPU_GHR_BITS,
     input int unsigned i_BPU_USE_SC,
@@ -22,6 +23,13 @@ module tb_build_config (
     input int unsigned i_BPU_SC_CONF_THRESH,
     input int unsigned i_BPU_SC_REQUIRE_BOTH_WEAK,
     input int unsigned i_BPU_SC_BLOCK_ON_TAGE_HIT,
+    input int unsigned i_BPU_SC_NUM_TABLES,
+    input int unsigned i_BPU_SC_CTR_BITS,
+    input int unsigned i_BPU_SC_HIST1,
+    input int unsigned i_BPU_SC_HIST2,
+    input int unsigned i_BPU_SC_HIST3,
+    input int unsigned i_BPU_SC_THRESH_INIT,
+    input int unsigned i_BPU_TAGE_WAYS,
     input int unsigned i_BPU_USE_LOOP,
     input int unsigned i_BPU_LOOP_ENTRIES,
     input int unsigned i_BPU_LOOP_TAG_BITS,
@@ -55,6 +63,7 @@ module tb_build_config (
     output int unsigned o_BPU_BHT_HASH_ENABLE,
     output int unsigned o_BPU_BTB_ENTRIES,
     output int unsigned o_BPU_BHT_ENTRIES,
+    output int unsigned o_BPU_TAGE_BASE_ENTRIES,
     output int unsigned o_BPU_RAS_DEPTH,
     output int unsigned o_BPU_GHR_BITS,
     output int unsigned o_BPU_USE_SC,
@@ -62,6 +71,13 @@ module tb_build_config (
     output int unsigned o_BPU_SC_CONF_THRESH,
     output int unsigned o_BPU_SC_REQUIRE_BOTH_WEAK,
     output int unsigned o_BPU_SC_BLOCK_ON_TAGE_HIT,
+    output int unsigned o_BPU_SC_NUM_TABLES,
+    output int unsigned o_BPU_SC_CTR_BITS,
+    output int unsigned o_BPU_SC_HIST1,
+    output int unsigned o_BPU_SC_HIST2,
+    output int unsigned o_BPU_SC_HIST3,
+    output int unsigned o_BPU_SC_THRESH_INIT,
+    output int unsigned o_BPU_TAGE_WAYS,
     output int unsigned o_BPU_USE_LOOP,
     output int unsigned o_BPU_LOOP_ENTRIES,
     output int unsigned o_BPU_LOOP_TAG_BITS,
@@ -106,6 +122,7 @@ module tb_build_config (
   assign user_cfg_in.BPU_BHT_HASH_ENABLE = i_BPU_BHT_HASH_ENABLE;
   assign user_cfg_in.BPU_BTB_ENTRIES = i_BPU_BTB_ENTRIES;
   assign user_cfg_in.BPU_BHT_ENTRIES = i_BPU_BHT_ENTRIES;
+  assign user_cfg_in.BPU_TAGE_BASE_ENTRIES = i_BPU_TAGE_BASE_ENTRIES;
   assign user_cfg_in.BPU_RAS_DEPTH = i_BPU_RAS_DEPTH;
   assign user_cfg_in.BPU_GHR_BITS = i_BPU_GHR_BITS;
   assign user_cfg_in.BPU_USE_SC = i_BPU_USE_SC;
@@ -113,6 +130,13 @@ module tb_build_config (
   assign user_cfg_in.BPU_SC_CONF_THRESH = i_BPU_SC_CONF_THRESH;
   assign user_cfg_in.BPU_SC_REQUIRE_BOTH_WEAK = i_BPU_SC_REQUIRE_BOTH_WEAK;
   assign user_cfg_in.BPU_SC_BLOCK_ON_TAGE_HIT = i_BPU_SC_BLOCK_ON_TAGE_HIT;
+  assign user_cfg_in.BPU_SC_NUM_TABLES = i_BPU_SC_NUM_TABLES;
+  assign user_cfg_in.BPU_SC_CTR_BITS = i_BPU_SC_CTR_BITS;
+  assign user_cfg_in.BPU_SC_HIST1 = i_BPU_SC_HIST1;
+  assign user_cfg_in.BPU_SC_HIST2 = i_BPU_SC_HIST2;
+  assign user_cfg_in.BPU_SC_HIST3 = i_BPU_SC_HIST3;
+  assign user_cfg_in.BPU_SC_THRESH_INIT = i_BPU_SC_THRESH_INIT;
+  assign user_cfg_in.BPU_TAGE_WAYS = i_BPU_TAGE_WAYS;
   assign user_cfg_in.BPU_USE_LOOP = i_BPU_USE_LOOP;
   assign user_cfg_in.BPU_LOOP_ENTRIES = i_BPU_LOOP_ENTRIES;
   assign user_cfg_in.BPU_LOOP_TAG_BITS = i_BPU_LOOP_TAG_BITS;
@@ -156,6 +180,7 @@ module tb_build_config (
   assign o_BPU_BHT_HASH_ENABLE    = cfg_out.BPU_BHT_HASH_ENABLE;
   assign o_BPU_BTB_ENTRIES        = cfg_out.BPU_BTB_ENTRIES;
   assign o_BPU_BHT_ENTRIES        = cfg_out.BPU_BHT_ENTRIES;
+  assign o_BPU_TAGE_BASE_ENTRIES = cfg_out.BPU_TAGE_BASE_ENTRIES;
   assign o_BPU_RAS_DEPTH          = cfg_out.BPU_RAS_DEPTH;
   assign o_BPU_GHR_BITS           = cfg_out.BPU_GHR_BITS;
   assign o_BPU_USE_SC           = cfg_out.BPU_USE_SC;
@@ -163,6 +188,13 @@ module tb_build_config (
   assign o_BPU_SC_CONF_THRESH   = cfg_out.BPU_SC_CONF_THRESH;
   assign o_BPU_SC_REQUIRE_BOTH_WEAK = cfg_out.BPU_SC_REQUIRE_BOTH_WEAK;
   assign o_BPU_SC_BLOCK_ON_TAGE_HIT = cfg_out.BPU_SC_BLOCK_ON_TAGE_HIT;
+  assign o_BPU_SC_NUM_TABLES       = cfg_out.BPU_SC_NUM_TABLES;
+  assign o_BPU_SC_CTR_BITS         = cfg_out.BPU_SC_CTR_BITS;
+  assign o_BPU_SC_HIST1            = cfg_out.BPU_SC_HIST1;
+  assign o_BPU_SC_HIST2            = cfg_out.BPU_SC_HIST2;
+  assign o_BPU_SC_HIST3            = cfg_out.BPU_SC_HIST3;
+  assign o_BPU_SC_THRESH_INIT      = cfg_out.BPU_SC_THRESH_INIT;
+  assign o_BPU_TAGE_WAYS           = cfg_out.BPU_TAGE_WAYS;
   assign o_BPU_USE_LOOP = cfg_out.BPU_USE_LOOP;
   assign o_BPU_LOOP_ENTRIES = cfg_out.BPU_LOOP_ENTRIES;
   assign o_BPU_LOOP_TAG_BITS = cfg_out.BPU_LOOP_TAG_BITS;

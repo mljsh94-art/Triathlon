@@ -25,6 +25,7 @@ VERILATOR_CFLAGS += --Wno-fatal --Wno-WIDTH
 VERILATOR_CFLAGS += -I./vsrc/include -I./vsrc
 VERILATOR_CFLAGS += -I./csrc/include
 
+t./vsrc/include/sim_assert.sv 
 PKG_VSRCS = \
 	./vsrc/include/config_pkg.sv \
 	./vsrc/include/test_config_pkg.sv \

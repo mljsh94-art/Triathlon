@@ -20,6 +20,8 @@ package build_config_pkg;
     cfg.BPU_BHT_HASH_ENABLE = user_cfg.BPU_BHT_HASH_ENABLE;
     cfg.BPU_BTB_ENTRIES = (user_cfg.BPU_BTB_ENTRIES >= 16) ? user_cfg.BPU_BTB_ENTRIES : 512;
     cfg.BPU_BHT_ENTRIES = (user_cfg.BPU_BHT_ENTRIES >= 32) ? user_cfg.BPU_BHT_ENTRIES : 512;
+    cfg.BPU_TAGE_BASE_ENTRIES = (user_cfg.BPU_TAGE_BASE_ENTRIES >= 32) ?
+        user_cfg.BPU_TAGE_BASE_ENTRIES : 1024;
     cfg.BPU_RAS_DEPTH = (user_cfg.BPU_RAS_DEPTH >= 4) ? user_cfg.BPU_RAS_DEPTH : 16;
     cfg.BPU_GHR_BITS = (user_cfg.BPU_GHR_BITS >= 4) ? user_cfg.BPU_GHR_BITS : 8;
     cfg.BPU_USE_SC = user_cfg.BPU_USE_SC;
@@ -28,6 +30,18 @@ package build_config_pkg;
         user_cfg.BPU_SC_CONF_THRESH : 3;
     cfg.BPU_SC_REQUIRE_BOTH_WEAK = (user_cfg.BPU_SC_REQUIRE_BOTH_WEAK != 0) ? 1 : 0;
     cfg.BPU_SC_BLOCK_ON_TAGE_HIT = (user_cfg.BPU_SC_BLOCK_ON_TAGE_HIT != 0) ? 1 : 0;
+    cfg.BPU_SC_NUM_TABLES = (user_cfg.BPU_SC_NUM_TABLES >= 2 && user_cfg.BPU_SC_NUM_TABLES <= 8) ?
+        user_cfg.BPU_SC_NUM_TABLES : 4;
+    cfg.BPU_SC_CTR_BITS = (user_cfg.BPU_SC_CTR_BITS >= 4 && user_cfg.BPU_SC_CTR_BITS <= 8) ?
+        user_cfg.BPU_SC_CTR_BITS : 6;
+    cfg.BPU_SC_HIST1 = (user_cfg.BPU_SC_HIST1 >= 1) ? user_cfg.BPU_SC_HIST1 : 8;
+    cfg.BPU_SC_HIST2 = (user_cfg.BPU_SC_HIST2 >= cfg.BPU_SC_HIST1) ? user_cfg.BPU_SC_HIST2 : 16;
+    cfg.BPU_SC_HIST3 = (user_cfg.BPU_SC_HIST3 >= cfg.BPU_SC_HIST2) ? user_cfg.BPU_SC_HIST3 : 32;
+    if (cfg.BPU_SC_HIST3 > cfg.BPU_GHR_BITS) cfg.BPU_SC_HIST3 = cfg.BPU_GHR_BITS;
+    cfg.BPU_SC_THRESH_INIT = (user_cfg.BPU_SC_THRESH_INIT >= 1) ? user_cfg.BPU_SC_THRESH_INIT :
+        ((user_cfg.BPU_SC_CONF_THRESH >= 1) ? user_cfg.BPU_SC_CONF_THRESH : 6);
+    cfg.BPU_TAGE_WAYS = (user_cfg.BPU_TAGE_WAYS >= 1 && user_cfg.BPU_TAGE_WAYS <= 4) ?
+        user_cfg.BPU_TAGE_WAYS : 2;
     cfg.BPU_USE_LOOP = (user_cfg.BPU_USE_LOOP != 0) ? 1 : 0;
     cfg.BPU_LOOP_ENTRIES = (user_cfg.BPU_LOOP_ENTRIES >= 16) ? user_cfg.BPU_LOOP_ENTRIES : 64;
     cfg.BPU_LOOP_TAG_BITS = (user_cfg.BPU_LOOP_TAG_BITS >= 4) ? user_cfg.BPU_LOOP_TAG_BITS : 10;

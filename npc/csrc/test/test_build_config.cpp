@@ -20,6 +20,7 @@ int main(int argc, char **argv) {
   top->i_BPU_BHT_HASH_ENABLE = 1;
   top->i_BPU_BTB_ENTRIES = 1024;
   top->i_BPU_BHT_ENTRIES = 4096;
+  top->i_BPU_TAGE_BASE_ENTRIES = 2048;
   top->i_BPU_RAS_DEPTH = 32;
   top->i_BPU_GHR_BITS = 16;
   top->i_BPU_USE_SC = 1;
@@ -27,6 +28,13 @@ int main(int argc, char **argv) {
   top->i_BPU_SC_CONF_THRESH = 3;
   top->i_BPU_SC_REQUIRE_BOTH_WEAK = 1;
   top->i_BPU_SC_BLOCK_ON_TAGE_HIT = 1;
+  top->i_BPU_SC_NUM_TABLES = 4;
+  top->i_BPU_SC_CTR_BITS = 6;
+  top->i_BPU_SC_HIST1 = 8;
+  top->i_BPU_SC_HIST2 = 16;
+  top->i_BPU_SC_HIST3 = 32;
+  top->i_BPU_SC_THRESH_INIT = 6;
+  top->i_BPU_TAGE_WAYS = 2;
   top->i_BPU_USE_LOOP = 1;
   top->i_BPU_LOOP_ENTRIES = 128;
   top->i_BPU_LOOP_TAG_BITS = 12;
@@ -71,6 +79,7 @@ int main(int argc, char **argv) {
   assert(top->o_BPU_BHT_HASH_ENABLE == 1);
   assert(top->o_BPU_BTB_ENTRIES == 1024);
   assert(top->o_BPU_BHT_ENTRIES == 4096);
+  assert(top->o_BPU_TAGE_BASE_ENTRIES == 2048);
   assert(top->o_BPU_RAS_DEPTH == 32);
   assert(top->o_BPU_GHR_BITS == 16);
   assert(top->o_BPU_USE_SC == 1);
@@ -78,6 +87,13 @@ int main(int argc, char **argv) {
   assert(top->o_BPU_SC_CONF_THRESH == 3);
   assert(top->o_BPU_SC_REQUIRE_BOTH_WEAK == 1);
   assert(top->o_BPU_SC_BLOCK_ON_TAGE_HIT == 1);
+  assert(top->o_BPU_SC_NUM_TABLES == 4);
+  assert(top->o_BPU_SC_CTR_BITS == 6);
+  assert(top->o_BPU_SC_HIST1 == 8);
+  assert(top->o_BPU_SC_HIST2 == 16);
+  assert(top->o_BPU_SC_HIST3 == 16);  // capped by i_BPU_GHR_BITS=16
+  assert(top->o_BPU_SC_THRESH_INIT == 6);
+  assert(top->o_BPU_TAGE_WAYS == 2);
   assert(top->o_BPU_USE_LOOP == 1);
   assert(top->o_BPU_LOOP_ENTRIES == 128);
   assert(top->o_BPU_LOOP_TAG_BITS == 12);

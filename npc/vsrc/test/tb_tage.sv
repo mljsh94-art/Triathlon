@@ -28,7 +28,9 @@ module tb_tage (
       .LANES(2),
       .GHR_BITS(8),
       .TABLE_ENTRIES(64),
-      .TAG_BITS(8)
+      .BASE_ENTRIES(128),
+      .TAG_BITS(8),
+      .TAGE_WAYS(Cfg.BPU_TAGE_WAYS)
   ) dut (
       .clk_i(clk_i),
       .rst_i(rst_i),
@@ -39,6 +41,7 @@ module tb_tage (
       .predict_strong_o(predict_strong_o),
       .predict_provider_o(predict_provider_o),
       .predict_useful_o(predict_useful_o),
+      .predict_conf_o(),
       .predict_base_strong_o(),
       .predict_base_weak_o(),
       .update_valid_i(update_valid_i),
@@ -46,6 +49,9 @@ module tb_tage (
       .update_pc_i(update_pc_i),
       .update_ghr_i(update_ghr_i),
       .update_taken_i(update_taken_i),
+      .update_conf_o(),
+      .update_taken_o(),
+      .update_hit_o(),
       .dbg_cond_update_total_o(),
       .dbg_cond_local_correct_o(),
       .dbg_cond_global_correct_o(),

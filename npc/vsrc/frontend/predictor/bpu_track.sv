@@ -37,7 +37,7 @@ module bpu_track #(
     input logic cond_loop_override_i,
     input logic [1:0] cond_selected_provider_i,
     input logic cond_selected_taken_i,
-    input logic cond_taken_legacy_i,
+    input logic cond_tage_base_i,
     input logic tage_taken_i,
     input logic sc_taken_i,
     input logic loop_taken_i,
@@ -122,7 +122,7 @@ module bpu_track #(
   logic [TAGE_TRACK_CNT_W-1:0] loop_track_count_q;
   logic [TAGE_TRACK_DEPTH-1:0][1:0] cond_track_provider_q;
   logic [TAGE_TRACK_DEPTH-1:0] cond_track_selected_taken_q;
-  logic [TAGE_TRACK_DEPTH-1:0] cond_track_legacy_taken_q;
+  logic [TAGE_TRACK_DEPTH-1:0] cond_track_base_taken_q;
   logic [TAGE_TRACK_DEPTH-1:0] cond_track_tage_taken_q;
   logic [TAGE_TRACK_DEPTH-1:0] cond_track_sc_taken_q;
   logic [TAGE_TRACK_DEPTH-1:0] cond_track_loop_taken_q;
@@ -191,7 +191,7 @@ module bpu_track #(
       loop_track_count_q <= '0;
       cond_track_provider_q <= '0;
       cond_track_selected_taken_q <= '0;
-      cond_track_legacy_taken_q <= '0;
+      cond_track_base_taken_q <= '0;
       cond_track_tage_taken_q <= '0;
       cond_track_sc_taken_q <= '0;
       cond_track_loop_taken_q <= '0;
@@ -231,7 +231,7 @@ module bpu_track #(
       logic [TAGE_TRACK_CNT_W-1:0] cond_count_n;
       logic [TAGE_TRACK_DEPTH-1:0][1:0] cond_provider_n;
       logic [TAGE_TRACK_DEPTH-1:0] cond_selected_taken_n;
-      logic [TAGE_TRACK_DEPTH-1:0] cond_legacy_taken_n;
+      logic [TAGE_TRACK_DEPTH-1:0] cond_base_taken_n;
       logic [TAGE_TRACK_DEPTH-1:0] cond_tage_taken_n;
       logic [TAGE_TRACK_DEPTH-1:0] cond_sc_taken_n;
       logic [TAGE_TRACK_DEPTH-1:0] cond_loop_taken_n;
@@ -240,7 +240,7 @@ module bpu_track #(
       logic [TAGE_TRACK_DEPTH-1:0] cond_loop_candidate_n;
       logic [1:0] cond_pop_provider;
       logic cond_pop_selected_taken;
-      logic cond_pop_legacy_taken;
+      logic cond_pop_base_taken;
       logic cond_pop_tage_taken;
       logic cond_pop_sc_taken;
       logic cond_pop_loop_taken;
@@ -270,7 +270,7 @@ module bpu_track #(
       cond_count_n = cond_track_count_q;
       cond_provider_n = cond_track_provider_q;
       cond_selected_taken_n = cond_track_selected_taken_q;
-      cond_legacy_taken_n = cond_track_legacy_taken_q;
+      cond_base_taken_n = cond_track_base_taken_q;
       cond_tage_taken_n = cond_track_tage_taken_q;
       cond_sc_taken_n = cond_track_sc_taken_q;
       cond_loop_taken_n = cond_track_loop_taken_q;
@@ -288,7 +288,7 @@ module bpu_track #(
       loop_push_override = 1'b0;
       cond_pop_provider = COND_PROVIDER_LEGACY;
       cond_pop_selected_taken = 1'b0;
-      cond_pop_legacy_taken = 1'b0;
+      cond_pop_base_taken = 1'b0;
       cond_pop_tage_taken = 1'b0;
       cond_pop_sc_taken = 1'b0;
       cond_pop_loop_taken = 1'b0;
@@ -341,7 +341,7 @@ module bpu_track #(
         if (update_is_cond_i && (cond_count_n != '0)) begin
           cond_pop_provider = cond_provider_n[cond_head_n];
           cond_pop_selected_taken = cond_selected_taken_n[cond_head_n];
-          cond_pop_legacy_taken = cond_legacy_taken_n[cond_head_n];
+          cond_pop_base_taken = cond_base_taken_n[cond_head_n];
           cond_pop_tage_taken = cond_tage_taken_n[cond_head_n];
           cond_pop_sc_taken = cond_sc_taken_n[cond_head_n];
           cond_pop_loop_taken = cond_loop_taken_n[cond_head_n];
@@ -382,7 +382,7 @@ module bpu_track #(
           if (!cond_selected_pred_correct) begin
             cond_alt_any_correct = 1'b0;
             if ((cond_pop_provider != COND_PROVIDER_LEGACY) &&
-                (cond_pop_legacy_taken == update_taken_i)) begin
+                (cond_pop_base_taken == update_taken_i)) begin
               dbg_cond_selected_wrong_alt_legacy_correct_q <=
                   dbg_cond_selected_wrong_alt_legacy_correct_q + 64'd1;
               cond_alt_any_correct = 1'b1;
@@ -437,7 +437,7 @@ module bpu_track #(
         cond_count_n = '0;
         cond_provider_n = '0;
         cond_selected_taken_n = '0;
-        cond_legacy_taken_n = '0;
+        cond_base_taken_n = '0;
         cond_tage_taken_n = '0;
         cond_sc_taken_n = '0;
         cond_loop_taken_n = '0;
@@ -529,7 +529,7 @@ module bpu_track #(
         if (pred_fire_i && pred_slot_is_cond_i && (cond_count_n < TAGE_TRACK_DEPTH)) begin
           cond_provider_n[cond_tail_n] = cond_selected_provider_i;
           cond_selected_taken_n[cond_tail_n] = cond_selected_taken_i;
-          cond_legacy_taken_n[cond_tail_n] = cond_taken_legacy_i;
+          cond_base_taken_n[cond_tail_n] = cond_tage_base_i;
           cond_tage_taken_n[cond_tail_n] = tage_taken_i;
           cond_sc_taken_n[cond_tail_n] = sc_taken_i;
           cond_loop_taken_n[cond_tail_n] = loop_taken_i;
@@ -561,7 +561,7 @@ module bpu_track #(
       cond_track_count_q <= cond_count_n;
       cond_track_provider_q <= cond_provider_n;
       cond_track_selected_taken_q <= cond_selected_taken_n;
-      cond_track_legacy_taken_q <= cond_legacy_taken_n;
+      cond_track_base_taken_q <= cond_base_taken_n;
       cond_track_tage_taken_q <= cond_tage_taken_n;
       cond_track_sc_taken_q <= cond_sc_taken_n;
       cond_track_loop_taken_q <= cond_loop_taken_n;

@@ -11,9 +11,15 @@ module bpu #(
     parameter bit USE_SC = 1'b0,
     parameter int unsigned GHR_BITS = 8,
     parameter int unsigned SC_ENTRIES = 512,
-    parameter int unsigned SC_CONF_THRESH = 3,
-    parameter bit SC_REQUIRE_BOTH_WEAK = 1'b1,
-    parameter bit SC_BLOCK_ON_TAGE_HIT = 1'b1,
+    parameter int unsigned SC_NUM_TABLES = 4,
+    parameter int unsigned SC_CTR_BITS = 6,
+    parameter int unsigned SC_HIST_LEN1 = 8,
+    parameter int unsigned SC_HIST_LEN2 = 16,
+    parameter int unsigned SC_HIST_LEN3 = 32,
+    parameter int unsigned SC_THRESH_INIT = 6,
+    parameter int unsigned SC_CONF_THRESH = 3,  // deprecated: use SC_THRESH_INIT
+    parameter bit SC_REQUIRE_BOTH_WEAK = 1'b1,  // deprecated: top-level arbiter no longer uses
+    parameter bit SC_BLOCK_ON_TAGE_HIT = 1'b1,  // deprecated: top-level arbiter no longer uses
     parameter bit USE_LOOP = 1'b0,
     parameter int unsigned LOOP_ENTRIES = 64,
     parameter int unsigned LOOP_TAG_BITS = 10,
@@ -21,12 +27,14 @@ module bpu #(
     parameter bit USE_ITTAGE = 1'b0,
     parameter int unsigned ITTAGE_ENTRIES = 128,
     parameter int unsigned ITTAGE_TAG_BITS = 10,
-    parameter int unsigned TAGE_OVERRIDE_MIN_PROVIDER = 0,
+    parameter int unsigned TAGE_OVERRIDE_MIN_PROVIDER = 0,  // deprecated: top-level arbiter no longer uses
     parameter int unsigned TAGE_TAG_BITS = 8,
     parameter int unsigned TAGE_HIST_LEN0 = 2,
     parameter int unsigned TAGE_HIST_LEN1 = 4,
     parameter int unsigned TAGE_HIST_LEN2 = 8,
     parameter int unsigned TAGE_HIST_LEN3 = 16,
+    parameter int unsigned TAGE_BASE_ENTRIES = 1024,
+    parameter int unsigned TAGE_WAYS = 2,
     parameter int unsigned PATH_HIST_BITS = 16,
     parameter int unsigned TRACK_DEPTH = 16
 ) (
@@ -225,12 +233,18 @@ module bpu #(
   // FTB legacy cond/jump branch PC（仅作 pick 无 cond/indirect 时的回退与 debug）。
   logic [Cfg.PLEN-1:0] ftb_cond_branch_pc_w;
   logic [Cfg.PLEN-1:0] ftb_jump_branch_pc_w;
+  logic [1:0] sc_taken_lane_w;
+  logic [1:0] sc_use_lane_w;
+  logic [1:0][2:0] tage_conf_lane_w;
+  logic [2:0] tage_update_conf_w;
+  logic tage_update_taken_w;
+  logic tage_update_hit_w;
   logic sc_taken_w;
   logic sc_confident_w;
   logic loop_hit_w;
   logic loop_taken_w;
   logic loop_confident_w;
-  logic cond_taken_legacy_w;
+  logic cond_tage_base_w;
   logic cond_tage_override_w;
   logic cond_sc_override_w;
   logic cond_loop_override_w;
@@ -308,11 +322,13 @@ module bpu #(
       .LANES(2),
       .GHR_BITS(GHR_BITS),
       .TABLE_ENTRIES(Cfg.BPU_BHT_ENTRIES),
+      .BASE_ENTRIES(TAGE_BASE_ENTRIES),
       .TAG_BITS(TAGE_TAG_BITS),
       .HIST_LEN0(TAGE_HIST_LEN0),
       .HIST_LEN1(TAGE_HIST_LEN1),
       .HIST_LEN2(TAGE_HIST_LEN2),
-      .HIST_LEN3(TAGE_HIST_LEN3)
+      .HIST_LEN3(TAGE_HIST_LEN3),
+      .TAGE_WAYS(TAGE_WAYS)
   ) u_tage (
       .clk_i(clk_i),
       .rst_i(rst_i),
@@ -323,6 +339,7 @@ module bpu #(
       .predict_strong_o(tage_strong_lane_w),
       .predict_provider_o(tage_provider_lane_w),
       .predict_useful_o(tage_useful_lane_w),
+      .predict_conf_o(tage_conf_lane_w),
       .predict_base_strong_o(tage_base_strong_lane_w),
       .predict_base_weak_o(tage_base_weak_lane_w),
       .update_valid_i(tage_update_w.valid),
@@ -330,6 +347,9 @@ module bpu #(
       .update_pc_i(tage_update_w.pc),
       .update_ghr_i(tage_update_w.meta.ghr),
       .update_taken_i(tage_update_w.taken),
+      .update_conf_o(tage_update_conf_w),
+      .update_taken_o(tage_update_taken_w),
+      .update_hit_o(tage_update_hit_w),
       .dbg_cond_update_total_o(),
       .dbg_cond_local_correct_o(),
       .dbg_cond_global_correct_o(),
@@ -340,22 +360,32 @@ module bpu #(
 
   stat_corr #(
       .Cfg(Cfg),
-      .INSTR_PER_FETCH(1),
+      .LANES(2),
       .GHR_BITS(GHR_BITS),
+      .NUM_TABLES(SC_NUM_TABLES),
       .ENTRIES(SC_ENTRIES),
-      .CTR_BITS(4),
-      .CONF_THRESH(SC_CONF_THRESH)
+      .CTR_BITS(SC_CTR_BITS),
+      .HIST_LEN1(SC_HIST_LEN1),
+      .HIST_LEN2(SC_HIST_LEN2),
+      .HIST_LEN3(SC_HIST_LEN3),
+      .THRESH_INIT(SC_THRESH_INIT)
   ) u_stat_corr (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .predict_base_pc_i(cond_pred_req_w.pc),
-      .predict_ghr_i(cond_pred_req_w.ghr),
-      .predict_taken_o(sc_taken_w),
-      .predict_confident_o(sc_confident_w),
+      .predict_pc_i(cond_cand_pc_w),
+      .predict_ghr_i(spec_ghr_q),
+      .tage_taken_i(tage_taken_lane_w),
+      .tage_hit_i(tage_hit_lane_w),
+      .tage_conf_i(tage_conf_lane_w),
+      .sc_taken_o(sc_taken_lane_w),
+      .sc_use_o(sc_use_lane_w),
       .update_valid_i(sc_update_w.valid),
       .update_pc_i(sc_update_w.pc),
       .update_ghr_i(sc_update_w.meta.ghr),
-      .update_taken_i(sc_update_w.taken)
+      .update_taken_i(sc_update_w.taken),
+      .update_tage_taken_i(tage_update_taken_w),
+      .update_tage_hit_i(tage_update_hit_w),
+      .update_tage_conf_i(tage_update_conf_w)
   );
 
   loop_predictor #(
@@ -531,7 +561,7 @@ module bpu #(
       .cond_loop_override_i(cond_loop_override_w),
       .cond_selected_provider_i(cond_selected_provider_w),
       .cond_selected_taken_i(cond_selected_taken_w),
-      .cond_taken_legacy_i(cond_taken_legacy_w),
+      .cond_tage_base_i(cond_tage_base_w),
       .tage_taken_i(tage_taken_w),
       .sc_taken_i(sc_taken_w),
       .loop_taken_i(loop_taken_w),
@@ -549,8 +579,8 @@ module bpu #(
       .dbg_snap_ittage_use_i(dbg_snap_ittage_use_w)
   );
 
-  // ---- 顶层 pick：用 TAGE 2-lane 方向喂回，在 4 候选（2 cond + 2 jump）里选最早 in-range taken ----
-  // cond 槽方向 = classic TAGE（命中用 provider/alt，否则 T0 base + backward 启发）；jump 无条件 taken。
+  // ---- 顶层 pick：逐 lane SC 校准后 cond_dir，在 4 候选（2 cond + 2 jump）里选最早 in-range taken ----
+  // cond 槽方向 = sc_use ? sc_taken : tage_taken；jump 无条件 taken。
   // 候选已由 FTB 保证 in-range 且各自按 PC 升序（lane0=最早），这里只比 4 个 PC 选最小 taken。
   always_comb begin
     logic [1:0] cond_dir;
@@ -563,9 +593,11 @@ module bpu #(
     int picked_cond_lane;
 
     for (int k = 0; k < 2; k++) begin
-      cond_dir[k] = tage_hit_lane_w[k] ? tage_taken_lane_w[k] :
-                    (tage_taken_lane_w[k] ||
-                     (tage_base_weak_lane_w[k] && cond_cand_is_backward_w[k]));
+      if (USE_SC && sc_use_lane_w[k]) begin
+        cond_dir[k] = sc_taken_lane_w[k];
+      end else begin
+        cond_dir[k] = tage_taken_lane_w[k];
+      end
     end
 
     cand_valid[0] = cond_cand_valid_w[0];
@@ -621,7 +653,7 @@ module bpu #(
       ftb_pick_target_w      = jump_cand_target_w[jl];
     end
 
-    // picked cond lane 的 TAGE meta mux 给现有 override 逻辑（非 cond pick 时清零）。
+    // picked cond lane 的 TAGE meta mux 给 SC/Loop 校正逻辑（非 cond pick 时清零）。
     if (picked_is_cond) begin
       tage_hit_w      = tage_hit_lane_w[picked_cond_lane];
       tage_taken_w    = tage_taken_lane_w[picked_cond_lane];
@@ -636,8 +668,17 @@ module bpu #(
       tage_useful_w   = '0;
     end
 
-    // override 的 base = picked cond 的 classic TAGE 方向（SC/Loop 在其上叠加，优先级不变）。
-    cond_taken_legacy_w = picked_is_cond ? cond_dir[picked_cond_lane] : 1'b0;
+    // 仲裁基准 = picked cond 的 TAGE 方向（Loop 在其上校正；SC 已在 cond_dir 中）。
+    cond_tage_base_w = picked_is_cond ? tage_taken_lane_w[picked_cond_lane] : 1'b0;
+
+    // picked cond lane 的 SC meta mux 给 track / pred_resp。
+    if (picked_is_cond) begin
+      sc_taken_w     = sc_taken_lane_w[picked_cond_lane];
+      sc_confident_w = sc_use_lane_w[picked_cond_lane];
+    end else begin
+      sc_taken_w     = 1'b0;
+      sc_confident_w = 1'b0;
+    end
 
     // SC/Loop/BHT 单 lane，输入 picked cond PC（无 cond pick 时回退最早 cond 候选 / FTB 值）。
     if (picked_is_cond) begin
@@ -678,61 +719,29 @@ module bpu #(
   end
 
   always_comb begin
-    logic legacy_strong;
-    logic tage_provider_ok;
-    logic tage_pred_nt_w;
-    logic tage_strong_nt_w;
-    logic tage_useful_ok_w;
-    logic tage_nt_override_ok;
-    logic tage_allow_override;
-    logic sc_allow_override;
-
-    // 预测期 legacy-strong sideband 由 u_tage T0 base 给出（3-bit 饱和强置信）。
-    legacy_strong = ftb_pick_is_cond_w && tage_base_strong_lane_w[picked_cond_lane_w];
-
+    // SC 已在 pick 前逐 lane 校准；此处 Loop confident 时按 Loop > (SC/TAGE) 校正。
     cond_tage_override_w = 1'b0;
     cond_sc_override_w = 1'b0;
     cond_loop_override_w = 1'b0;
-    cond_selected_provider_w = COND_PROVIDER_LEGACY;
-    cond_selected_taken_w = cond_taken_legacy_w;
+    cond_selected_provider_w = COND_PROVIDER_TAGE;
+    cond_selected_taken_w = cond_tage_base_w;
 
-    tage_provider_ok = (int'(tage_provider_w) >= int'(TAGE_OVERRIDE_MIN_PROVIDER));
-    tage_pred_nt_w = !tage_taken_w;
-    tage_strong_nt_w = tage_strong_w && tage_pred_nt_w;
-    tage_useful_ok_w = |tage_useful_w;
-    // 净正区：3-bit signed strong-NT（ctr 饱和 -4）+ useful>0 + MIN_PROVIDER 门控。
-    tage_nt_override_ok = tage_strong_nt_w;
-    tage_allow_override = USE_TAGE && tage_hit_w && tage_nt_override_ok && tage_provider_ok &&
-                          tage_useful_ok_w;
-    cond_tage_candidate_w = ftb_pick_is_cond_w && tage_allow_override;
-
-    sc_allow_override = USE_SC && sc_confident_w;
-    if (legacy_strong) begin
-      sc_allow_override = 1'b0;
-    end
-    if (SC_BLOCK_ON_TAGE_HIT && USE_TAGE && tage_hit_w) begin
-      sc_allow_override = 1'b0;
-    end
-    if (SC_REQUIRE_BOTH_WEAK && legacy_strong) begin
-      sc_allow_override = 1'b0;
-    end
-    cond_sc_candidate_w = ftb_pick_is_cond_w && sc_allow_override;
+    cond_tage_candidate_w = ftb_pick_is_cond_w;
+    cond_sc_candidate_w = ftb_pick_is_cond_w && USE_SC && sc_confident_w;
     cond_loop_candidate_w = USE_LOOP && ftb_pick_is_cond_w && loop_confident_w;
 
-    // TAGE-SC-L 条件方向优先级：Loop > TAGE > SC > Legacy。
-    // FTB 只 pick legacy-taken 槽；override 在更高优先级 provider 与 legacy 不一致时生效。
+    if (ftb_pick_is_cond_w) begin
+      cond_sc_override_w = USE_SC && sc_confident_w && (sc_taken_w != tage_taken_w);
+      if (USE_SC && sc_confident_w) begin
+        cond_selected_provider_w = COND_PROVIDER_SC;
+        cond_selected_taken_w = sc_taken_w;
+      end
+    end
+
     if (cond_loop_candidate_w) begin
-      cond_loop_override_w = (loop_taken_w != cond_taken_legacy_w);
+      cond_loop_override_w = (loop_taken_w != cond_tage_base_w);
       cond_selected_provider_w = COND_PROVIDER_LOOP;
       cond_selected_taken_w = loop_taken_w;
-    end else if (cond_tage_candidate_w) begin
-      cond_tage_override_w = 1'b1;
-      cond_selected_provider_w = COND_PROVIDER_TAGE;
-      cond_selected_taken_w = tage_taken_w;
-    end else if (cond_sc_candidate_w) begin
-      cond_sc_override_w = (sc_taken_w != cond_taken_legacy_w);
-      cond_selected_provider_w = COND_PROVIDER_SC;
-      cond_selected_taken_w = sc_taken_w;
     end
 
     ittage_hit_w = USE_ITTAGE && ftb_pick_is_indirect_w && ittage_raw_hit_w;

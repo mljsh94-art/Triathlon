@@ -5,11 +5,13 @@ module tage #(
     parameter int unsigned LANES = 2,
     parameter int unsigned GHR_BITS = 8,
     parameter int unsigned TABLE_ENTRIES = 128,
+    parameter int unsigned BASE_ENTRIES = 512,
     parameter int unsigned TAG_BITS = 8,
     parameter int unsigned HIST_LEN0 = 2,
     parameter int unsigned HIST_LEN1 = 4,
     parameter int unsigned HIST_LEN2 = 6,
     parameter int unsigned HIST_LEN3 = 8,
+    parameter int unsigned TAGE_WAYS = 2,
     parameter int unsigned USEFUL_BITS = 2,
     parameter int unsigned CTR_BITS = 3,
     parameter int unsigned USE_ALT_BITS = 4,
@@ -27,6 +29,8 @@ module tage #(
     output logic [LANES-1:0] predict_strong_o,
     output logic [LANES-1:0][1:0] predict_provider_o,
     output logic [LANES-1:0][USEFUL_BITS-1:0] predict_useful_o,
+    // provider/base 居中有符号 ctr（供 SC 校准；hit 取 provider ctr，否则 T0 base ctr）。
+    output logic [LANES-1:0][CTR_BITS-1:0] predict_conf_o,
     // T0 base 侧带（供顶层 SC legacy_strong 门控与 backward 启发）。
     output logic [LANES-1:0] predict_base_strong_o,
     output logic [LANES-1:0] predict_base_weak_o,
@@ -37,6 +41,11 @@ module tage #(
     input logic [Cfg.PLEN-1:0] update_pc_i,
     input logic [((GHR_BITS > 0) ? GHR_BITS : 1)-1:0] update_ghr_i,
     input logic update_taken_i,
+    // update 侧 provider/base 居中 ctr（供 SC commit 重算 sum）。
+    output logic [CTR_BITS-1:0] update_conf_o,
+    // update 侧 TAGE 方向与 tagged provider 命中（供 SC commit 校准重算）。
+    output logic update_taken_o,
+    output logic update_hit_o,
 
     // Diagnostic cond accuracy counters (T0 base；tb 经 i_bpu.u_tage 层级引用)。
     output logic [63:0] dbg_cond_update_total_o,
@@ -60,7 +69,6 @@ module tage #(
   localparam logic signed [CTR_BITS-1:0] CTR_WEAK_NT = -$signed(1);
 
   // T0 base：untagged、PC-only 索引的 bimodal 表（与 tagged 表共用 3-bit 有符号计数器）。
-  localparam int unsigned BASE_ENTRIES = TABLE_ENTRIES;
   localparam int unsigned BASE_IDX_W = (BASE_ENTRIES > 1) ? $clog2(BASE_ENTRIES) : 1;
 
   // 几何递增历史长度与各表的撒盐常数（盐用于打散 PC/历史的折叠位置）。
@@ -238,6 +246,7 @@ module tage #(
       tage_table #(
           .INSTR_PER_FETCH(LANES),
           .ENTRIES(TABLE_ENTRIES),
+          .WAYS(TAGE_WAYS),
           .TAG_BITS(TAG_BITS),
           .CTR_BITS(CTR_BITS),
           .USEFUL_BITS(USEFUL_BITS)
@@ -287,6 +296,7 @@ module tage #(
       predict_strong_o[i]   = is_strong(base_ctr_v);
       predict_provider_o[i] = '0;
       predict_useful_o[i]   = '0;
+      predict_conf_o[i]     = base_ctr_v;
 
       prov_found  = 1'b0;
       alt_found   = 1'b0;
@@ -317,6 +327,7 @@ module tage #(
         predict_hit_o[i]      = 1'b1;
         predict_provider_o[i] = prov_t;
         predict_useful_o[i]   = useful[prov_t][i];
+        predict_conf_o[i]     = prov_ctr_v;
         if (use_alt_sel) begin
           alt_ctr_v           = alt_found ? ctr[alt_t][i] : base_ctr_v;
           predict_taken_o[i]  = ctr_taken(alt_ctr_v);
@@ -413,6 +424,9 @@ module tage #(
   end
 
   assign upd_age = update_valid_i && tagged_en_i && (age_cnt_q == AGE_W'(AGING_PERIOD - 1));
+  assign update_conf_o = upd_prov_found ? upd_prov_ctr : upd_base_ctr;
+  assign update_taken_o = upd_final_taken;
+  assign update_hit_o   = upd_prov_found;
 
   always_ff @(posedge clk_i or posedge rst_i) begin
     if (rst_i) begin

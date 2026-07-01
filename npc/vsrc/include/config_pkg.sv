@@ -31,6 +31,7 @@ package config_pkg;
     // Branch predictor geometry controls
     int unsigned BPU_BTB_ENTRIES;
     int unsigned BPU_BHT_ENTRIES;
+    int unsigned BPU_TAGE_BASE_ENTRIES;
     int unsigned BPU_RAS_DEPTH;
     int unsigned BPU_GHR_BITS;
     // Statistical Corrector controls
@@ -39,6 +40,13 @@ package config_pkg;
     int unsigned BPU_SC_CONF_THRESH;
     int unsigned BPU_SC_REQUIRE_BOTH_WEAK;
     int unsigned BPU_SC_BLOCK_ON_TAGE_HIT;
+    int unsigned BPU_SC_NUM_TABLES;
+    int unsigned BPU_SC_CTR_BITS;
+    int unsigned BPU_SC_HIST1;
+    int unsigned BPU_SC_HIST2;
+    int unsigned BPU_SC_HIST3;
+    int unsigned BPU_SC_THRESH_INIT;
+    int unsigned BPU_TAGE_WAYS;
     // Loop predictor controls
     int unsigned BPU_USE_LOOP;
     int unsigned BPU_LOOP_ENTRIES;
@@ -136,6 +144,7 @@ package config_pkg;
     // Branch predictor geometry controls
     int unsigned BPU_BTB_ENTRIES;
     int unsigned BPU_BHT_ENTRIES;
+    int unsigned BPU_TAGE_BASE_ENTRIES;
     int unsigned BPU_RAS_DEPTH;
     int unsigned BPU_GHR_BITS;
     // Statistical Corrector controls
@@ -144,6 +153,13 @@ package config_pkg;
     int unsigned BPU_SC_CONF_THRESH;
     int unsigned BPU_SC_REQUIRE_BOTH_WEAK;
     int unsigned BPU_SC_BLOCK_ON_TAGE_HIT;
+    int unsigned BPU_SC_NUM_TABLES;
+    int unsigned BPU_SC_CTR_BITS;
+    int unsigned BPU_SC_HIST1;
+    int unsigned BPU_SC_HIST2;
+    int unsigned BPU_SC_HIST3;
+    int unsigned BPU_SC_THRESH_INIT;
+    int unsigned BPU_TAGE_WAYS;
     // Loop predictor controls
     int unsigned BPU_USE_LOOP;
     int unsigned BPU_LOOP_ENTRIES;
