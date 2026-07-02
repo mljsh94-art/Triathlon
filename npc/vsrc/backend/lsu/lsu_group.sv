@@ -102,6 +102,27 @@ module lsu_group #(
     input  logic [Cfg.XLEN-1:0] ld_rsp_data_i,
     input  logic                ld_rsp_err_i,
 
+    // Second DCache load lane ("port B"): hit-only bypass. Granted only to a
+    // second, already in-flight lane (distinct DCache bank from port A's pick
+    // this cycle); a miss is reported via ld_rsp_b_miss_* instead of
+    // ld_rsp_b_valid_i, and the group internally re-issues that lane's load
+    // on port A (see pb_retry_* below) — the ld_pipe lanes themselves stay
+    // unaware of port B and never see a request "rejected".
+    output logic                               ld_req_b_valid_o,
+    input  logic                               ld_req_b_ready_i,
+    output logic                [Cfg.PLEN-1:0] ld_req_b_addr_o,
+    output decode_pkg::lsu_op_e                ld_req_b_op_o,
+    output logic [((N_LSU <= 1) ? 1 : $clog2(N_LSU))-1:0] ld_req_b_id_o,
+
+    input  logic                ld_rsp_b_valid_i,
+    input  logic [((N_LSU <= 1) ? 1 : $clog2(N_LSU))-1:0] ld_rsp_b_id_i,
+    output logic                ld_rsp_b_ready_o,
+    input  logic [Cfg.XLEN-1:0] ld_rsp_b_data_i,
+    input  logic                ld_rsp_b_err_i,
+
+    input  logic                ld_rsp_b_miss_i,
+    input  logic [((N_LSU <= 1) ? 1 : $clog2(N_LSU))-1:0] ld_rsp_b_miss_id_i,
+
     // =========================================================
     // 3b) MMIO Uncached Load interface (bypass D-Cache)
     // =========================================================
@@ -213,8 +234,34 @@ module lsu_group #(
   logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_ld_req_addr;
   decode_pkg::lsu_op_e                                         lane_ld_req_op       [N_LSU];
 
+  // Raw per-lane request straight from each ld_pipe (pre port-B-retry
+  // override). lane_ld_req_valid/addr/op above are the arbiter-facing signals
+  // driven, below, as raw OR'd with the single in-flight port-B retry.
+  logic                [         N_LSU-1:0]                    lane_ld_req_valid_pipe;
+  logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_ld_req_addr_pipe;
+  decode_pkg::lsu_op_e                                         lane_ld_req_op_pipe  [N_LSU];
+
   logic                [         N_LSU-1:0]                    lane_ld_rsp_valid;
   logic                [         N_LSU-1:0]                    lane_ld_rsp_ready;
+  logic                [         N_LSU-1:0]                    lane_ld_rsp_b_miss;
+
+  // Port-B miss -> port-A retry shim (see the "Port B miss retry" block near
+  // the arbiter instantiation). Single-entry: dcache port B has only one
+  // outstanding probe at a time, and a new probe is gated off while a retry
+  // is pending, so at most one retry is ever in flight.
+  logic                                                        pb_retry_valid_q;
+  logic                [LANE_SEL_WIDTH-1:0]                    pb_retry_lane_q;
+  logic                [     Cfg.PLEN-1:0]                     pb_retry_addr_q;
+  decode_pkg::lsu_op_e                                         pb_retry_op_q;
+  logic                                                        arb_ld_req_b_valid;
+  logic                [     Cfg.PLEN-1:0]                     arb_ld_req_b_addr;
+  decode_pkg::lsu_op_e                                         arb_ld_req_b_op;
+  logic                [LANE_SEL_WIDTH-1:0]                    arb_ld_req_b_id;
+  logic                                                        ld_req_b_ready_gated;
+  logic                                                        pb_retry_block_b;
+  logic                                                        pb_retry_miss_pulse;
+  logic                [LANE_SEL_WIDTH-1:0]                    pb_retry_miss_lane;
+  logic                                                        pb_retry_grant_fire;
 
   logic                [         N_LSU-1:0]                    lane_wb_valid;
   logic                [         N_LSU-1:0][ROB_IDX_WIDTH-1:0] lane_wb_rob_idx;
@@ -553,6 +600,16 @@ module lsu_group #(
 
   generate
     for (genvar gi = 0; gi < N_LSU; gi++) begin : g_ld_pipes
+      // Per-lane DCache response data mux: at most one of port A / port B is
+      // valid for this lane in a given cycle (arbiter grants distinct lanes
+      // to A/B), so select the matching bus by id.
+      logic lane_ld_rsp_from_a_w;
+      logic [Cfg.XLEN-1:0] lane_ld_rsp_data_w;
+      logic lane_ld_rsp_err_w;
+      assign lane_ld_rsp_from_a_w = ld_rsp_valid_i && (ld_rsp_id_i == LANE_SEL_WIDTH'(gi));
+      assign lane_ld_rsp_data_w = lane_ld_rsp_from_a_w ? ld_rsp_data_i : ld_rsp_b_data_i;
+      assign lane_ld_rsp_err_w = lane_ld_rsp_from_a_w ? ld_rsp_err_i : ld_rsp_b_err_i;
+
       ld_pipe #(
           .Cfg(Cfg),
           .ROB_IDX_WIDTH(ROB_IDX_WIDTH),
@@ -587,15 +644,15 @@ module lsu_group #(
           .stq_fwd_hit_i(stq_fwd_hit_i),
           .stq_fwd_data_i(stq_fwd_data_i),
 
-          .ld_req_valid_o(lane_ld_req_valid[gi]),
+          .ld_req_valid_o(lane_ld_req_valid_pipe[gi]),
           .ld_req_ready_i(lane_ld_req_ready[gi]),
-          .ld_req_addr_o(lane_ld_req_addr[gi]),
-          .ld_req_op_o(lane_ld_req_op[gi]),
+          .ld_req_addr_o(lane_ld_req_addr_pipe[gi]),
+          .ld_req_op_o(lane_ld_req_op_pipe[gi]),
 
           .ld_rsp_valid_i(lane_ld_rsp_valid[gi]),
           .ld_rsp_ready_o(lane_ld_rsp_ready[gi]),
-          .ld_rsp_data_i,
-          .ld_rsp_err_i,
+          .ld_rsp_data_i(lane_ld_rsp_data_w),
+          .ld_rsp_err_i(lane_ld_rsp_err_w),
 
           // MMIO bypass
           .rob_head_i(rob_head_i),
@@ -628,6 +685,23 @@ module lsu_group #(
     end
   endgenerate
 
+  // Arbiter-facing DCache load request = raw per-lane request, OR'd with the
+  // single in-flight port-B-miss retry (forced onto its lane's slot so the
+  // owning lane wins the exact same arbitration path a fresh request would).
+  // The lane's own ld_pipe never observes this override: its ld_req_valid_o
+  // is already low (it moved past S_LD_REQ when port B first accepted it),
+  // and ld_req_ready_i is a don't-care in that state.
+  always_comb begin
+    lane_ld_req_valid = lane_ld_req_valid_pipe;
+    lane_ld_req_addr  = lane_ld_req_addr_pipe;
+    lane_ld_req_op    = lane_ld_req_op_pipe;
+    if (pb_retry_valid_q) begin
+      lane_ld_req_valid[pb_retry_lane_q] = 1'b1;
+      lane_ld_req_addr[pb_retry_lane_q]  = pb_retry_addr_q;
+      lane_ld_req_op[pb_retry_lane_q]    = pb_retry_op_q;
+    end
+  end
+
   // ---------------------------------------------------------
   // Shared-resource arbitration (DCache req RR / MMIO / WB lane RR)
   // ---------------------------------------------------------
@@ -650,9 +724,21 @@ module lsu_group #(
       .ld_req_op_o(ld_req_op_o),
       .ld_req_id_o(ld_req_id_o),
 
+      .ld_req_b_valid_o(arb_ld_req_b_valid),
+      .ld_req_b_ready_i(ld_req_b_ready_gated),
+      .ld_req_b_addr_o(arb_ld_req_b_addr),
+      .ld_req_b_op_o(arb_ld_req_b_op),
+      .ld_req_b_id_o(arb_ld_req_b_id),
+
       .ld_rsp_valid_i(ld_rsp_valid_i),
       .ld_rsp_id_i(ld_rsp_id_i),
       .ld_rsp_ready_o(ld_rsp_ready_o),
+      .ld_rsp_b_valid_i(ld_rsp_b_valid_i),
+      .ld_rsp_b_id_i(ld_rsp_b_id_i),
+      .ld_rsp_b_ready_o(ld_rsp_b_ready_o),
+      .ld_rsp_b_miss_i(ld_rsp_b_miss_i),
+      .ld_rsp_b_miss_id_i(ld_rsp_b_miss_id_i),
+      .lane_ld_rsp_b_miss_o(lane_ld_rsp_b_miss),
       .lane_ld_rsp_ready_i(lane_ld_rsp_ready),
       .lane_ld_rsp_valid_o(lane_ld_rsp_valid),
 
@@ -672,6 +758,65 @@ module lsu_group #(
       .wb_grant_valid_o(wb_grant_valid),
       .wb_lane_idx_o(wb_lane_idx)
   );
+
+  // ---------------------------------------------------------
+  // Port-B miss retry: dcache's hit-only bypass may accept a probe and then
+  // report a miss instead of data (ld_rsp_b_miss_*). At that point the
+  // owning lane's ld_pipe has already advanced past S_LD_REQ (it saw
+  // ld_req_ready fire when port B accepted the probe) and is blocked in
+  // S_LD_RSP waiting for a ld_rsp_valid_i that will never come from port B.
+  // Recover transparently: latch the lane + its still-stable address/op
+  // (ld_pipe keeps driving them combinationally regardless of state) and
+  // force that lane's request valid again next cycle, single-entry, until
+  // it wins a *port-A* grant (guaranteed to eventually complete). New port-B
+  // probes are gated off while a retry is outstanding so the one register
+  // is never overrun.
+  // ---------------------------------------------------------
+  always_comb begin
+    pb_retry_miss_pulse = |lane_ld_rsp_b_miss;
+    pb_retry_miss_lane  = '0;
+    for (int i = 0; i < N_LSU; i++) begin
+      if (lane_ld_rsp_b_miss[i]) begin
+        pb_retry_miss_lane = LANE_SEL_WIDTH'(i);
+      end
+    end
+  end
+
+  assign pb_retry_block_b = pb_retry_valid_q || pb_retry_miss_pulse;
+  assign ld_req_b_ready_gated = ld_req_b_ready_i && !pb_retry_block_b;
+  assign ld_req_b_valid_o = arb_ld_req_b_valid && !pb_retry_block_b;
+  assign ld_req_b_addr_o  = arb_ld_req_b_addr;
+  assign ld_req_b_op_o    = arb_ld_req_b_op;
+  assign ld_req_b_id_o    = arb_ld_req_b_id;
+
+  // Retry request is forced valid only for pb_retry_lane_q, and port B is
+  // gated off whenever a retry is pending, so a ready grant for that lane can
+  // only have come from port A.
+  assign pb_retry_grant_fire = pb_retry_valid_q && lane_ld_req_ready[pb_retry_lane_q];
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      pb_retry_valid_q <= 1'b0;
+      pb_retry_lane_q  <= '0;
+      pb_retry_addr_q  <= '0;
+      pb_retry_op_q    <= decode_pkg::LSU_LW;
+    end else if (flush_i) begin
+      pb_retry_valid_q <= 1'b0;
+    end else begin
+      if (pb_retry_grant_fire) begin
+        pb_retry_valid_q <= 1'b0;
+      end
+      // Mutually exclusive with the grant-fire clear above: a new miss can
+      // only be latched while ld_req_b_ready_gated allowed a fresh probe,
+      // i.e. while pb_retry_valid_q was already 0 this cycle.
+      if (pb_retry_miss_pulse) begin
+        pb_retry_valid_q <= 1'b1;
+        pb_retry_lane_q  <= pb_retry_miss_lane;
+        pb_retry_addr_q  <= lane_ld_req_addr_pipe[pb_retry_miss_lane];
+        pb_retry_op_q    <= lane_ld_req_op_pipe[pb_retry_miss_lane];
+      end
+    end
+  end
 
   assign state_q    = g_ld_pipes[0].u_ld_pipe.state_q;
   assign req_tag_q  = g_ld_pipes[0].u_ld_pipe.req_tag_q;

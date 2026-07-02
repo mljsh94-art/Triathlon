@@ -12,14 +12,10 @@
 
 #include <array>
 #include <cstdint>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
 
 namespace {
-
-constexpr uint32_t kAgentWatchPcStart = 0x00013fd0u;
-constexpr uint32_t kAgentWatchPcEnd = 0x00014010u;
 
 struct AgentSv32Walk {
   bool enabled = false;
@@ -103,53 +99,6 @@ bool read_retire_fetch_truth(Vtb_triathlon *top, npc::MemSystem &mem,
   const uint16_t high_half = agent_read_u16_if_resolved(mem.mem, high_walk);
   mem_raw = static_cast<uint32_t>(low_half) | (static_cast<uint32_t>(high_half) << 16);
   return true;
-}
-
-void agent_log_commit_fetch(uint64_t cycle, const npc::CommitSlot &slot,
-                            Vtb_triathlon *top, npc::MemSystem &mem,
-                            const std::array<uint32_t, 32> &rf) {
-  if (slot.pc < kAgentWatchPcStart || slot.pc > kAgentWatchPcEnd) return;
-
-  const auto low_walk = agent_sv32_translate(mem.mem, top->dbg_csr_satp_o, slot.pc);
-  const auto high_walk = agent_sv32_translate(mem.mem, top->dbg_csr_satp_o, slot.pc + 2u);
-  const uint16_t low_half = agent_read_u16_if_resolved(mem.mem, low_walk);
-  const uint16_t high_half = agent_read_u16_if_resolved(mem.mem, high_walk);
-  const uint32_t mem_raw = static_cast<uint32_t>(low_half) |
-                           (static_cast<uint32_t>(high_half) << 16);
-
-  // #region agent log
-  std::ofstream log("debug-702aba.log", std::ios::app);
-  log << "{\"sessionId\":\"702aba\",\"runId\":\"difftest-cross-page\","
-      << "\"hypothesisId\":\"H1-H2-H5\","
-      << "\"location\":\"npc/csrc/npc_main.cpp:agent_log_commit_fetch\","
-      << "\"message\":\"commit fetch truth near failing page boundary\","
-      << "\"timestamp\":" << cycle << ",\"data\":{"
-      << "\"cycle\":" << cycle
-      << ",\"slot\":" << slot.slot
-      << ",\"pc\":\"0x" << std::hex << slot.pc
-      << "\",\"raw_inst\":\"0x" << slot.inst
-      << "\",\"decoded_inst\":\"0x" << slot.decoded_inst
-      << "\",\"actual_npc\":\"0x" << slot.actual_npc
-      << "\",\"satp\":\"0x" << top->dbg_csr_satp_o
-      << "\",\"pa_low\":\"0x" << low_walk.pa
-      << "\",\"pa_high\":\"0x" << high_walk.pa
-      << "\",\"l0_pte_low\":\"0x" << low_walk.l0_pte
-      << "\",\"l0_pte_high\":\"0x" << high_walk.l0_pte
-      << "\",\"mem_low16\":\"0x" << low_half
-      << "\",\"mem_high16\":\"0x" << high_half
-      << "\",\"mem_raw32\":\"0x" << mem_raw
-      << "\",\"wdata\":\"0x" << slot.data
-      << "\",\"rf_before_x15\":\"0x" << slot.rf_before[15]
-      << "\",\"rf_after_x15\":\"0x" << rf[15]
-      << std::dec
-      << "\",\"we\":" << (slot.we ? 1 : 0)
-      << ",\"rd\":" << slot.rd
-      << ",\"is_rvc\":" << (slot.is_rvc ? 1 : 0)
-      << ",\"priv\":" << static_cast<uint32_t>(top->dbg_csr_priv_mode_o)
-      << ",\"low_resolved\":" << (low_walk.resolved ? 1 : 0)
-      << ",\"high_resolved\":" << (high_walk.resolved ? 1 : 0)
-      << "}}\n";
-  // #endregion
 }
 
 uint32_t probe_cfg_width(uint32_t value, uint32_t fallback) {
@@ -374,7 +323,6 @@ int main(int argc, char **argv) {
       observer.on_commit_slot(cycles, top, mem, rf, slot, store_commit.valid,
                               store_commit.addr, store_commit.data, store_commit.op,
                               trap_sync, retire_fetch_override);
-      agent_log_commit_fetch(cycles, slot, top, mem, rf);
       profile.record_commit(slot.pc, slot.inst, slot.decoded_inst, slot.is_rvc);
 
       npc::DUTCoreState dut_after =

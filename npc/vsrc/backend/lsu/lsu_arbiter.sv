@@ -5,8 +5,19 @@ import decode_pkg::*;
 // Sole owner of the three shared-resource arbitrations in the LSU group:
 //
 //   1) D-Cache load request  : round-robin among lanes (ld_req_rr_q pointer).
-//   2) D-Cache load response : route the response back to the owning lane
-//                              (by the id echoed on ld_rsp_id_i).
+//                              Dual-issue: port A picks the highest-priority
+//                              valid lane; port B additionally picks the next
+//                              valid lane *only* when its DCache bank differs
+//                              from port A's (bank conflict -> B withheld,
+//                              that lane simply retries next cycle since its
+//                              request stays valid/un-consumed).
+//   2) D-Cache load response : route each of the two DCache response channels
+//                              (port A / port B) back to the owning lane (by
+//                              the id echoed on ld_rsp_id_i / ld_rsp_b_id_i).
+//                              Port B's hit-only bypass may also reject an
+//                              already-accepted request (miss / bank write);
+//                              that unconditional pulse is likewise routed to
+//                              the owning lane so it can re-issue.
 //   3) MMIO request          : fixed priority (lowest lane index first).
 //   4) Writeback lane select : round-robin among lanes (wb_rr_q pointer). The
 //                              final mux against the store-writeback path stays
@@ -32,6 +43,9 @@ module lsu_arbiter #(
 
     // =========================================================
     // 1) D-Cache load request (per-lane in, arbitrated out)
+    //    Port A = full-FSM path (always available). Port B = hit-only
+    //    bypass, additionally granted when a second valid lane's DCache
+    //    bank differs from port A's this cycle.
     // =========================================================
     input  logic                [         N_LSU-1:0]                lane_ld_req_valid_i,
     input  logic                [         N_LSU-1:0][Cfg.PLEN-1:0]  lane_ld_req_addr_i,
@@ -44,12 +58,28 @@ module lsu_arbiter #(
     output decode_pkg::lsu_op_e                                     ld_req_op_o,
     output logic [((N_LSU <= 1) ? 1 : $clog2(N_LSU))-1:0]           ld_req_id_o,
 
+    output logic                                                    ld_req_b_valid_o,
+    input  logic                                                    ld_req_b_ready_i,
+    output logic                [          Cfg.PLEN-1:0]            ld_req_b_addr_o,
+    output decode_pkg::lsu_op_e                                     ld_req_b_op_o,
+    output logic [((N_LSU <= 1) ? 1 : $clog2(N_LSU))-1:0]           ld_req_b_id_o,
+
     // =========================================================
     // 2) D-Cache load response routing (route to owning lane)
     // =========================================================
     input  logic                                                    ld_rsp_valid_i,
     input  logic [((N_LSU <= 1) ? 1 : $clog2(N_LSU))-1:0]           ld_rsp_id_i,
     output logic                                                    ld_rsp_ready_o,
+    input  logic                                                    ld_rsp_b_valid_i,
+    input  logic [((N_LSU <= 1) ? 1 : $clog2(N_LSU))-1:0]           ld_rsp_b_id_i,
+    output logic                                                    ld_rsp_b_ready_o,
+    // Port B hit-only reject: an already-accepted port-B request turned out
+    // to miss (or lost the bank race to a write). Unconditional pulse, no
+    // ready handshake — routed straight to the owning lane so it can retry
+    // (mirrors dcache.sv's ld_rsp_b_miss_o contract).
+    input  logic                                                    ld_rsp_b_miss_i,
+    input  logic [((N_LSU <= 1) ? 1 : $clog2(N_LSU))-1:0]           ld_rsp_b_miss_id_i,
+    output logic                [         N_LSU-1:0]                lane_ld_rsp_b_miss_o,
     input  logic                [         N_LSU-1:0]                lane_ld_rsp_ready_i,
     output logic                [         N_LSU-1:0]                lane_ld_rsp_valid_o,
 
@@ -79,6 +109,13 @@ module lsu_arbiter #(
 
   localparam int unsigned LANE_SEL_WIDTH = (N_LSU <= 1) ? 1 : $clog2(N_LSU);
   localparam int unsigned LD_ID_WIDTH = (N_LSU <= 1) ? 1 : $clog2(N_LSU);
+  // DCache bank-select field width for the port-A/port-B conflict check.
+  // Guarded to >=1 so the part-select below stays legal even when the
+  // DCache is built with a single bank (DCACHE_BANK_SEL_WIDTH == 0); in
+  // that degenerate case addr_bank() always returns '0, so the two ports
+  // always "conflict" and port B is correctly never granted.
+  localparam int unsigned CFG_BANK_SEL_WIDTH = Cfg.DCACHE_BANK_SEL_WIDTH;
+  localparam int unsigned BANK_SEL_WIDTH = (CFG_BANK_SEL_WIDTH == 0) ? 1 : CFG_BANK_SEL_WIDTH;
 
   function automatic logic [LANE_SEL_WIDTH-1:0] rr_next_idx(
       input logic [LANE_SEL_WIDTH-1:0] idx
@@ -94,6 +131,16 @@ module lsu_arbiter #(
     end
   endfunction
 
+  function automatic logic [BANK_SEL_WIDTH-1:0] addr_bank(input logic [Cfg.PLEN-1:0] addr);
+    begin
+      if (CFG_BANK_SEL_WIDTH == 0) begin
+        addr_bank = '0;
+      end else begin
+        addr_bank = addr[Cfg.DCACHE_OFFSET_WIDTH+:CFG_BANK_SEL_WIDTH];
+      end
+    end
+  endfunction
+
   // ---------------------------------------------------------
   // Round-robin pointers
   // ---------------------------------------------------------
@@ -101,12 +148,26 @@ module lsu_arbiter #(
   logic [LANE_SEL_WIDTH-1:0] wb_rr_q;
 
   // ---------------------------------------------------------
-  // 1) D-Cache load request arbitration (round-robin)
+  // 1) D-Cache load request arbitration (round-robin, dual-issue)
+  //
+  // Port A always takes the highest-priority valid lane starting at
+  // ld_req_rr_q (unchanged from the single-port scheme). Port B scans for
+  // the next valid, distinct lane starting just past port A's pick; it is
+  // granted only when that lane's DCache bank differs from port A's this
+  // cycle. On a bank conflict, port B is withheld for the cycle — the
+  // second lane's request simply stays valid/un-consumed and is
+  // re-arbitrated (and may win port A) on a later cycle.
   // ---------------------------------------------------------
   logic [N_LSU-1:0]          ld_req_grant;
   logic [LANE_SEL_WIDTH-1:0] ld_req_lane_idx;
   logic                      ld_req_grant_valid;
   logic                      ld_req_fire;
+
+  logic [N_LSU-1:0]          ld_req_b_grant;
+  logic [LANE_SEL_WIDTH-1:0] ld_req_b_lane_idx;
+  logic                      ld_req_b_grant_valid;
+  logic                      ld_req_bank_conflict;
+  logic                      ld_req_b_fire;
 
   always_comb begin
     ld_req_grant = '0;
@@ -126,12 +187,41 @@ module lsu_arbiter #(
     end
   end
 
+  // Second pick: continue scanning right after port A's lane so the two
+  // grants are always distinct lanes (off starts at 1, so it can never
+  // land back on ld_req_lane_idx).
+  always_comb begin
+    ld_req_b_grant = '0;
+    ld_req_b_lane_idx = '0;
+    ld_req_b_grant_valid = 1'b0;
+    for (int off = 1; off < N_LSU; off++) begin
+      int unsigned idx;
+      idx = $unsigned(ld_req_lane_idx) + off;
+      if (idx >= N_LSU) begin
+        idx -= N_LSU;
+      end
+      if (ld_req_grant_valid && !ld_req_b_grant_valid && lane_ld_req_valid_i[idx]) begin
+        ld_req_b_grant_valid = 1'b1;
+        ld_req_b_grant[idx] = 1'b1;
+        ld_req_b_lane_idx = LANE_SEL_WIDTH'(idx);
+      end
+    end
+  end
+
+  assign ld_req_bank_conflict = ld_req_b_grant_valid &&
+      (addr_bank(lane_ld_req_addr_i[ld_req_lane_idx]) == addr_bank(
+      lane_ld_req_addr_i[ld_req_b_lane_idx]));
+
   assign ld_req_valid_o = ld_req_grant_valid;
   assign ld_req_id_o = LD_ID_WIDTH'(ld_req_lane_idx);
+  assign ld_req_b_valid_o = ld_req_b_grant_valid && !ld_req_bank_conflict;
+  assign ld_req_b_id_o = LD_ID_WIDTH'(ld_req_b_lane_idx);
 
   always_comb begin
     ld_req_addr_o = '0;
     ld_req_op_o = decode_pkg::LSU_LW;
+    ld_req_b_addr_o = '0;
+    ld_req_b_op_o = decode_pkg::LSU_LW;
     lane_ld_req_ready_o = '0;
 
     if (ld_req_grant_valid) begin
@@ -139,12 +229,19 @@ module lsu_arbiter #(
       ld_req_op_o = lane_ld_req_op_i[ld_req_lane_idx];
       lane_ld_req_ready_o[ld_req_lane_idx] = ld_req_ready_i;
     end
+    if (ld_req_b_valid_o) begin
+      ld_req_b_addr_o = lane_ld_req_addr_i[ld_req_b_lane_idx];
+      ld_req_b_op_o = lane_ld_req_op_i[ld_req_b_lane_idx];
+      lane_ld_req_ready_o[ld_req_b_lane_idx] = ld_req_b_ready_i;
+    end
   end
 
   assign ld_req_fire = ld_req_grant_valid && ld_req_ready_i;
+  assign ld_req_b_fire = ld_req_b_valid_o && ld_req_b_ready_i;
 
   // ---------------------------------------------------------
-  // 2) D-Cache load response routing
+  // 2) D-Cache load response routing (2 channels, each routed
+  //    independently by the id echoed back on that channel)
   // ---------------------------------------------------------
   logic                      rsp_id_in_range;
   logic [LANE_SEL_WIDTH-1:0] rsp_lane_idx;
@@ -152,12 +249,35 @@ module lsu_arbiter #(
   assign rsp_lane_idx = LANE_SEL_WIDTH'(ld_rsp_id_i);
   assign rsp_id_in_range = ($unsigned(ld_rsp_id_i) < N_LSU);
 
+  logic                      rsp_b_id_in_range;
+  logic [LANE_SEL_WIDTH-1:0] rsp_b_lane_idx;
+
+  assign rsp_b_lane_idx = LANE_SEL_WIDTH'(ld_rsp_b_id_i);
+  assign rsp_b_id_in_range = ($unsigned(ld_rsp_b_id_i) < N_LSU);
+
+  logic                      rsp_b_miss_id_in_range;
+  logic [LANE_SEL_WIDTH-1:0] rsp_b_miss_lane_idx;
+
+  assign rsp_b_miss_lane_idx = LANE_SEL_WIDTH'(ld_rsp_b_miss_id_i);
+  assign rsp_b_miss_id_in_range = ($unsigned(ld_rsp_b_miss_id_i) < N_LSU);
+
   always_comb begin
-    lane_ld_rsp_valid_o = '0;
-    ld_rsp_ready_o = 1'b0;
+    lane_ld_rsp_valid_o   = '0;
+    ld_rsp_ready_o        = 1'b0;
+    ld_rsp_b_ready_o      = 1'b0;
+    lane_ld_rsp_b_miss_o  = '0;
+
     if (ld_rsp_valid_i && rsp_id_in_range) begin
       lane_ld_rsp_valid_o[rsp_lane_idx] = 1'b1;
       ld_rsp_ready_o = lane_ld_rsp_ready_i[rsp_lane_idx];
+    end
+    if (ld_rsp_b_valid_i && rsp_b_id_in_range) begin
+      lane_ld_rsp_valid_o[rsp_b_lane_idx] = 1'b1;
+      ld_rsp_b_ready_o = lane_ld_rsp_ready_i[rsp_b_lane_idx];
+    end
+    // Unconditional pulse (no backpressure), mirrors dcache.sv's contract.
+    if (ld_rsp_b_miss_i && rsp_b_miss_id_in_range) begin
+      lane_ld_rsp_b_miss_o[rsp_b_miss_lane_idx] = 1'b1;
     end
   end
 
@@ -239,7 +359,12 @@ module lsu_arbiter #(
       ld_req_rr_q <= '0;
       wb_rr_q     <= '0;
     end else begin
-      if (ld_req_fire) begin
+      // Advance past whichever grant actually landed furthest this cycle:
+      // port B (if it fired) is always scanned past port A's lane, so
+      // advancing past it subsumes advancing past port A too.
+      if (ld_req_b_fire) begin
+        ld_req_rr_q <= rr_next_idx(ld_req_b_lane_idx);
+      end else if (ld_req_fire) begin
         ld_req_rr_q <= rr_next_idx(ld_req_lane_idx);
       end
       if (wb_adv_en) begin

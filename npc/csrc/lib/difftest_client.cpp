@@ -6,16 +6,11 @@
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
-#include <fstream>
-#include <iomanip>
 #include <iostream>
 
 namespace npc {
 
 namespace {
-
-constexpr uint32_t kAgentWatchPcStart = 0x00013fd0u;
-constexpr uint32_t kAgentWatchPcEnd = 0x00014010u;
 
 bool addr_in_range(uint32_t addr, uint32_t base, uint32_t size) {
   return addr >= base && addr < (base + size);
@@ -56,53 +51,6 @@ void restore_trap_entry_csr_before(DUTCoreState &trap_before,
 
   uint32_t csr = (inst >> 20) & 0xfffu;
   set_core_state_csr(trap_before, csr, dut_after.gpr[rd]);
-}
-
-void agent_log_difftest_step(uint64_t cycle, uint32_t pc, uint32_t inst,
-                             const DUTCoreState &ref_before,
-                             const DUTCoreState &ref_after,
-                             const DUTCoreState &dut_after,
-                             bool skip_ref_exec, bool trap_sync,
-                             bool ignore_mmio_load_rd,
-                             uint32_t mmio_load_rd,
-                             bool inst_is_mmio_store,
-                             bool commit_is_mmio_store,
-                             bool dut_override_csr,
-                             bool linux_atomic_override,
-                             bool retire_fetch_override) {
-  if (pc < kAgentWatchPcStart || pc > kAgentWatchPcEnd) return;
-
-  // #region agent log
-  std::ofstream log("debug-702aba.log", std::ios::app);
-  log << "{\"sessionId\":\"702aba\",\"runId\":\"difftest-cross-page\","
-      << "\"hypothesisId\":\"H3-H4\","
-      << "\"location\":\"npc/csrc/lib/difftest_client.cpp:agent_log_difftest_step\","
-      << "\"message\":\"ref step around failing page-boundary instruction\","
-      << "\"timestamp\":" << cycle << ",\"data\":{"
-      << "\"cycle\":" << cycle
-      << ",\"pc\":\"0x" << std::hex << pc
-      << "\",\"inst\":\"0x" << inst
-      << "\",\"ref_before_pc\":\"0x" << ref_before.pc
-      << "\",\"ref_after_pc\":\"0x" << ref_after.pc
-      << "\",\"dut_after_pc\":\"0x" << dut_after.pc
-      << "\",\"ref_before_x15\":\"0x" << ref_before.gpr[15]
-      << "\",\"ref_after_x15\":\"0x" << ref_after.gpr[15]
-      << "\",\"dut_after_x15\":\"0x" << dut_after.gpr[15]
-      << "\",\"ref_after_x9\":\"0x" << ref_after.gpr[9]
-      << "\",\"dut_after_x9\":\"0x" << dut_after.gpr[9]
-      << std::dec
-      << "\",\"skip_ref_exec\":" << (skip_ref_exec ? 1 : 0)
-      << ",\"trap_sync\":" << (trap_sync ? 1 : 0)
-      << ",\"ignore_mmio_load_rd\":" << (ignore_mmio_load_rd ? 1 : 0)
-      << ",\"mmio_load_rd\":" << mmio_load_rd
-      << ",\"inst_is_mmio_store\":" << (inst_is_mmio_store ? 1 : 0)
-      << ",\"commit_is_mmio_store\":" << (commit_is_mmio_store ? 1 : 0)
-      << ",\"dut_override_csr\":" << (dut_override_csr ? 1 : 0)
-      << ",\"linux_atomic_override\":" << (linux_atomic_override ? 1 : 0)
-      << ",\"retire_fetch_override\":" << (retire_fetch_override ? 1 : 0)
-      << ",\"priv\":" << dut_after.priv
-      << "}}\n";
-  // #endregion
 }
 
 }  // namespace
@@ -274,12 +222,6 @@ bool Difftest::step_and_check(uint64_t cycle, uint32_t pc, uint32_t inst,
   }
 
   sync_platform_mip_to_ref(ref_after, dut_after);
-
-  agent_log_difftest_step(cycle, pc, inst, ref_before, ref_after, dut_after,
-                          skip_ref_exec, trap_sync, ignore_mmio_load_rd,
-                          mmio_load_rd, inst_is_mmio_store, commit_is_mmio_store,
-                          dut_override_csr, linux_atomic_override,
-                          retire_fetch_override);
 
   return check_arch_state(cycle, pc, inst, dut_after, ref_after,
                           ignore_mmio_load_rd, mmio_load_rd);

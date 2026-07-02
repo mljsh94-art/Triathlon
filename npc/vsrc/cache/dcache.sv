@@ -27,6 +27,28 @@ module dcache #(
     output logic [LD_PORT_ID_WIDTH-1:0] ld_rsp_id_o,
 
     // =============================================================
+    // 1b) Load port B (hit-only bypass, second lane from LSU arbiter)
+    // Port B never touches the tag/data write path: on miss / misalignment
+    // it never completes, and the caller must replay the same load via
+    // port A. There is no backpressure on the miss pulse — the consumer
+    // (arbiter) must be able to accept it unconditionally the cycle it fires.
+    // =============================================================
+    input  logic                               ld_req_b_valid_i,
+    output logic                               ld_req_b_ready_o,
+    input  logic                [Cfg.PLEN-1:0] ld_req_b_addr_i,
+    input  decode_pkg::lsu_op_e                ld_req_b_op_i,
+    input  logic [LD_PORT_ID_WIDTH-1:0]        ld_req_b_id_i,
+
+    output logic                ld_rsp_b_valid_o,
+    input  logic                ld_rsp_b_ready_i,
+    output logic [Cfg.XLEN-1:0] ld_rsp_b_data_o,
+    output logic                ld_rsp_b_err_o,
+    output logic [LD_PORT_ID_WIDTH-1:0] ld_rsp_b_id_o,
+
+    output logic                        ld_rsp_b_miss_o,
+    output logic [LD_PORT_ID_WIDTH-1:0] ld_rsp_b_miss_id_o,
+
+    // =============================================================
     // 2) Committed store port (from STQ)
     // =============================================================
     input  logic                               st_req_valid_i,
@@ -339,7 +361,7 @@ module dcache #(
   logic [           NUM_WAYS-1:0][META_WIDTH-1:0] meta_a;
   logic [           NUM_WAYS-1:0][LINE_WIDTH-1:0] line_a_all;
 
-  // Unused read port B (tied to A)
+  // Read port B (independently addressed; drives the port-B hit-only bypass)
   logic [           NUM_WAYS-1:0][ TAG_WIDTH-1:0] tag_b;
   logic [           NUM_WAYS-1:0][META_WIDTH-1:0] meta_b;
   logic [           NUM_WAYS-1:0][LINE_WIDTH-1:0] line_b_all;
@@ -362,6 +384,14 @@ module dcache #(
   // r_bank_sel -> tag_a -> hit -> lookup_load_fast -> ld_req_ready_o ->
   // rsp_handoff/accept -> r_bank_sel that the lookup fast path would form.
   logic [     BANK_SEL_WIDTH-1:0]                 r_bank_sel_o_q;
+
+  // Read address (port B). Independently addressed from port A; see the
+  // "Port B (hit-only bypass)" section near the end of the file for the
+  // mini-FSM that drives r_bank_addr_b/r_bank_sel_b and consumes tag_b/
+  // meta_b/line_b_all. Mirrors r_bank_sel_o_q's role for port A.
+  logic [SETS_PER_BANK_WIDTH-1:0]                 r_bank_addr_b;
+  logic [     BANK_SEL_WIDTH-1:0]                 r_bank_sel_b;
+  logic [     BANK_SEL_WIDTH-1:0]                 r_bank_sel_b_o_q;
 
   // ---------------------------------------------------------------------------
   // State machine
@@ -562,9 +592,9 @@ module dcache #(
       .rdata_tag_a_o  (tag_a),
       .rdata_valid_a_o(meta_a),
 
-      .bank_addr_rb_i (r_bank_addr),
-      .bank_sel_rb_i  (r_bank_sel),
-      .bank_sel_rb_o_i(r_bank_sel_o_q),
+      .bank_addr_rb_i (r_bank_addr_b),
+      .bank_sel_rb_i  (r_bank_sel_b),
+      .bank_sel_rb_o_i(r_bank_sel_b_o_q),
       .rdata_tag_b_o  (tag_b),
       .rdata_valid_b_o(meta_b),
 
@@ -589,9 +619,9 @@ module dcache #(
       .bank_sel_ra_o_i(r_bank_sel_o_q),
       .rdata_a_o     (line_a_all),
 
-      .bank_addr_rb_i(r_bank_addr),
-      .bank_sel_rb_i (r_bank_sel),
-      .bank_sel_rb_o_i(r_bank_sel_o_q),
+      .bank_addr_rb_i(r_bank_addr_b),
+      .bank_sel_rb_i (r_bank_sel_b),
+      .bank_sel_rb_o_i(r_bank_sel_b_o_q),
       .rdata_b_o     (line_b_all),
 
       .w_bank_addr_i(w_bank_addr),
@@ -1070,6 +1100,184 @@ module dcache #(
 
     if (flush_i && !(state_q != S_IDLE && req_is_store_q)) begin
       state_d = S_IDLE;
+    end
+  end
+
+  // ---------------------------------------------------------------------------
+  // Port B (hit-only bypass)
+  // ---------------------------------------------------------------------------
+  // A pure side channel that opportunistically services a second in-flight
+  // load in the same cycle as port A, using the array's second read port.
+  // It never participates in MSHR/refill/store-write handling: any load that
+  // cannot be resolved as an immediate hit (miss, bank conflict, misaligned,
+  // or an array write in progress) is rejected and must be retried via the
+  // normal port-A path. This keeps port B a zero-risk additive path — it
+  // cannot corrupt state, it can only fail to help.
+  typedef enum logic { S_B_IDLE, S_B_LOOKUP } db_state_e;
+  db_state_e b_state_q, b_state_d;
+
+  logic [                  Cfg.PLEN-1:0] req_b_addr_q;
+  decode_pkg::lsu_op_e                   req_b_op_q;
+  logic [          LD_PORT_ID_WIDTH-1:0] req_b_id_q;
+  logic [                 TAG_WIDTH-1:0] req_b_tag_q;
+  logic [               INDEX_WIDTH-1:0] req_b_index_q;
+  logic [              OFFSET_WIDTH-1:0] req_b_byte_off_q;
+  logic [       SETS_PER_BANK_WIDTH-1:0] req_b_bank_addr_q;
+  logic [            BANK_SEL_WIDTH-1:0] req_b_bank_sel_q;
+
+  // Address decode for the incoming port-B request (combinational).
+  logic [LINE_ADDR_WIDTH-1:0] ld_req_b_line_addr;
+  logic [    INDEX_WIDTH-1:0] ld_req_b_index;
+  logic [      TAG_WIDTH-1:0] ld_req_b_tag;
+  logic [   OFFSET_WIDTH-1:0] ld_req_b_byte_off;
+  logic [SETS_PER_BANK_WIDTH-1:0] ld_req_b_bank_addr;
+  logic [     BANK_SEL_WIDTH-1:0] ld_req_b_bank_sel;
+  logic                           ld_req_b_misaligned;
+
+  assign ld_req_b_line_addr = ld_req_b_addr_i[Cfg.PLEN-1:OFFSET_WIDTH];
+  assign ld_req_b_index     = ld_req_b_line_addr[INDEX_WIDTH-1:0];
+  assign ld_req_b_tag       = ld_req_b_line_addr[INDEX_WIDTH+:TAG_WIDTH];
+  assign ld_req_b_byte_off  = ld_req_b_addr_i[OFFSET_WIDTH-1:0];
+  assign ld_req_b_bank_addr = ld_req_b_index[INDEX_WIDTH-1:BANK_SEL_WIDTH];
+  assign ld_req_b_bank_sel  = ld_req_b_index[BANK_SEL_WIDTH-1:0];
+  assign ld_req_b_misaligned = is_misaligned(ld_req_b_op_i, ld_req_b_addr_i);
+
+  // Hit detection on the port-B read (independent of port A's hit_way).
+  logic [NUM_WAYS-1:0] way_valid_b;
+  logic [NUM_WAYS-1:0] hit_way_b;
+  logic hit_b;
+  logic [Cfg.DCACHE_SET_ASSOC_WIDTH-1:0] hit_way_b_idx;
+
+  generate
+    genvar wb;
+    for (wb = 0; wb < NUM_WAYS; wb++) begin : gen_meta_extract_b
+      assign way_valid_b[wb] = meta_b[wb][0];
+      assign hit_way_b[wb]   = way_valid_b[wb] && (tag_b[wb] == req_b_tag_q);
+    end
+  endgenerate
+
+  assign hit_b = |hit_way_b;
+
+  priority_encoder #(
+      .WIDTH(NUM_WAYS)
+  ) u_pe_hit_b (
+      .in (hit_way_b),
+      .out(hit_way_b_idx)
+  );
+
+  // Bypass the same-cycle/most-recent array write (mirrors hit_line's RAW
+  // bypass for port A) since bank arbitration always lets port A / writes
+  // win, but a port-B lookup issued right after a write can still race the
+  // SRAM's read-during-write behavior.
+  logic [LINE_WIDTH-1:0] hit_line_b;
+  always_comb begin
+    hit_line_b = line_b_all[hit_way_b_idx];
+    if (last_write_valid_q &&
+        (last_write_tag_q == req_b_tag_q) &&
+        (last_write_index_q == req_b_index_q) &&
+        (last_write_way_q == hit_way_b_idx)) begin
+      hit_line_b = last_write_line_q;
+    end
+  end
+
+  // A lookup in flight "resolves" (frees the pipe for a new accept) this
+  // cycle either because it hit and the consumer took it, or because it
+  // missed (misses need no backpressure — the miss pulse is unconditional).
+  logic b_lookup_will_resolve;
+  assign b_lookup_will_resolve = (b_state_q == S_B_LOOKUP) && (!hit_b || ld_rsp_b_ready_i);
+
+  logic b_pipe_free;
+  assign b_pipe_free = (b_state_q == S_B_IDLE) || b_lookup_will_resolve;
+
+  // Ready gating: no array write this cycle, the new request's bank differs
+  // from port A's bank this cycle (so bank arbitration cannot starve it),
+  // no refill in progress, and the request is aligned (misaligned loads are
+  // never fast-pathed; they fall back to port A's full handling).
+  assign ld_req_b_ready_o = b_pipe_free && !flush_i && !refill_valid_i &&
+                            (we_way_mask == '0) &&
+                            (ld_req_b_bank_sel != r_bank_sel) &&
+                            !ld_req_b_misaligned;
+
+  logic b_accept_fire;
+  assign b_accept_fire = ld_req_b_valid_i && ld_req_b_ready_o;
+
+  // Read-address mux for port B: hold the in-flight request's address by
+  // default (keeps tag_b/line_b_all stable while stalled on backpressure),
+  // predrive the new request's address on accept.
+  always_comb begin
+    r_bank_addr_b = req_b_bank_addr_q;
+    r_bank_sel_b  = req_b_bank_sel_q;
+
+    if (b_accept_fire) begin
+      r_bank_addr_b = ld_req_b_bank_addr;
+      r_bank_sel_b  = ld_req_b_bank_sel;
+    end
+  end
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) r_bank_sel_b_o_q <= '0;
+    else         r_bank_sel_b_o_q <= r_bank_sel_b;
+  end
+
+  // Response outputs: hit-only, combinational, 1-cycle latency (address
+  // predriven the cycle before, data/tag land this cycle in S_B_LOOKUP).
+  assign ld_rsp_b_valid_o    = (b_state_q == S_B_LOOKUP) && hit_b;
+  assign ld_rsp_b_data_o     = extract_load(hit_line_b, req_b_byte_off_q, req_b_op_q);
+  assign ld_rsp_b_err_o      = 1'b0;
+  assign ld_rsp_b_id_o       = req_b_id_q;
+
+  assign ld_rsp_b_miss_o    = (b_state_q == S_B_LOOKUP) && !hit_b;
+  assign ld_rsp_b_miss_id_o = req_b_id_q;
+
+  always_comb begin
+    b_state_d = b_state_q;
+    unique case (b_state_q)
+      S_B_IDLE: begin
+        if (b_accept_fire) b_state_d = S_B_LOOKUP;
+      end
+      S_B_LOOKUP: begin
+        if (b_accept_fire) b_state_d = S_B_LOOKUP;
+        else if (b_lookup_will_resolve) b_state_d = S_B_IDLE;
+      end
+      default: b_state_d = S_B_IDLE;
+    endcase
+
+    if (flush_i) b_state_d = S_B_IDLE;
+  end
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      b_state_q         <= S_B_IDLE;
+      req_b_addr_q      <= '0;
+      req_b_op_q        <= decode_pkg::LSU_LW;
+      req_b_id_q        <= '0;
+      req_b_tag_q       <= '0;
+      req_b_index_q     <= '0;
+      req_b_byte_off_q  <= '0;
+      req_b_bank_addr_q <= '0;
+      req_b_bank_sel_q  <= '0;
+    end else if (flush_i) begin
+      b_state_q         <= S_B_IDLE;
+      req_b_addr_q      <= '0;
+      req_b_op_q        <= decode_pkg::LSU_LW;
+      req_b_id_q        <= '0;
+      req_b_tag_q       <= '0;
+      req_b_index_q     <= '0;
+      req_b_byte_off_q  <= '0;
+      req_b_bank_addr_q <= '0;
+      req_b_bank_sel_q  <= '0;
+    end else begin
+      b_state_q <= b_state_d;
+      if (b_accept_fire) begin
+        req_b_addr_q      <= ld_req_b_addr_i;
+        req_b_op_q        <= ld_req_b_op_i;
+        req_b_id_q        <= ld_req_b_id_i;
+        req_b_tag_q       <= ld_req_b_tag;
+        req_b_index_q     <= ld_req_b_index;
+        req_b_byte_off_q  <= ld_req_b_byte_off;
+        req_b_bank_addr_q <= ld_req_b_bank_addr;
+        req_b_bank_sel_q  <= ld_req_b_bank_sel;
+      end
     end
   end
 

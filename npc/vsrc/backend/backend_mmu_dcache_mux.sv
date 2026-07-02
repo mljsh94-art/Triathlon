@@ -21,6 +21,26 @@ module backend_mmu_dcache_mux #(
     output logic                               lsu_ld_rsp_err_o,
     output logic [LSU_LD_ID_WIDTH-1:0]         lsu_ld_rsp_id_o,
 
+    // Second LSU load lane ("port B"): dedicated hit-only DCache bypass, never
+    // carries MMU walk traffic (page-table walks stay on port A above).
+    input  logic                               lsu_ld_req_b_valid_i,
+    output logic                               lsu_ld_req_b_ready_o,
+    input  logic [PLEN-1:0]                    lsu_ld_req_b_addr_i,
+    input  decode_pkg::lsu_op_e                lsu_ld_req_b_op_i,
+    input  logic [LSU_LD_ID_WIDTH-1:0]         lsu_ld_req_b_id_i,
+
+    output logic                               lsu_ld_rsp_b_valid_o,
+    input  logic                               lsu_ld_rsp_b_ready_i,
+    output logic [XLEN-1:0]                    lsu_ld_rsp_b_data_o,
+    output logic                               lsu_ld_rsp_b_err_o,
+    output logic [LSU_LD_ID_WIDTH-1:0]         lsu_ld_rsp_b_id_o,
+
+    // Port B miss reject: DCache accepted no MSHR/refill on this lane, so the
+    // requester must retry the same load on port A. Unconditional pulse, no
+    // ready handshake (mirrors dcache.sv's ld_rsp_b_miss_o).
+    output logic                               lsu_ld_rsp_b_miss_o,
+    output logic [LSU_LD_ID_WIDTH-1:0]         lsu_ld_rsp_b_miss_id_o,
+
     input  logic                               pte_ld_req_valid_i,
     output logic                               pte_ld_req_ready_o,
     input  logic [31:0]                        pte_ld_req_paddr_i,
@@ -60,6 +80,25 @@ module backend_mmu_dcache_mux #(
     input  logic [XLEN-1:0]                    dcache_ld_rsp_data_i,
     input  logic                               dcache_ld_rsp_err_i,
     input  logic [LSU_LD_ID_WIDTH:0]           dcache_ld_rsp_id_i,
+
+    // DCache port B (hit-only bypass, wired to lsu_ld_req_b_*/lsu_ld_rsp_b_*
+    // above). id keeps the same width as port A's MMU-tagged id for LD_PORT_ID_WIDTH
+    // parity in dcache.sv, but the MMU bit is always driven low (port B never
+    // carries walk traffic).
+    output logic                               dcache_ld_req_b_valid_o,
+    input  logic                               dcache_ld_req_b_ready_i,
+    output logic [PLEN-1:0]                    dcache_ld_req_b_addr_o,
+    output decode_pkg::lsu_op_e                dcache_ld_req_b_op_o,
+    output logic [LSU_LD_ID_WIDTH:0]           dcache_ld_req_b_id_o,
+
+    input  logic                               dcache_ld_rsp_b_valid_i,
+    output logic                               dcache_ld_rsp_b_ready_o,
+    input  logic [XLEN-1:0]                    dcache_ld_rsp_b_data_i,
+    input  logic                               dcache_ld_rsp_b_err_i,
+    input  logic [LSU_LD_ID_WIDTH:0]           dcache_ld_rsp_b_id_i,
+
+    input  logic                               dcache_ld_rsp_b_miss_i,
+    input  logic [LSU_LD_ID_WIDTH:0]           dcache_ld_rsp_b_miss_id_i,
 
     output logic                               dcache_st_req_valid_o,
     input  logic                               dcache_st_req_ready_i,
@@ -140,6 +179,24 @@ module backend_mmu_dcache_mux #(
       end
     end
   end
+
+  // Port B: pure passthrough between the second LSU load lane and the DCache
+  // hit-only bypass port. No MMU/store sharing, so no arbitration is needed
+  // here; only the id width is padded to match dcache's shared LD_PORT_ID_WIDTH.
+  assign dcache_ld_req_b_valid_o = lsu_ld_req_b_valid_i;
+  assign dcache_ld_req_b_addr_o  = lsu_ld_req_b_addr_i;
+  assign dcache_ld_req_b_op_o    = lsu_ld_req_b_op_i;
+  assign dcache_ld_req_b_id_o    = {1'b0, lsu_ld_req_b_id_i};
+  assign lsu_ld_req_b_ready_o    = dcache_ld_req_b_ready_i;
+
+  assign lsu_ld_rsp_b_valid_o    = dcache_ld_rsp_b_valid_i;
+  assign lsu_ld_rsp_b_data_o     = dcache_ld_rsp_b_data_i;
+  assign lsu_ld_rsp_b_err_o      = dcache_ld_rsp_b_err_i;
+  assign lsu_ld_rsp_b_id_o       = dcache_ld_rsp_b_id_i[LSU_LD_ID_WIDTH-1:0];
+  assign dcache_ld_rsp_b_ready_o = lsu_ld_rsp_b_ready_i;
+
+  assign lsu_ld_rsp_b_miss_o     = dcache_ld_rsp_b_miss_i;
+  assign lsu_ld_rsp_b_miss_id_o  = dcache_ld_rsp_b_miss_id_i[LSU_LD_ID_WIDTH-1:0];
 
   assign st_sel_lsu_pte = pte_st_req_valid_i;
   assign st_sel_ifu_pte = !st_sel_lsu_pte && ifu_pte_st_req_valid_i;

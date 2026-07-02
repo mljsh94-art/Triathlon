@@ -1736,6 +1736,38 @@ module backend #(
   logic [Cfg.XLEN-1:0] dcache_ld_rsp_data;
   logic dcache_ld_rsp_err;
   logic [DCACHE_LD_ID_WIDTH-1:0] dcache_ld_rsp_id;
+
+  // LSU <-> D$, second load lane ("port B"): hit-only DCache bypass, never
+  // carries MMU walk traffic (page-table walks stay on port A above).
+  logic lsu_ld_req_b_valid;
+  logic lsu_ld_req_b_ready;
+  logic [Cfg.PLEN-1:0] lsu_ld_req_b_addr;
+  decode_pkg::lsu_op_e lsu_ld_req_b_op;
+  logic [LSU_LD_ID_WIDTH-1:0] lsu_ld_req_b_id;
+
+  logic lsu_ld_rsp_b_valid;
+  logic lsu_ld_rsp_b_ready;
+  logic [Cfg.XLEN-1:0] lsu_ld_rsp_b_data;
+  logic lsu_ld_rsp_b_err;
+  logic [LSU_LD_ID_WIDTH-1:0] lsu_ld_rsp_b_id;
+
+  logic lsu_ld_rsp_b_miss;
+  logic [LSU_LD_ID_WIDTH-1:0] lsu_ld_rsp_b_miss_id;
+
+  logic dcache_ld_req_b_valid;
+  logic dcache_ld_req_b_ready;
+  logic [Cfg.PLEN-1:0] dcache_ld_req_b_addr;
+  decode_pkg::lsu_op_e dcache_ld_req_b_op;
+  logic [DCACHE_LD_ID_WIDTH-1:0] dcache_ld_req_b_id;
+
+  logic dcache_ld_rsp_b_valid;
+  logic dcache_ld_rsp_b_ready;
+  logic [Cfg.XLEN-1:0] dcache_ld_rsp_b_data;
+  logic dcache_ld_rsp_b_err;
+  logic [DCACHE_LD_ID_WIDTH-1:0] dcache_ld_rsp_b_id;
+
+  logic dcache_ld_rsp_b_miss;
+  logic [DCACHE_LD_ID_WIDTH-1:0] dcache_ld_rsp_b_miss_id;
   logic dcache_st_req_valid;
   logic dcache_st_req_ready;
   logic [Cfg.PLEN-1:0] dcache_st_req_addr;
@@ -1796,6 +1828,19 @@ module backend #(
       .lsu_ld_rsp_err_o(lsu_ld_rsp_err),
       .lsu_ld_rsp_id_o(lsu_ld_rsp_id),
 
+      .lsu_ld_req_b_valid_i(lsu_ld_req_b_valid),
+      .lsu_ld_req_b_ready_o(lsu_ld_req_b_ready),
+      .lsu_ld_req_b_addr_i(lsu_ld_req_b_addr),
+      .lsu_ld_req_b_op_i(lsu_ld_req_b_op),
+      .lsu_ld_req_b_id_i(lsu_ld_req_b_id),
+      .lsu_ld_rsp_b_valid_o(lsu_ld_rsp_b_valid),
+      .lsu_ld_rsp_b_ready_i(lsu_ld_rsp_b_ready),
+      .lsu_ld_rsp_b_data_o(lsu_ld_rsp_b_data),
+      .lsu_ld_rsp_b_err_o(lsu_ld_rsp_b_err),
+      .lsu_ld_rsp_b_id_o(lsu_ld_rsp_b_id),
+      .lsu_ld_rsp_b_miss_o(lsu_ld_rsp_b_miss),
+      .lsu_ld_rsp_b_miss_id_o(lsu_ld_rsp_b_miss_id),
+
       .pte_ld_req_valid_i(lsu_pte_req_valid),
       .pte_ld_req_ready_o(lsu_pte_req_ready),
       .pte_ld_req_paddr_i(lsu_pte_req_paddr),
@@ -1833,6 +1878,21 @@ module backend #(
       .dcache_ld_rsp_data_i(dcache_ld_rsp_data),
       .dcache_ld_rsp_err_i(dcache_ld_rsp_err),
       .dcache_ld_rsp_id_i(dcache_ld_rsp_id),
+
+      .dcache_ld_req_b_valid_o(dcache_ld_req_b_valid),
+      .dcache_ld_req_b_ready_i(dcache_ld_req_b_ready),
+      .dcache_ld_req_b_addr_o(dcache_ld_req_b_addr),
+      .dcache_ld_req_b_op_o(dcache_ld_req_b_op),
+      .dcache_ld_req_b_id_o(dcache_ld_req_b_id),
+
+      .dcache_ld_rsp_b_valid_i(dcache_ld_rsp_b_valid),
+      .dcache_ld_rsp_b_ready_o(dcache_ld_rsp_b_ready),
+      .dcache_ld_rsp_b_data_i(dcache_ld_rsp_b_data),
+      .dcache_ld_rsp_b_err_i(dcache_ld_rsp_b_err),
+      .dcache_ld_rsp_b_id_i(dcache_ld_rsp_b_id),
+
+      .dcache_ld_rsp_b_miss_i(dcache_ld_rsp_b_miss),
+      .dcache_ld_rsp_b_miss_id_i(dcache_ld_rsp_b_miss_id),
 
       .dcache_st_req_valid_o(dcache_st_req_valid),
       .dcache_st_req_ready_i(dcache_st_req_ready),
@@ -1919,6 +1979,21 @@ module backend #(
       .ld_rsp_ready_o(lsu_ld_rsp_ready),
       .ld_rsp_data_i (lsu_ld_rsp_data),
       .ld_rsp_err_i  (lsu_ld_rsp_err),
+
+      .ld_req_b_valid_o(lsu_ld_req_b_valid),
+      .ld_req_b_ready_i(lsu_ld_req_b_ready),
+      .ld_req_b_addr_o (lsu_ld_req_b_addr),
+      .ld_req_b_op_o   (lsu_ld_req_b_op),
+      .ld_req_b_id_o   (lsu_ld_req_b_id),
+
+      .ld_rsp_b_valid_i(lsu_ld_rsp_b_valid),
+      .ld_rsp_b_id_i   (lsu_ld_rsp_b_id),
+      .ld_rsp_b_ready_o(lsu_ld_rsp_b_ready),
+      .ld_rsp_b_data_i (lsu_ld_rsp_b_data),
+      .ld_rsp_b_err_i  (lsu_ld_rsp_b_err),
+
+      .ld_rsp_b_miss_i   (lsu_ld_rsp_b_miss),
+      .ld_rsp_b_miss_id_i(lsu_ld_rsp_b_miss_id),
 
       .mmio_req_valid_o(mmio_req_valid_o),
       .mmio_req_ready_i(mmio_req_ready_i),
@@ -2271,6 +2346,22 @@ module backend #(
       .ld_rsp_data_o (dcache_ld_rsp_data),
       .ld_rsp_err_o  (dcache_ld_rsp_err),
       .ld_rsp_id_o   (dcache_ld_rsp_id),
+
+      // Load port B (hit-only bypass, from LSU arbiter's second lane)
+      .ld_req_b_valid_i(dcache_ld_req_b_valid),
+      .ld_req_b_ready_o(dcache_ld_req_b_ready),
+      .ld_req_b_addr_i (dcache_ld_req_b_addr),
+      .ld_req_b_op_i   (dcache_ld_req_b_op),
+      .ld_req_b_id_i   (dcache_ld_req_b_id),
+
+      .ld_rsp_b_valid_o(dcache_ld_rsp_b_valid),
+      .ld_rsp_b_ready_i(dcache_ld_rsp_b_ready),
+      .ld_rsp_b_data_o (dcache_ld_rsp_b_data),
+      .ld_rsp_b_err_o  (dcache_ld_rsp_b_err),
+      .ld_rsp_b_id_o   (dcache_ld_rsp_b_id),
+
+      .ld_rsp_b_miss_o   (dcache_ld_rsp_b_miss),
+      .ld_rsp_b_miss_id_o(dcache_ld_rsp_b_miss_id),
 
       // Store port (from SB/MMU arbiter)
       .st_req_valid_i(dcache_st_req_valid),
