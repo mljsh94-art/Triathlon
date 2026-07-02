@@ -85,6 +85,11 @@ int main(int argc, char **argv) {
   predict(top, pc, pc, ghr, tage_nt, 0, conf0, conf0);
   assert((top->sc_use_o & 1) == 0 && "SC must not override when TAGE misses");
 
+  // ---- Case 3b: TAGE 强置信 -> sc_use=0（即使 SC 方向相反）----
+  const uint8_t conf_strong = 3; // signed centered +3
+  predict(top, pc, pc, ghr, tage_nt, tage_hit, conf_strong, conf_strong);
+  assert((top->sc_use_o & 1) == 0 && "SC must not override when TAGE is strong");
+
   // ---- Case 4: 2-lane 独立（lane1 不同 PC）----
   const uint32_t pc1 = 0x8000020c;
   for (int i = 0; i < 32; i++) {

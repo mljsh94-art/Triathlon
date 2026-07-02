@@ -4,8 +4,8 @@ import config_pkg::*;
 //  - NUM_TABLES 张 signed 计数器表：表0 为 bias/PC-only；表1..3 用几何历史长度
 //    HIST_LEN1..3（复用共享 spec GHR，capped ≤ GHR 宽度）。
 //  - 预测：每 lane sum = Σ_t ctr_t[idx] + TAGE 项(2*tage_conf+1)；sc_taken=(sum>=0)；
-//    sc_use = tage_hit && |sum|>=thresh_q && (sc_taken != tage_taken)，即仅在 TAGE 命中、
-//    置信度跨自适应阈值且方向与 TAGE 相反时才建议翻转。
+//    sc_use = tage_hit && |tage_conf|<=TAGE_WEAK_MAX && |sum|>=thresh_q &&
+//    (sc_taken != tage_taken)，即仅在 TAGE 弱置信、SC 跨阈值且方向相反时才 flip。
 //  - 更新（单口，commit 一条）：用 update 侧 PC/GHR/TAGE-conf 重算 sum；当 SCPRED 错或
 //    |sum|<thresh_q 时按 outcome 训练全部 GEHL 计数器（含 bias）；自适应阈值 thresh_q 按
 //    Seznec TC 规则调整（SC 被采用且错 -> TC 增、阈值升；被采用且对 -> TC 减、阈值降）。
@@ -24,7 +24,9 @@ module stat_corr #(
     parameter int unsigned THRESH_INIT = 6,
     parameter int unsigned THRESH_MIN = 3,
     parameter int unsigned THRESH_MAX = 63,
-    parameter int unsigned TC_BITS = 6
+    parameter int unsigned TC_BITS = 6,
+    // 仅当 |tage_conf| <= TAGE_WEAK_MAX 时才允许 SC override TAGE。
+    parameter int unsigned TAGE_WEAK_MAX = 1
 ) (
     input logic clk_i,
     input logic rst_i,
@@ -130,6 +132,16 @@ module stat_corr #(
     end
   endfunction
 
+  function automatic logic tage_weak_ok(input logic [TAGE_CONF_BITS-1:0] conf);
+    logic signed [TAGE_CONF_BITS:0] abs_conf;
+    logic signed [TAGE_CONF_BITS-1:0] sconf;
+    begin
+      sconf = $signed(conf);
+      abs_conf = (sconf < $signed(0)) ? -sconf : sconf;
+      tage_weak_ok = abs_conf <= TAGE_WEAK_MAX'(TAGE_WEAK_MAX);
+    end
+  endfunction
+
   // ---------------- 预测 ----------------
   logic signed [SUM_W-1:0] pred_sum_w [LANES];
 
@@ -149,7 +161,8 @@ module stat_corr #(
       abs_v = (sum_v < $signed(0)) ? -sum_v : sum_v;
 
       sc_taken_o[l] = sc_tk;
-      sc_use_o[l]   = tage_hit_i[l] && (abs_v >= thresh_q) && (sc_tk != tage_taken_i[l]);
+      sc_use_o[l]   = tage_hit_i[l] && tage_weak_ok(tage_conf_i[l]) &&
+                      (abs_v >= thresh_q) && (sc_tk != tage_taken_i[l]);
     end
   end
 
@@ -174,8 +187,8 @@ module stat_corr #(
     upd_sc_taken_w = (sum_v >= $signed(0));
     upd_sc_wrong_w = (upd_sc_taken_w != update_taken_i);
     // SC 在预测时是否会被采用（与 sc_use_o 同判据，用 update 侧带重算）。
-    upd_sc_used_w  = update_tage_hit_i && (upd_abs_w >= thresh_q) &&
-                     (upd_sc_taken_w != update_tage_taken_i);
+    upd_sc_used_w  = update_tage_hit_i && tage_weak_ok(update_tage_conf_i) &&
+                     (upd_abs_w >= thresh_q) && (upd_sc_taken_w != update_tage_taken_i);
     // 训练 GEHL：SCPRED 错，或置信不足（|sum|<thresh）。
     upd_train_w    = upd_sc_wrong_w || (upd_abs_w < thresh_q);
   end

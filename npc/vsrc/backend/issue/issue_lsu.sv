@@ -41,13 +41,24 @@ module issue_lsu #(
     input wire [ TAG_W-1:0] cdb_tag  [0:CDB_W-1],
     input wire [DATA_W-1:0] cdb_val  [0:CDB_W-1],
 
-    // LSU 输出
-    output wire                           lsu_en,
-    output decode_pkg::uop_t              lsu_uop,
-    output wire              [DATA_W-1:0] lsu_v1,
-    output wire              [DATA_W-1:0] lsu_v2,
-    output wire              [ TAG_W-1:0] lsu_dst,
-    output wire              [  ST_W-1:0] lsu_stq_id
+    // LSU 输出（双口：每拍最多投放 2 条 load/store）
+    output wire                           lsu_en     [0:1],
+    output decode_pkg::uop_t              lsu_uop    [0:1],
+    output wire              [DATA_W-1:0] lsu_v1     [0:1],
+    output wire              [DATA_W-1:0] lsu_v2     [0:1],
+    output wire              [ TAG_W-1:0] lsu_dst    [0:1],
+    output wire              [  ST_W-1:0] lsu_stq_id [0:1],
+    // 预门控候选有效（不含 fu_ready_i）：供 lsu_group 计算 req_ready_o 使用，
+    // 避免 fu_ready_i 与 lsu_group 自身输出的 req_ready_o 构成组合环。
+    // lsu_en[k] = lsu_cand_v[k] && issue_base_allow；lsu_uop[k] 仅在
+    // lsu_cand_v[k] 为真时内容有意义（否则可能是 RS 陈旧/无关条目）。
+    output wire                           lsu_cand_v [0:1],
+    // Raw RS picks (pre port1 gating), forwarded to lsu_group for dual/shape
+    // classification without a cand_valid_i combinational loop.
+    output wire                           lsu_pick_v [0:1],
+    // From lsu_group: port1 may only co-issue when the pair matches the dual
+    // fast-path shape; otherwise serialize through port0 alone.
+    input  wire                           dual_port1_en_i
 );
   wire full_stall;
   assign issue_ready = ~full_stall;
@@ -136,23 +147,37 @@ module issue_lsu #(
                                          issue_valid_raw[1] &&
                                          is_spec_low_addr(issue_effective_addr_1) &&
                                          (issue_dst_1 != rob_head_i);
+  // 两条 slot 相互独立（不再是 slot0 被阻塞时 slot1 才替补），
+  // 只要各自选中的 RS 项 ready 且未被低地址推测拦截即可同拍发射。
+  // issue_rs_idx_raw[0]/[1] 已保证指向不同 RS 项（见下方选择逻辑）。
   assign issue_pick_0 = issue_valid_raw[0] && !issue_blocked_low_addr_spec_0;
-  assign issue_pick_1 = !issue_pick_0 && issue_valid_raw[1] && !issue_blocked_low_addr_spec_1;
+  assign issue_pick_1 = issue_valid_raw[1] && !issue_blocked_low_addr_spec_1;
   assign issue_pick_any = issue_pick_0 || issue_pick_1;
   assign issue_base_allow = fu_ready_i && !flush_i && !mispred_block_i;
   assign issue_fire = issue_base_allow && issue_pick_any;
-  assign lsu_en = issue_fire;
-  assign lsu_uop = issue_pick_1 ? issue_uop_1 : issue_uop_0;
-  assign lsu_v1 = issue_pick_1 ? issue_v1_1 : issue_v1_0;
-  assign lsu_v2 = issue_pick_1 ? issue_v2_1 : issue_v2_0;
-  assign lsu_dst = issue_pick_1 ? issue_dst_1 : issue_dst_0;
-  assign lsu_stq_id = issue_pick_1 ? issue_st_id_1 : issue_st_id_0;
+  assign lsu_pick_v[0] = issue_pick_0;
+  assign lsu_pick_v[1] = issue_pick_1;
+  assign lsu_en[0] = issue_base_allow && issue_pick_0;
+  assign lsu_en[1] = issue_base_allow && issue_pick_1 && dual_port1_en_i;
+  assign lsu_uop[0] = issue_uop_0;
+  assign lsu_uop[1] = issue_uop_1;
+  assign lsu_v1[0] = issue_v1_0;
+  assign lsu_v1[1] = issue_v1_1;
+  assign lsu_v2[0] = issue_v2_0;
+  assign lsu_v2[1] = issue_v2_1;
+  assign lsu_dst[0] = issue_dst_0;
+  assign lsu_dst[1] = issue_dst_1;
+  assign lsu_stq_id[0] = issue_st_id_0;
+  assign lsu_stq_id[1] = issue_st_id_1;
+  assign lsu_cand_v[0] = issue_pick_0;
+  assign lsu_cand_v[1] = issue_pick_1 && dual_port1_en_i;
 
   always_comb begin
     issue_grant_selected = '0;
     if (issue_pick_0) begin
       issue_grant_selected[issue_rs_idx_raw[0]] = 1'b1;
-    end else if (issue_pick_1) begin
+    end
+    if (issue_pick_1 && dual_port1_en_i) begin
       issue_grant_selected[issue_rs_idx_raw[1]] = 1'b1;
     end
   end
@@ -320,8 +345,8 @@ module issue_lsu #(
     logic [31:0] issue_trace_inc;
     logic [31:0] block_trace_inc;
     logic [31:0] stall_trace_inc;
-    watch_pc = watch_lsu_pc(lsu_uop.pc);
-    watch_issue_slots = watch_lsu_pc(issue_uop_0.pc) || watch_lsu_pc(issue_uop_1.pc);
+    watch_pc = watch_lsu_pc(issue_uop_0.pc) || watch_lsu_pc(issue_uop_1.pc);
+    watch_issue_slots = watch_pc;
     issue_trace_inc = '0;
     block_trace_inc = '0;
     stall_trace_inc = '0;
@@ -330,17 +355,32 @@ module issue_lsu #(
       lsu_block_trace_cnt_q <= '0;
       lsu_stall_trace_cnt_q <= '0;
     end else if (lsu_trace_en_q) begin
-      if (lsu_en && watch_pc &&
+      if (lsu_en[0] && watch_lsu_pc(issue_uop_0.pc) &&
           ((lsu_issue_trace_cnt_q + issue_trace_inc) < LSU_ISSUE_TRACE_BUDGET)) begin
-        $display("[issue-lsu] pc=%h rs1=%h rs2=%h imm=%h lsu_op=%0d is_ld=%0d is_st=%0d dst=%0d sb=%0d ftq=%0d epoch=%0d rvc=%0d flush=%0d fu_ready=%0d issue0_raw=%0d issue1_raw=%0d pick0=%0d pick1=%0d",
-                 lsu_uop.pc, lsu_v1, lsu_v2, lsu_uop.imm, lsu_uop.lsu_op, lsu_uop.is_load, lsu_uop.is_store,
-                 lsu_dst, lsu_stq_id, lsu_uop.ftq_id, lsu_uop.fetch_epoch, lsu_uop.is_rvc, flush_i, fu_ready_i,
+        $display("[issue-lsu] slot=0 pc=%h rs1=%h rs2=%h imm=%h lsu_op=%0d is_ld=%0d is_st=%0d dst=%0d sb=%0d ftq=%0d epoch=%0d rvc=%0d flush=%0d fu_ready=%0d issue0_raw=%0d issue1_raw=%0d pick0=%0d pick1=%0d",
+                 issue_uop_0.pc, lsu_v1[0], lsu_v2[0], issue_uop_0.imm, issue_uop_0.lsu_op, issue_uop_0.is_load, issue_uop_0.is_store,
+                 lsu_dst[0], lsu_stq_id[0], issue_uop_0.ftq_id, issue_uop_0.fetch_epoch, issue_uop_0.is_rvc, flush_i, fu_ready_i,
                  issue_valid_raw[0], issue_valid_raw[1], issue_pick_0, issue_pick_1);
         issue_trace_inc = issue_trace_inc + 32'd1;
         if (flush_i &&
             ((lsu_issue_trace_cnt_q + issue_trace_inc) < LSU_ISSUE_TRACE_BUDGET)) begin
-          $display("[issue-lsu-on-flush] pc=%h rs1=%h rs2=%h dst=%0d sb=%0d ftq=%0d epoch=%0d fu_ready=%0d issue0_raw=%0d issue1_raw=%0d",
-                   lsu_uop.pc, lsu_v1, lsu_v2, lsu_dst, lsu_stq_id, lsu_uop.ftq_id, lsu_uop.fetch_epoch, fu_ready_i,
+          $display("[issue-lsu-on-flush] slot=0 pc=%h rs1=%h rs2=%h dst=%0d sb=%0d ftq=%0d epoch=%0d fu_ready=%0d issue0_raw=%0d issue1_raw=%0d",
+                   issue_uop_0.pc, lsu_v1[0], lsu_v2[0], lsu_dst[0], lsu_stq_id[0], issue_uop_0.ftq_id, issue_uop_0.fetch_epoch, fu_ready_i,
+                   issue_valid_raw[0], issue_valid_raw[1]);
+          issue_trace_inc = issue_trace_inc + 32'd1;
+        end
+      end
+      if (lsu_en[1] && watch_lsu_pc(issue_uop_1.pc) &&
+          ((lsu_issue_trace_cnt_q + issue_trace_inc) < LSU_ISSUE_TRACE_BUDGET)) begin
+        $display("[issue-lsu] slot=1 pc=%h rs1=%h rs2=%h imm=%h lsu_op=%0d is_ld=%0d is_st=%0d dst=%0d sb=%0d ftq=%0d epoch=%0d rvc=%0d flush=%0d fu_ready=%0d issue0_raw=%0d issue1_raw=%0d pick0=%0d pick1=%0d",
+                 issue_uop_1.pc, lsu_v1[1], lsu_v2[1], issue_uop_1.imm, issue_uop_1.lsu_op, issue_uop_1.is_load, issue_uop_1.is_store,
+                 lsu_dst[1], lsu_stq_id[1], issue_uop_1.ftq_id, issue_uop_1.fetch_epoch, issue_uop_1.is_rvc, flush_i, fu_ready_i,
+                 issue_valid_raw[0], issue_valid_raw[1], issue_pick_0, issue_pick_1);
+        issue_trace_inc = issue_trace_inc + 32'd1;
+        if (flush_i &&
+            ((lsu_issue_trace_cnt_q + issue_trace_inc) < LSU_ISSUE_TRACE_BUDGET)) begin
+          $display("[issue-lsu-on-flush] slot=1 pc=%h rs1=%h rs2=%h dst=%0d sb=%0d ftq=%0d epoch=%0d fu_ready=%0d issue0_raw=%0d issue1_raw=%0d",
+                   issue_uop_1.pc, lsu_v1[1], lsu_v2[1], lsu_dst[1], lsu_stq_id[1], issue_uop_1.ftq_id, issue_uop_1.fetch_epoch, fu_ready_i,
                    issue_valid_raw[0], issue_valid_raw[1]);
           issue_trace_inc = issue_trace_inc + 32'd1;
         end

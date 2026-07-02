@@ -36,13 +36,20 @@ module ldq #(
     // ---------------------------------------------------------------
     // Allocate (load admitted into the pipe). Payload carries the load's
     // PC / physical address / byte-enable mask for later disambiguation.
+    // Two independent alloc ports support admitting up to 2 loads in the
+    // same cycle (dcache-load-dual-issue Phase 2): each port targets its
+    // own free slot, found by excluding whichever slot the other port
+    // already claimed this cycle (see free_idx0/free_idx1 below).
+    // alloc_ready_o stays as a single-port (!full) legacy alias; callers
+    // driving both ports should instead gate admission on free_count_o.
     // ---------------------------------------------------------------
-    input  logic                     alloc_valid_i,
-    output logic                     alloc_ready_o,
-    input  logic [ROB_IDX_WIDTH-1:0] alloc_rob_tag_i,
-    input  logic [         PLEN-1:0] alloc_pc_i,
-    input  logic [         PLEN-1:0] alloc_paddr_i,
-    input  logic [     BE_WIDTH-1:0] alloc_be_i,
+    input  logic [0:1]                     alloc_valid_i,
+    output logic                           alloc_ready_o,
+    output logic [$clog2(DEPTH + 1)-1:0]   free_count_o,
+    input  logic [0:1][ROB_IDX_WIDTH-1:0] alloc_rob_tag_i,
+    input  logic [0:1][         PLEN-1:0] alloc_pc_i,
+    input  logic [0:1][         PLEN-1:0] alloc_paddr_i,
+    input  logic [0:1][     BE_WIDTH-1:0] alloc_be_i,
 
     // ---------------------------------------------------------------
     // Commit free (load retired). The ROB commit ports are broadcast here;
@@ -105,27 +112,39 @@ module ldq #(
   endfunction
 
   // -----------------------------------------------------------------
-  // Allocation: pick the lowest-index free (invalid) slot.
+  // Allocation: pick the two lowest-index free (invalid) slots. free_idx1's
+  // scan excludes free_idx0 so the two ports never target the same slot.
   // -----------------------------------------------------------------
-  logic             free_found;
-  logic [PTR_W-1:0] free_idx;
+  logic             free_found0;
+  logic [PTR_W-1:0] free_idx0;
+  logic             free_found1;
+  logic [PTR_W-1:0] free_idx1;
   always_comb begin
-    free_found = 1'b0;
-    free_idx   = '0;
+    free_found0 = 1'b0;
+    free_idx0   = '0;
     for (int i = 0; i < DEPTH; i++) begin
-      if (!free_found && !valid_q[i]) begin
-        free_found = 1'b1;
-        free_idx   = PTR_W'(i);
+      if (!free_found0 && !valid_q[i]) begin
+        free_found0 = 1'b1;
+        free_idx0   = PTR_W'(i);
+      end
+    end
+    free_found1 = 1'b0;
+    free_idx1   = '0;
+    for (int i = 0; i < DEPTH; i++) begin
+      if (!free_found1 && !valid_q[i] && (PTR_W'(i) != free_idx0)) begin
+        free_found1 = 1'b1;
+        free_idx1   = PTR_W'(i);
       end
     end
   end
-
-  logic alloc_fire;
+  logic alloc_fire0, alloc_fire1;
   assign full_o        = (count_q == CNT_W'(DEPTH));
   assign empty_o       = (count_q == CNT_W'(0));
   assign count_o       = count_q;
+  assign free_count_o  = CNT_W'(DEPTH) - count_q;
   assign alloc_ready_o = !full_o;
-  assign alloc_fire    = alloc_valid_i && alloc_ready_o;
+  assign alloc_fire0   = alloc_valid_i[0] && free_found0;
+  assign alloc_fire1   = alloc_valid_i[1] && free_found1;
 
   // -----------------------------------------------------------------
   // Commit free match: an entry is freed when its rob_tag equals a valid
@@ -248,15 +267,23 @@ module ldq #(
       count_q <= '0;
     end else begin
       for (int i = 0; i < DEPTH; i++) begin
-        if (alloc_fire && (PTR_W'(i) == free_idx)) begin
+        if (alloc_fire0 && (PTR_W'(i) == free_idx0)) begin
           // Allocation targets a free (invalid) slot, so it never collides
-          // with a free_match (which only hits valid slots).
+          // with a free_match (which only hits valid slots). free_idx0 and
+          // free_idx1 are distinct by construction (see comb block above).
           valid_q[i] <= 1'b1;
           executed_q[i] <= 1'b0;
-          rob_tag_q[i] <= alloc_rob_tag_i;
-          pc_q[i] <= alloc_pc_i;
-          paddr_q[i] <= alloc_paddr_i;
-          be_q[i] <= alloc_be_i;
+          rob_tag_q[i] <= alloc_rob_tag_i[0];
+          pc_q[i] <= alloc_pc_i[0];
+          paddr_q[i] <= alloc_paddr_i[0];
+          be_q[i] <= alloc_be_i[0];
+        end else if (alloc_fire1 && (PTR_W'(i) == free_idx1)) begin
+          valid_q[i] <= 1'b1;
+          executed_q[i] <= 1'b0;
+          rob_tag_q[i] <= alloc_rob_tag_i[1];
+          pc_q[i] <= alloc_pc_i[1];
+          paddr_q[i] <= alloc_paddr_i[1];
+          be_q[i] <= alloc_be_i[1];
         end else if (free_match[i]) begin
           valid_q[i] <= 1'b0;
         end else if (valid_q[i]) begin
@@ -268,7 +295,7 @@ module ldq #(
         end
       end
 
-      count_q <= count_q + CNT_W'(alloc_fire) - free_count;
+      count_q <= count_q + CNT_W'(alloc_fire0) + CNT_W'(alloc_fire1) - free_count;
     end
   end
 
@@ -282,9 +309,13 @@ module ldq #(
   // overflow.
   always_ff @(posedge clk_i) begin
     if (rst_ni && !flush_i) begin
-      if (alloc_fire) begin
-        assert (free_found)
-        else $fatal(1, "ldq: alloc_fire without a free slot");
+      if (alloc_fire0) begin
+        assert (free_found0)
+        else $fatal(1, "ldq: alloc_fire0 without a free slot");
+      end
+      if (alloc_fire1) begin
+        assert (free_found1)
+        else $fatal(1, "ldq: alloc_fire1 without a free slot");
       end
     end
   end

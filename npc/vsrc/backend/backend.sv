@@ -524,11 +524,11 @@ module backend #(
   decode_pkg::lsu_op_e st_ex_op;
   logic [ROB_IDX_WIDTH-1:0] st_ex_rob_idx;
 
-  logic [Cfg.PLEN-1:0] stq_fwd_addr;
-  logic [Cfg.XLEN/8-1:0] stq_fwd_be;
-  logic [ROB_IDX_WIDTH-1:0] stq_fwd_rob_idx;
-  logic stq_fwd_hit;
-  logic [Cfg.XLEN-1:0] stq_fwd_data;
+  logic [Cfg.PLEN-1:0] stq_fwd_addr[0:1];
+  logic [Cfg.XLEN/8-1:0] stq_fwd_be[0:1];
+  logic [ROB_IDX_WIDTH-1:0] stq_fwd_rob_idx[0:1];
+  logic stq_fwd_hit[0:1];
+  logic [Cfg.XLEN-1:0] stq_fwd_data[0:1];
   logic st_order_query_valid;
   logic [ST_IDX_WIDTH-1:0] st_order_query_st_id;
   logic st_order_query_clear;
@@ -608,11 +608,17 @@ module backend #(
       .st_wb_fire_i(st_wb_fire),
       .st_unreported_count_o(st_unreported_count),
 
-      .load_be_i(stq_fwd_be),
-      .load_addr_i(stq_fwd_addr),
-      .load_rob_idx_i(stq_fwd_rob_idx),
-      .load_hit_o(stq_fwd_hit),
-      .load_data_o(stq_fwd_data),
+      .load_be_i(stq_fwd_be[0]),
+      .load_addr_i(stq_fwd_addr[0]),
+      .load_rob_idx_i(stq_fwd_rob_idx[0]),
+      .load_hit_o(stq_fwd_hit[0]),
+      .load_data_o(stq_fwd_data[0]),
+
+      .load_be_i2(stq_fwd_be[1]),
+      .load_addr_i2(stq_fwd_addr[1]),
+      .load_rob_idx_i2(stq_fwd_rob_idx[1]),
+      .load_hit_o2(stq_fwd_hit[1]),
+      .load_data_o2(stq_fwd_data[1]),
 
       .rob_head_i(rob_head_ptr),
 
@@ -1501,7 +1507,10 @@ module backend #(
       .lsu_v1   (lsu_v1),
       .lsu_v2   (lsu_v2),
       .lsu_dst  (lsu_dst),
-      .lsu_stq_id(lsu_stq_id)
+      .lsu_stq_id(lsu_stq_id),
+      .lsu_cand_v(lsu_cand_v),
+      .lsu_pick_v(lsu_pick_v),
+      .dual_port1_en_i(lsu_dual_port1_en)
   );
 
   issue_single #(
@@ -1692,11 +1701,14 @@ module backend #(
                                    bru_mispred;
 
   // LSU
-  logic lsu_en;
-  decode_pkg::uop_t lsu_uop;
-  logic [Cfg.XLEN-1:0] lsu_v1, lsu_v2;
-  logic [ROB_IDX_WIDTH-1:0] lsu_dst;
-  logic [ST_IDX_WIDTH-1:0] lsu_stq_id;
+  logic lsu_en[0:1];
+  decode_pkg::uop_t lsu_uop[0:1];
+  logic [Cfg.XLEN-1:0] lsu_v1[0:1], lsu_v2[0:1];
+  logic [ROB_IDX_WIDTH-1:0] lsu_dst[0:1];
+  logic [ST_IDX_WIDTH-1:0] lsu_stq_id[0:1];
+  logic lsu_cand_v[0:1];
+  logic lsu_pick_v[0:1];
+  logic lsu_dual_port1_en;
 
   logic lsu_req_ready;
   logic [LSU_WB_PORTS-1:0] lsu_wb_valid;
@@ -1921,6 +1933,9 @@ module backend #(
 
       .req_valid_i(lsu_en),
       .req_ready_o(lsu_req_ready),
+      .pick_valid_i(lsu_pick_v),
+      .dual_port1_en_o(lsu_dual_port1_en),
+      .cand_valid_i(lsu_cand_v),
       .uop_i      (lsu_uop),
       .rs1_data_i (lsu_v1),
       .rs2_data_i (lsu_v2),
@@ -1940,11 +1955,16 @@ module backend #(
       .st_ex_op_o   (st_ex_op),
       .st_ex_rob_idx_o(st_ex_rob_idx),
 
-      .stq_fwd_addr_o(stq_fwd_addr),
-      .stq_fwd_be_o(stq_fwd_be),
-      .stq_fwd_rob_idx_o(stq_fwd_rob_idx),
-      .stq_fwd_hit_i(stq_fwd_hit),
-      .stq_fwd_data_i(stq_fwd_data),
+      .stq_fwd_addr_o(stq_fwd_addr[0]),
+      .stq_fwd_be_o(stq_fwd_be[0]),
+      .stq_fwd_rob_idx_o(stq_fwd_rob_idx[0]),
+      .stq_fwd_hit_i(stq_fwd_hit[0]),
+      .stq_fwd_data_i(stq_fwd_data[0]),
+      .stq_fwd_addr_o2(stq_fwd_addr[1]),
+      .stq_fwd_be_o2(stq_fwd_be[1]),
+      .stq_fwd_rob_idx_o2(stq_fwd_rob_idx[1]),
+      .stq_fwd_hit_i2(stq_fwd_hit[1]),
+      .stq_fwd_data_i2(stq_fwd_data[1]),
       .st_order_query_valid_o(st_order_query_valid),
       .st_order_query_st_id_o(st_order_query_st_id),
       .st_order_query_clear_i(st_order_query_clear),

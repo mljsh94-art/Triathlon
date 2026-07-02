@@ -562,7 +562,7 @@ module tb_triathlon #(
   assign pipe_bus.dec_ready = dbg_dec_ready_o;
   assign pipe_bus.rob_ready = dbg_rob_ready_o;
   assign mem_bus.valid = 1'b1;
-  assign mem_bus.lsu_issue_valid = dut.u_backend.lsu_en;
+  assign mem_bus.lsu_issue_valid = dut.u_backend.lsu_en[0];
   assign mem_bus.lsu_req_ready = dut.u_backend.lsu_req_ready;
   assign dbg_pipe_bus_valid_o = pipe_bus.valid;
   assign dbg_pipe_bus_fe_valid_o = pipe_bus.fe_valid;
@@ -667,7 +667,7 @@ module tb_triathlon #(
   assign dbg_wb_rob_idx_o = dut.u_backend.wb_rob_idx;
   assign dbg_fu_valid_o = dut.u_backend.fu_valid;
   assign dbg_fu_ready_o = dut.u_backend.fu_ready;
-  assign dbg_lsu_issue_valid_o  = dut.u_backend.lsu_en;
+  assign dbg_lsu_issue_valid_o  = dut.u_backend.lsu_en[0];
   assign dbg_lsu_req_ready_o    = dut.u_backend.lsu_req_ready;
   assign dbg_lsu_issue_ready_o  = dut.u_backend.lsu_issue_ready;
   assign dbg_lsu_issue_raw0_o   = dut.u_backend.u_issue_lsu.issue_valid_raw[0];
@@ -676,10 +676,10 @@ module tb_triathlon #(
   assign dbg_lsu_issue_pick1_o  = dut.u_backend.u_issue_lsu.issue_pick_1;
   assign dbg_lsu_issue_blk0_o   = dut.u_backend.u_issue_lsu.issue_blocked_low_addr_spec_0;
   assign dbg_lsu_issue_blk1_o   = dut.u_backend.u_issue_lsu.issue_blocked_low_addr_spec_1;
-  assign dbg_lsu_sel_pc_o       = dut.u_backend.lsu_uop.pc;
-  assign dbg_lsu_sel_is_load_o  = dut.u_backend.lsu_uop.is_load;
-  assign dbg_lsu_sel_is_store_o = dut.u_backend.lsu_uop.is_store;
-  assign dbg_lsu_sel_dst_o      = dut.u_backend.lsu_dst;
+  assign dbg_lsu_sel_pc_o       = dut.u_backend.lsu_uop[0].pc;
+  assign dbg_lsu_sel_is_load_o  = dut.u_backend.lsu_uop[0].is_load;
+  assign dbg_lsu_sel_is_store_o = dut.u_backend.lsu_uop[0].is_store;
+  assign dbg_lsu_sel_dst_o      = dut.u_backend.lsu_dst[0];
   assign dbg_lsu_free_count_o   = dut.u_backend.lsu_free_count;
   assign dbg_lsu_grp_lane_busy_o = dut.u_backend.u_lsu_group.dbg_lane_busy;
   assign dbg_lsu_grp_alloc_fire_o = dut.u_backend.u_lsu_group.dbg_alloc_fire;

@@ -35,7 +35,8 @@ module tb_stat_corr (
       .HIST_LEN1(Cfg.BPU_SC_HIST1),
       .HIST_LEN2(Cfg.BPU_SC_HIST2),
       .HIST_LEN3(Cfg.BPU_SC_HIST3),
-      .THRESH_INIT(Cfg.BPU_SC_THRESH_INIT)
+      .THRESH_INIT(Cfg.BPU_SC_THRESH_INIT),
+      .TAGE_WEAK_MAX(Cfg.BPU_SC_CONF_THRESH)
   ) dut (
       .clk_i(clk_i),
       .rst_i(rst_i),

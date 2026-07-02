@@ -9,6 +9,7 @@ module bpu #(
     parameter bit BHT_HASH_ENABLE = 1'b1,
     parameter bit USE_TAGE = 1'b0,
     parameter bit USE_SC = 1'b0,
+    parameter bit SC_OVERRIDE_EN = 1'b1,
     parameter int unsigned GHR_BITS = 8,
     parameter int unsigned SC_ENTRIES = 512,
     parameter int unsigned SC_NUM_TABLES = 4,
@@ -17,7 +18,7 @@ module bpu #(
     parameter int unsigned SC_HIST_LEN2 = 16,
     parameter int unsigned SC_HIST_LEN3 = 32,
     parameter int unsigned SC_THRESH_INIT = 6,
-    parameter int unsigned SC_CONF_THRESH = 3,  // deprecated: use SC_THRESH_INIT
+    parameter int unsigned SC_CONF_THRESH = 1,  // |tage_conf| <= this 才允许 SC override
     parameter bit SC_REQUIRE_BOTH_WEAK = 1'b1,  // deprecated: top-level arbiter no longer uses
     parameter bit SC_BLOCK_ON_TAGE_HIT = 1'b1,  // deprecated: top-level arbiter no longer uses
     parameter bit USE_LOOP = 1'b0,
@@ -368,7 +369,8 @@ module bpu #(
       .HIST_LEN1(SC_HIST_LEN1),
       .HIST_LEN2(SC_HIST_LEN2),
       .HIST_LEN3(SC_HIST_LEN3),
-      .THRESH_INIT(SC_THRESH_INIT)
+      .THRESH_INIT(SC_THRESH_INIT),
+      .TAGE_WEAK_MAX(SC_CONF_THRESH)
   ) u_stat_corr (
       .clk_i(clk_i),
       .rst_i(rst_i),
@@ -593,7 +595,7 @@ module bpu #(
     int picked_cond_lane;
 
     for (int k = 0; k < 2; k++) begin
-      if (USE_SC && sc_use_lane_w[k]) begin
+      if (USE_SC && SC_OVERRIDE_EN && sc_use_lane_w[k]) begin
         cond_dir[k] = sc_taken_lane_w[k];
       end else begin
         cond_dir[k] = tage_taken_lane_w[k];
@@ -674,7 +676,7 @@ module bpu #(
     // picked cond lane 的 SC meta mux 给 track / pred_resp。
     if (picked_is_cond) begin
       sc_taken_w     = sc_taken_lane_w[picked_cond_lane];
-      sc_confident_w = sc_use_lane_w[picked_cond_lane];
+      sc_confident_w = SC_OVERRIDE_EN && sc_use_lane_w[picked_cond_lane];
     end else begin
       sc_taken_w     = 1'b0;
       sc_confident_w = 1'b0;

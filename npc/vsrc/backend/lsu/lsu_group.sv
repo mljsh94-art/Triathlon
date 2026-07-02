@@ -29,15 +29,41 @@ module lsu_group #(
 
     // =========================================================
     // 1) Request from Issue/Execute
+    // Dual dispatch lanes (port0/port1, dcache-load-dual-issue Phase 2): up
+    // to 2 load/store candidates can arrive from issue_lsu in one cycle.
+    // req_ready_o stays a SINGLE ready line with an "all or nothing"
+    // contract: issue gates both lanes off one shared fu_ready_i (see
+    // issue_base_allow in issue_lsu.sv), so req_ready_o is only asserted
+    // when every candidate flagged by cand_valid_i this cycle can be
+    // admitted (0, 1 or 2 of them). cand_valid_i mirrors the RS pick
+    // *before* fu_ready_i gating and must be what req_ready_o's combinational
+    // logic reads (never req_valid_i / lsu_en), or fu_ready_i <-> req_ready_o
+    // would form a combinational loop (see issue_lsu.sv comment above
+    // lsu_cand_v). 2x AGU + a dual alloc-grant + dual ldq alloc (see
+    // dual_candidate_ok / dual_fire below) let the group actually admit both
+    // candidates in one cycle when they are both plain loads that need no
+    // MMU walk; anything else (a store, AMO, LR, misaligned access, or a
+    // walk-needing candidate — see the MMU single-walk mutex comment above
+    // dual_candidate_ok) still falls back to holding req_ready_o at 0 for the
+    // whole pair (see req_ready_o below) so a flagged-but-unconsumed lane can
+    // never be silently dropped, only deferred to a later cycle where port0
+    // (sel_uop's tie-break winner) gets to admit alone.
     // =========================================================
-    input  logic                                 req_valid_i,
+    input  logic                                 req_valid_i [0:1],
     output logic                                 req_ready_o,
-    input  decode_pkg::uop_t                     uop_i,
-    input  logic             [     Cfg.XLEN-1:0] rs1_data_i,
-    input  logic             [     Cfg.XLEN-1:0] rs2_data_i,
-    input  logic             [ROB_IDX_WIDTH-1:0] rob_tag_i,
+    // Raw RS picks from issue (pre port1 gating). Used to classify whether
+    // port1 is a true dual-issue peer this cycle without a cand_valid loop.
+    input  logic                                 pick_valid_i[0:1],
+    // When both pick_valid_i lanes are set but the pair cannot use the dual
+    // fast path (load+store, AMO, walk, ...), issue must not grant/fire port1.
+    output logic                                 dual_port1_en_o,
+    input  logic                                 cand_valid_i[0:1],
+    input  decode_pkg::uop_t                     uop_i        [0:1],
+    input  logic             [     Cfg.XLEN-1:0] rs1_data_i   [0:1],
+    input  logic             [     Cfg.XLEN-1:0] rs2_data_i   [0:1],
+    input  logic             [ROB_IDX_WIDTH-1:0] rob_tag_i    [0:1],
     input  logic             [ROB_IDX_WIDTH-1:0] rob_head_i,
-    input  logic             [ ST_IDX_WIDTH-1:0] st_id_i,
+    input  logic             [ ST_IDX_WIDTH-1:0] st_id_i      [0:1],
     input  logic             [            31:0]   mmu_satp_i,
     input  logic             [             1:0]   mmu_priv_i,
     input  logic                                 mmu_sum_i,
@@ -55,11 +81,23 @@ module lsu_group #(
     output logic                [ROB_IDX_WIDTH-1:0] st_ex_rob_idx_o,
 
     // Store-to-Load Forwarding (query) — stq 为唯一转发源
+    // Port0/bus0 query: the single-consumption sel_uop/pend pipeline's load
+    // (dispatch port mux — see "Dispatch port mux" comment below).
     output logic [     Cfg.PLEN-1:0] stq_fwd_addr_o,
     output logic [   Cfg.XLEN/8-1:0] stq_fwd_be_o,
     output logic [ROB_IDX_WIDTH-1:0] stq_fwd_rob_idx_o,
     input  logic                     stq_fwd_hit_i,
     input  logic [     Cfg.XLEN-1:0] stq_fwd_data_i,
+    // Port1/bus1 query (dcache-load-dual-issue Phase 2, task lsu-group-mmu-fwd):
+    // second, fully independent query for the dual-admission fast path's plain
+    // load (see dual_fire below). Only meaningful the cycle dual_fire is
+    // asserted; connects to stq's second query port (load_be_i2/addr_i2/
+    // rob_idx_i2 -> load_hit_o2/data_o2).
+    output logic [     Cfg.PLEN-1:0] stq_fwd_addr_o2,
+    output logic [   Cfg.XLEN/8-1:0] stq_fwd_be_o2,
+    output logic [ROB_IDX_WIDTH-1:0] stq_fwd_rob_idx_o2,
+    input  logic                     stq_fwd_hit_i2,
+    input  logic [     Cfg.XLEN-1:0] stq_fwd_data_i2,
     output logic                     st_order_query_valid_o,
     output logic [ ST_IDX_WIDTH-1:0] st_order_query_st_id_o,
     input  logic                     st_order_query_clear_i,
@@ -193,6 +231,10 @@ module lsu_group #(
   logic [15:0] lsu_stall_streak_q;
   logic lsu_trace_en_q;
   initial lsu_trace_en_q = $test$plusargs("npc_diag_trace");
+  // #region agent log
+  integer agent_dbg_fd;
+  initial agent_dbg_fd = $fopen("/mnt/d/sjj_ict2026/Triathlon/debug-0e02a7.log", "a");
+  // #endregion
 
   function automatic logic lsu_diag_watch_pc(input logic [31:0] pc);
     begin
@@ -303,7 +345,13 @@ module lsu_group #(
   logic                                                        amo_wb_fire;
   logic                [LANE_SEL_WIDTH-1:0]                    amo_wb_lane;
 
-  logic                                                        ldq_alloc_valid;
+  // ldq alloc port0 = bus0 (single-consumption pipeline, port0/pend);
+  // port1 = the dual-admission fast path's second, plain-load-only lane.
+  logic                [0:1]                                   ldq_alloc_valid;
+  logic                [0:1][ROB_IDX_WIDTH-1:0]                 ldq_alloc_rob_tag;
+  logic                [0:1][      Cfg.PLEN-1:0]                ldq_alloc_pc;
+  logic                [0:1][      Cfg.PLEN-1:0]                ldq_alloc_paddr;
+  logic                [0:1][     SQ_BE_WIDTH-1:0]              ldq_alloc_be;
   logic                                                        ldq_alloc_ready;
   logic                                                        ldq_full;
   logic                                                        ldq_empty;
@@ -326,8 +374,36 @@ module lsu_group #(
   logic                                                        sq_full;
   logic                                                        sq_empty;
   logic                [     SQ_BE_WIDTH-1:0]                 load_fwd_be;
+  // Byte-enable mask for the dual-admission fast path's port1 (bus1) load —
+  // mirrors load_fwd_be but computed off port1's own uop/AGU output, never
+  // pend/sel_uop. Feeds both stq_fwd_be_o2 and ldq_alloc_be[1].
+  logic                [     SQ_BE_WIDTH-1:0]                 load_fwd_be_p1;
   logic                [      Cfg.XLEN-1:0]                   req_eff_addr_xlen;
   logic                [      Cfg.PLEN-1:0]                   req_eff_addr;
+
+  // ---------------------------------------------------------------
+  // Dispatch port mux ("bus0"): the MMU/pend/store/AMO/LR admission pipeline
+  // below is single-consumption, one candidate ("sel_*") at a time. `sel_*`
+  // picks the candidate payload — preferring port0, falling back to port1 —
+  // the same way the old scalar `uop_i`/etc. were always "live" regardless
+  // of grant; it must be driven from cand_valid_i (pre-fu_ready_i) so the
+  // combinational req_ready_o logic below never depends on req_valid_i and
+  // creates a loop through issue's fu_ready_i. `req_valid_or` is the actual
+  // (post-grant) request-present signal used to gate real admission side
+  // effects (MMU walk latch, alloc fire, ...); whenever it is asserted the
+  // active port is guaranteed to agree with `sel_*`'s pick, because
+  // req_ready_o (below) never admits both ports through *this* bus in the
+  // same cycle. A second candidate can still be admitted the same cycle
+  // through the separate dual-admission fast path ("bus1", see
+  // dual_candidate_ok/dual_fire) when it's a plain load needing no walk.
+  // ---------------------------------------------------------------
+  logic                                                        req_valid_or;
+  decode_pkg::uop_t                                            sel_uop;
+  logic                [      Cfg.XLEN-1:0]                   sel_rs1_data;
+  logic                [      Cfg.XLEN-1:0]                   sel_rs2_data;
+  logic                [ ROB_IDX_WIDTH-1:0]                   sel_rob_tag;
+  logic                [  ST_IDX_WIDTH-1:0]                   sel_st_id;
+  logic                                                        cand_two_valid;
 
   logic                                                        req_is_load;
   logic                                                        req_is_store;
@@ -351,6 +427,66 @@ module lsu_group #(
   decode_pkg::uop_t                                            selected_uop;
   decode_pkg::uop_t                                            lane_uop;
   logic                [      Cfg.XLEN-1:0]                   selected_rs2_data;
+
+  // ---------------------------------------------------------------
+  // Dual-admission fast path (dcache-load-dual-issue Phase 2, step 2 of 4):
+  // 2x AGU decode port0/port1 independently (no pre-mux), enabling a second,
+  // fully separate admission this cycle for a *plain* load pair that neither
+  // needs a page-table walk (translation_active_w mirrors lsu_mmu's own
+  // need_walk test, computed here without touching the single MMU/DTLB
+  // instance) nor is misaligned/AMO/LR (those keep going through the single
+  // -consumption sel_uop/pend pipeline, admitted at most one per cycle).
+  // Port0's own admission still flows through the existing sel_uop/AGU/MMU
+  // pipeline below unchanged; port1 gets a parallel "bus1" broadcast that a
+  // second, distinct free ld_pipe lane + a second free ldq slot pick up in
+  // the same cycle.
+  //
+  // MMU single-walk mutex (dcache-load-dual-issue task lsu-group-mmu-fwd):
+  // u_lsu_mmu/DTLB stay a single instance with one outstanding walk, fed
+  // solely by sel_uop (which is always port0's uop when cand_two_valid, since
+  // cand_valid_i[0] wins ties in the "Dispatch port mux" below) — port1 never
+  // reaches the MMU directly. dual_candidate_ok therefore requires
+  // !req_p0_need_walk && !req_p1_need_walk: whenever *either* side would need
+  // a walk, the pair is simply never dual-admitted. In that case req_ready_o
+  // (below) applies its normal all-or-nothing rule and holds at 0 for the
+  // *whole* pair this cycle — not just port1 — because issue's single
+  // fu_ready_i clears both RS entries together the instant req_ready_o=1
+  // (see the req_ready_o port comment above); admitting port0 alone here
+  // would silently drop port1's candidate. Both candidates simply retry next
+  // cycle: port0 keeps winning the sel_uop tie-break, so it is what actually
+  // enters the walk as soon as the pair's shape allows single-port admission
+  // (e.g. once cand_valid_i[1] no longer holds, or dual_candidate_ok's other
+  // gates open up) — i.e. "port0 priority, port1 backs off and retries".
+  // ---------------------------------------------------------------
+  logic                [      Cfg.XLEN-1:0]                   req_p0_eff_addr_xlen;
+  logic                [      Cfg.PLEN-1:0]                   req_p0_eff_addr;
+  logic                                                        req_p0_is_load;
+  logic                                                        req_p0_is_store;
+  logic                                                        req_p0_misaligned;
+  logic                [      Cfg.XLEN-1:0]                   req_p1_eff_addr_xlen;
+  logic                [      Cfg.PLEN-1:0]                   req_p1_eff_addr;
+  logic                                                        req_p1_is_load;
+  logic                                                        req_p1_is_store;
+  logic                                                        req_p1_misaligned;
+  logic                                                        translation_active_w;
+  logic                                                        req_p0_need_walk;
+  logic                                                        req_p1_need_walk;
+  logic                                                        req_p0_plain_load;
+  logic                                                        req_p1_plain_load;
+  logic                                                        dual_pair_shape_ok;
+  logic                                                        dual_pair_wanted;
+  logic                                                        dual_pair_active;
+  logic                                                        dual_candidate_ok;
+  logic                                                        dual_fire;
+  logic                [         N_LSU-1:0]                    alloc_grant_p1;
+  logic                [LANE_SEL_WIDTH-1:0]                    alloc_lane_idx_p1;
+  logic                                                        load_req_ready_p1;
+  decode_pkg::uop_t                                            bus1_uop;
+  logic                [      Cfg.XLEN-1:0]                   bus1_rs2_data;
+  logic                [      Cfg.PLEN-1:0]                   bus1_eff_addr;
+  logic                [ ROB_IDX_WIDTH-1:0]                   bus1_rob_tag;
+  logic                [  ST_IDX_WIDTH-1:0]                   bus1_st_id;
+  logic                [$clog2(LDQ_DEPTH + 1)-1:0]             ldq_free_count;
 
   logic                                                        pend_valid_q;
   decode_pkg::uop_t                                            pend_uop_q;
@@ -511,9 +647,30 @@ module lsu_group #(
     end
   endfunction
 
+  // Port mux: see the "Dispatch port mux" comment on the signal declarations
+  // above. cand_valid_i[0] wins ties so a lone port1 candidate (e.g. port0
+  // blocked by spec_low_addr while port1 isn't) still flows through.
   always_comb begin
-    selected_uop = pend_valid_q ? pend_uop_q : uop_i;
-    selected_rs2_data = pend_valid_q ? pend_rs2_data_q : rs2_data_i;
+    req_valid_or   = req_valid_i[0] || req_valid_i[1];
+    cand_two_valid = cand_valid_i[0] && cand_valid_i[1];
+    if (cand_valid_i[0]) begin
+      sel_uop      = uop_i[0];
+      sel_rs1_data = rs1_data_i[0];
+      sel_rs2_data = rs2_data_i[0];
+      sel_rob_tag  = rob_tag_i[0];
+      sel_st_id    = st_id_i[0];
+    end else begin
+      sel_uop      = uop_i[1];
+      sel_rs1_data = rs1_data_i[1];
+      sel_rs2_data = rs2_data_i[1];
+      sel_rob_tag  = rob_tag_i[1];
+      sel_st_id    = st_id_i[1];
+    end
+  end
+
+  always_comb begin
+    selected_uop = pend_valid_q ? pend_uop_q : sel_uop;
+    selected_rs2_data = pend_valid_q ? pend_rs2_data_q : sel_rs2_data;
     lane_uop = selected_uop;
     if (lane_uop.lsu_op == decode_pkg::LSU_AMO) begin
       lane_uop.is_load  = 1'b1;
@@ -521,25 +678,74 @@ module lsu_group #(
     end
   end
 
+  // Two independent, unconditional AGU instances (port0/port1): unlike the
+  // old single u_agu (fed the post-mux sel_uop/sel_rs1_data), these decode
+  // both candidates every cycle regardless of grant, so the dual-admission
+  // fast path below never waits on an extra AGU cycle. The single-consumption
+  // pipeline (req_in_eff_addr/agu_is_load/agu_is_store/agu_misaligned) is
+  // recovered by post-muxing the two outputs the same way sel_uop already
+  // does (cand_valid_i[0] wins ties) — behaviourally identical to the old
+  // pre-mux-then-AGU arrangement.
   lsu_agu #(
       .Cfg(Cfg)
-  ) u_agu (
-      .uop_i(uop_i),
-      .rs1_data_i(rs1_data_i),
-      .eff_addr_xlen_o(req_in_eff_addr_xlen),
-      .eff_addr_o(req_in_eff_addr),
-      .is_load_o(agu_is_load),
-      .is_store_o(agu_is_store),
+  ) u_agu_p0 (
+      .uop_i(uop_i[0]),
+      .rs1_data_i(rs1_data_i[0]),
+      .eff_addr_xlen_o(req_p0_eff_addr_xlen),
+      .eff_addr_o(req_p0_eff_addr),
+      .is_load_o(req_p0_is_load),
+      .is_store_o(req_p0_is_store),
       .is_amo_o(),
-      .misaligned_o(agu_misaligned)
+      .misaligned_o(req_p0_misaligned)
   );
+
+  lsu_agu #(
+      .Cfg(Cfg)
+  ) u_agu_p1 (
+      .uop_i(uop_i[1]),
+      .rs1_data_i(rs1_data_i[1]),
+      .eff_addr_xlen_o(req_p1_eff_addr_xlen),
+      .eff_addr_o(req_p1_eff_addr),
+      .is_load_o(req_p1_is_load),
+      .is_store_o(req_p1_is_store),
+      .is_amo_o(),
+      .misaligned_o(req_p1_misaligned)
+  );
+
+  assign req_in_eff_addr_xlen = cand_valid_i[0] ? req_p0_eff_addr_xlen : req_p1_eff_addr_xlen;
+  assign req_in_eff_addr      = cand_valid_i[0] ? req_p0_eff_addr : req_p1_eff_addr;
+  assign agu_is_load           = cand_valid_i[0] ? req_p0_is_load : req_p1_is_load;
+  assign agu_is_store          = cand_valid_i[0] ? req_p0_is_store : req_p1_is_store;
+  assign agu_misaligned        = cand_valid_i[0] ? req_p0_misaligned : req_p1_misaligned;
+
+  // translation_active_w mirrors lsu_mmu's private `translation_active`
+  // (satp.MODE set and not M-mode) purely to let the dual-admission path
+  // classify both candidates' need-walk status without a second MMU/DTLB
+  // instance. It does not replace or duplicate the actual walk (still solely
+  // owned by u_lsu_mmu below).
+  assign translation_active_w = mmu_satp_i[31] && (mmu_priv_i != 2'b11);
+  assign req_p0_need_walk = translation_active_w && (req_p0_is_load || req_p0_is_store) && !req_p0_misaligned;
+  assign req_p1_need_walk = translation_active_w && (req_p1_is_load || req_p1_is_store) && !req_p1_misaligned;
+  assign req_p0_plain_load = uop_i[0].is_load && !uop_i[0].is_store &&
+                             (uop_i[0].lsu_op != decode_pkg::LSU_AMO) &&
+                             (uop_i[0].lsu_op != decode_pkg::LSU_LR);
+  assign req_p1_plain_load = uop_i[1].is_load && !uop_i[1].is_store &&
+                             (uop_i[1].lsu_op != decode_pkg::LSU_AMO) &&
+                             (uop_i[1].lsu_op != decode_pkg::LSU_LR);
+
+  assign bus1_uop      = uop_i[1];
+  assign bus1_rs2_data = rs2_data_i[1];
+  assign bus1_eff_addr = req_p1_eff_addr;
+  assign bus1_rob_tag  = rob_tag_i[1];
+  assign bus1_st_id    = st_id_i[1];
+
 `ifndef SYNTHESIS
-  assign lsu_diag_pc_w = pend_valid_q ? pend_uop_q.pc : uop_i.pc;
+  assign lsu_diag_pc_w = pend_valid_q ? pend_uop_q.pc : sel_uop.pc;
   assign lsu_diag_stall_watch_w = lsu_diag_watch_pc(lsu_diag_pc_w);
   assign lsu_diag_stall_cond_w = lsu_diag_stall_watch_w && !flush_i &&
                                  ((pend_valid_q && (req_is_load || req_is_store) &&
                                    !load_alloc_fire && !store_req_fire) ||
-                                  (req_valid_i && (uop_i.is_load || uop_i.is_store) && !req_ready_o));
+                                  (req_valid_or && (sel_uop.is_load || sel_uop.is_store) && !req_ready_o));
 `endif
 
   // Unique address-translation entry point: owns the sv32 MMU and the MMU
@@ -556,12 +762,12 @@ module lsu_group #(
       .rst_ni,
       .flush_i,
 
-      .req_valid_i(req_valid_i),
-      .uop_i(uop_i),
-      .rs1_data_i(rs1_data_i),
-      .rs2_data_i(rs2_data_i),
-      .rob_tag_i(rob_tag_i),
-      .st_id_i(st_id_i),
+      .req_valid_i(req_valid_or),
+      .uop_i(sel_uop),
+      .rs1_data_i(sel_rs1_data),
+      .rs2_data_i(sel_rs2_data),
+      .rob_tag_i(sel_rob_tag),
+      .st_id_i(sel_st_id),
       .req_vaddr_i(req_in_eff_addr),
       .req_is_load_i(agu_is_load),
       .req_is_store_i(agu_is_store),
@@ -610,6 +816,21 @@ module lsu_group #(
       assign lane_ld_rsp_data_w = lane_ld_rsp_from_a_w ? ld_rsp_data_i : ld_rsp_b_data_i;
       assign lane_ld_rsp_err_w = lane_ld_rsp_from_a_w ? ld_rsp_err_i : ld_rsp_b_err_i;
 
+      // Dual-admission fast path: this lane is the port1 (bus1) target this
+      // cycle iff dual_fire granted it that lane. lane_uop / sel_*-derived
+      // signals below remain bus0's broadcast (port0, or pend/single path).
+      logic lane_use_bus1;
+      assign lane_use_bus1 = dual_fire && (alloc_lane_idx_p1 == LANE_SEL_WIDTH'(gi));
+
+      // Per-lane STQ forward-query response mux: a lane driven by bus1 this
+      // cycle must see bus1's own query result (stq_fwd_hit_i2/data_i2), never
+      // bus0's — otherwise it would apply the wrong load's forwarding hit/data
+      // (see the top-level "MMU 单 walk 互斥/stq 双查询口" port comments).
+      logic lane_stq_fwd_hit_w;
+      logic [Cfg.XLEN-1:0] lane_stq_fwd_data_w;
+      assign lane_stq_fwd_hit_w  = lane_use_bus1 ? stq_fwd_hit_i2 : stq_fwd_hit_i;
+      assign lane_stq_fwd_data_w = lane_use_bus1 ? stq_fwd_data_i2 : stq_fwd_data_i;
+
       ld_pipe #(
           .Cfg(Cfg),
           .ROB_IDX_WIDTH(ROB_IDX_WIDTH),
@@ -623,14 +844,14 @@ module lsu_group #(
 
           .req_valid_i(lane_req_valid[gi]),
           .req_ready_o(lane_req_ready[gi]),
-          .uop_i(lane_uop),
-          .rs2_data_i(pend_valid_q ? pend_rs2_data_q : rs2_data_i),
-          .eff_addr_i(req_eff_addr),
-          .misaligned_i(lane_misaligned),
-          .force_exception_i(req_has_force_fault),
-          .force_ecause_i(req_force_ecause),
-          .rob_tag_i(pend_valid_q ? pend_rob_tag_q : rob_tag_i),
-          .st_id_i(pend_valid_q ? pend_st_id_q : st_id_i),
+          .uop_i(lane_use_bus1 ? bus1_uop : lane_uop),
+          .rs2_data_i(lane_use_bus1 ? bus1_rs2_data : (pend_valid_q ? pend_rs2_data_q : sel_rs2_data)),
+          .eff_addr_i(lane_use_bus1 ? bus1_eff_addr : req_eff_addr),
+          .misaligned_i(lane_use_bus1 ? req_p1_misaligned : lane_misaligned),
+          .force_exception_i(lane_use_bus1 ? 1'b0 : req_has_force_fault),
+          .force_ecause_i(lane_use_bus1 ? '0 : req_force_ecause),
+          .rob_tag_i(lane_use_bus1 ? bus1_rob_tag : (pend_valid_q ? pend_rob_tag_q : sel_rob_tag)),
+          .st_id_i(lane_use_bus1 ? bus1_st_id : (pend_valid_q ? pend_st_id_q : sel_st_id)),
 
           .st_ex_valid_o(lane_st_ex_valid[gi]),
           .st_ex_st_id_o(lane_st_ex_st_id[gi]),
@@ -641,8 +862,8 @@ module lsu_group #(
 
           .stq_fwd_addr_o(lane_stq_fwd_addr[gi]),
           .stq_fwd_rob_idx_o(lane_stq_fwd_rob_idx[gi]),
-          .stq_fwd_hit_i(stq_fwd_hit_i),
-          .stq_fwd_data_i(stq_fwd_data_i),
+          .stq_fwd_hit_i(lane_stq_fwd_hit_w),
+          .stq_fwd_data_i(lane_stq_fwd_data_w),
 
           .ld_req_valid_o(lane_ld_req_valid_pipe[gi]),
           .ld_req_ready_i(lane_ld_req_ready[gi]),
@@ -829,15 +1050,15 @@ module lsu_group #(
                            is_load_misaligned(lane_uop.lsu_op, req_eff_addr);
   assign req_is_amo = selected_uop.lsu_op == decode_pkg::LSU_AMO;
   assign req_is_load = pend_valid_q ? selected_uop.is_load :
-                       (!req_need_mmu_walk && req_valid_i && uop_i.is_load);
+                       (!req_need_mmu_walk && req_valid_or && sel_uop.is_load);
   assign req_is_store = (pend_valid_q ? selected_uop.is_store :
-                        (!req_need_mmu_walk && req_valid_i && uop_i.is_store)) &&
+                        (!req_need_mmu_walk && req_valid_or && sel_uop.is_store)) &&
                         !req_is_amo;
   assign req_has_force_fault = pend_valid_q ? pend_force_fault_q : 1'b0;
   assign req_force_ecause = pend_valid_q ? pend_force_ecause_q : '0;
   assign store_misaligned = pend_valid_q ? (req_is_store && req_has_force_fault &&
                                             (req_force_ecause == EXC_ST_ADDR_MISALIGNED)) :
-                            (req_is_store && is_store_misaligned(uop_i.lsu_op, req_eff_addr));
+                            (req_is_store && is_store_misaligned(sel_uop.lsu_op, req_eff_addr));
   assign store_page_fault = pend_valid_q ? (req_is_store && req_has_force_fault &&
                                             (req_force_ecause == EXC_ST_PAGE_FAULT)) : 1'b0;
   assign amo_inflight = |lane_amo_valid_q;
@@ -851,12 +1072,25 @@ module lsu_group #(
   assign store_wb_head_rob_idx = st_wb_rob_idx_i;
   // 转发的字节掩码：交给 stq 做 byte-merge，命中即返回对齐到字节 0 的数据。
   // 仅在本周期有 load 准入时驱动 (否则 be=0，stq 自然不命中)。
-  assign load_fwd_be = load_be_mask(pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op, req_eff_addr);
-  assign stq_fwd_be_o = (load_alloc_fire && req_is_load) ? load_fwd_be : '0;
+  assign load_fwd_be = load_be_mask(pend_valid_q ? pend_uop_q.lsu_op : sel_uop.lsu_op, req_eff_addr);
+  assign load_fwd_be_p1 = load_be_mask(uop_i[1].lsu_op, req_p1_eff_addr);
   assign st_order_query_valid_o = req_is_amo;
-  assign st_order_query_st_id_o = pend_valid_q ? pend_st_id_q : st_id_i;
+  assign st_order_query_st_id_o = pend_valid_q ? pend_st_id_q : sel_st_id;
 
-  assign ldq_alloc_valid = load_alloc_fire && req_is_load;
+  assign ldq_alloc_valid[0]    = load_alloc_fire && req_is_load;
+  assign ldq_alloc_rob_tag[0]  = pend_valid_q ? pend_rob_tag_q : sel_rob_tag;
+  assign ldq_alloc_pc[0]       = pend_valid_q ? pend_uop_q.pc : sel_uop.pc;
+  assign ldq_alloc_paddr[0]    = req_eff_addr;
+  assign ldq_alloc_be[0]       = load_fwd_be;
+
+  // Dual-admission fast path only ever admits a plain load (see
+  // dual_candidate_ok / req_p1_plain_load), so port1's alloc payload is
+  // always sourced straight from port1's own uop/AGU output, never pend.
+  assign ldq_alloc_valid[1]    = dual_fire;
+  assign ldq_alloc_rob_tag[1]  = rob_tag_i[1];
+  assign ldq_alloc_pc[1]       = uop_i[1].pc;
+  assign ldq_alloc_paddr[1]    = req_p1_eff_addr;
+  assign ldq_alloc_be[1]       = load_fwd_be_p1;
 
   // B2: load writeback marks the matching LDQ entry executed (no longer pops).
   // The entry is freed later, when the ROB commits the load (commit_*_i).
@@ -880,7 +1114,7 @@ module lsu_group #(
                              !(is_sc && sc_fail);
   assign ldq_st_paddr       = req_eff_addr;
   assign ldq_st_be          = store_be_mask(selected_uop.lsu_op, req_eff_addr);
-  assign ldq_st_rob_tag     = pend_valid_q ? pend_rob_tag_q : rob_tag_i;
+  assign ldq_st_rob_tag     = pend_valid_q ? pend_rob_tag_q : sel_rob_tag;
 
   logic res_valid_q;
   logic [Cfg.PLEN-1:0] res_addr_q;
@@ -910,6 +1144,40 @@ module lsu_group #(
     end
   end
 
+  // Dual-admission fast path, port1 grant: only evaluated once bus0/port0's
+  // own grant (above) has already picked alloc_lane_idx, and only usable
+  // when both candidates are eligible (dual_candidate_ok). Picks a second,
+  // distinct free ld_pipe lane so port0 and port1 fire into different lanes
+  // in the same cycle; ldq's second alloc port (free_count_o >= 2, checked
+  // in dual_candidate_ok) is what makes that safe on the ldq side.
+  assign dual_pair_shape_ok = !pend_valid_q && (mmu_state_q == MMU_ST_IDLE) &&
+                              !amo_inflight && req_p0_plain_load && req_p1_plain_load &&
+                              !req_p0_need_walk && !req_p1_need_walk;
+  // Both RS picks want dual issue this cycle (shape/mmu/amo gates only).
+  assign dual_pair_wanted = pick_valid_i[0] && pick_valid_i[1] && dual_pair_shape_ok;
+  // Only treat the pair as "active" when two distinct ld_pipe lanes are actually
+  // available — otherwise req_ready_o would hold at 0 and block port0 alone, which
+  // deadlocks when other lanes are stuck in S_MMIO_WAIT_ROB (CoreMark hang).
+  assign dual_candidate_ok = dual_pair_wanted && (ldq_free_count >= 2);
+  always_comb begin
+    load_req_ready_p1 = 1'b0;
+    alloc_grant_p1 = '0;
+    alloc_lane_idx_p1 = '0;
+    if (dual_candidate_ok && load_req_ready) begin
+      for (int i = 0; i < N_LSU; i++) begin
+        if (!load_req_ready_p1 && lane_req_ready[i] && (LANE_SEL_WIDTH'(i) != alloc_lane_idx)) begin
+          load_req_ready_p1 = 1'b1;
+          alloc_grant_p1[i] = 1'b1;
+          alloc_lane_idx_p1 = LANE_SEL_WIDTH'(i);
+        end
+      end
+    end
+  end
+  assign dual_fire = load_req_ready && load_req_ready_p1;
+  assign dual_pair_active = dual_fire && dual_pair_wanted;
+  // Port1 co-issue only when dual_fire is real; otherwise serialize through port0.
+  assign dual_port1_en_o = !pick_valid_i[0] || !pick_valid_i[1] || dual_fire;
+
   // Keep store admission independent from selected-uop decode details to avoid
   // combinational feedback with issue selection. Admission now gated solely by
   // stq 的未上报 store 计数（专用上报口每拍排空 1 个，恒可推进）。
@@ -919,43 +1187,56 @@ module lsu_group #(
   assign sq_alloc_ready = store_req_ready;
   assign sq_full = !store_req_ready;
   assign sq_empty = (st_unreported_count_i == '0);
+  // req_ready_o: single "can admit every cand_valid_i-flagged candidate this
+  // cycle" line (see the port-declaration comment). single_port_ready first
+  // computes exactly the single-request admission test against the
+  // *candidate* view (sel_uop, driven off cand_valid_i, never req_valid_i —
+  // this is what breaks the fu_ready_i <-> req_ready_o combinational loop);
+  // with cand_two_valid, sel_uop is always port0's uop (cand_valid_i[0] wins
+  // ties), so single_port_ready here doubles as "can port0 admit". When both
+  // candidates are present, req_ready_o additionally requires dual_fire —
+  // i.e. port1 also found a free lane this cycle (dual_candidate_ok gate +
+  // alloc_grant_p1 above). If dual_fire doesn't fire (e.g. one candidate
+  // needs a walk, is a store/AMO/LR, or lanes/ldq slots are short), neither
+  // candidate is claimed ready — the RS holds both and retries the whole
+  // pair next cycle. This can never drop a candidate, only defer it.
   always_comb begin
-    req_ready_o = 1'b0;
+    logic single_port_ready;
+    single_port_ready = 1'b0;
     if (pend_valid_q || (mmu_state_q != MMU_ST_IDLE) || amo_inflight) begin
-      req_ready_o = 1'b0;
+      single_port_ready = 1'b0;
     end else if (req_need_mmu_walk) begin
-      req_ready_o = (uop_i.lsu_op != decode_pkg::LSU_AMO) || amo_order_clear;
-    end else if (uop_i.is_load) begin
-      req_ready_o = load_req_ready;
-    end else if (uop_i.is_store) begin
-      req_ready_o = store_req_ready;
+      single_port_ready = (sel_uop.lsu_op != decode_pkg::LSU_AMO) || amo_order_clear;
+    end else if (sel_uop.is_load) begin
+      single_port_ready = load_req_ready;
+    end else if (sel_uop.is_store) begin
+      single_port_ready = store_req_ready;
     end
+    req_ready_o = single_port_ready && (!dual_pair_active || dual_fire);
   end
 
-  assign load_alloc_fire = ((pend_valid_q) || (!req_need_mmu_walk && req_valid_i && (mmu_state_q == MMU_ST_IDLE))) &&
+  assign load_alloc_fire = ((pend_valid_q) || (!req_need_mmu_walk && req_valid_or && (mmu_state_q == MMU_ST_IDLE))) &&
                            req_is_load && load_req_ready;
-  assign store_req_fire = ((pend_valid_q) || (!req_need_mmu_walk && req_valid_i && (mmu_state_q == MMU_ST_IDLE))) &&
+  assign store_req_fire = ((pend_valid_q) || (!req_need_mmu_walk && req_valid_or && (mmu_state_q == MMU_ST_IDLE))) &&
                           req_is_store && store_req_ready;
   assign dbg_alloc_fire = load_alloc_fire | store_req_fire;
 
   always_comb begin
     lane_req_valid = '0;
     for (int i = 0; i < N_LSU; i++) begin
-      lane_req_valid[i] = load_alloc_fire && alloc_grant[i];
+      lane_req_valid[i] = (load_alloc_fire && alloc_grant[i]) || (dual_fire && alloc_grant_p1[i]);
     end
   end
 
   always_comb begin
     st_ex_valid_o = store_req_fire && !store_misaligned && !store_page_fault;
-    st_ex_st_id_o = pend_valid_q ? pend_st_id_q : st_id_i;
+    st_ex_st_id_o = pend_valid_q ? pend_st_id_q : sel_st_id;
     st_ex_addr_o = req_eff_addr;
     st_ex_data_o = selected_rs2_data;
     st_ex_op_o = sc_fail ? decode_pkg::LSU_SC_FAIL :
                  is_sc ? decode_pkg::LSU_SW : 
                  selected_uop.lsu_op;
-    st_ex_rob_idx_o = pend_valid_q ? pend_rob_tag_q : rob_tag_i;
-    stq_fwd_addr_o = '0;
-    stq_fwd_rob_idx_o = '0;
+    st_ex_rob_idx_o = pend_valid_q ? pend_rob_tag_q : sel_rob_tag;
     if (amo_wb_fire && !lane_wb_exception[amo_wb_lane]) begin
       st_ex_valid_o = 1'b1;
       st_ex_st_id_o = lane_amo_st_id_q[amo_wb_lane];
@@ -973,10 +1254,36 @@ module lsu_group #(
         st_ex_op_o = lane_st_ex_op[i];
         st_ex_rob_idx_o = lane_st_ex_rob_idx[i];
       end
-      if (lane_req_valid[i]) begin
-        stq_fwd_addr_o = lane_stq_fwd_addr[i];
-        stq_fwd_rob_idx_o = lane_stq_fwd_rob_idx[i];
-      end
+    end
+  end
+
+  // STQ forward-query outputs, split into 2 fully independent buses
+  // (dcache-load-dual-issue Phase 2, task lsu-group-mmu-fwd): bus0 always
+  // carries the single-consumption sel_uop/pend pipeline's load (indexed by
+  // alloc_lane_idx, valid iff load_alloc_fire); bus1 carries the
+  // dual-admission fast path's second, plain load (indexed by
+  // alloc_lane_idx_p1, valid iff dual_fire). Indexing directly by these
+  // lane-select registers (rather than scanning lane_req_valid) keeps the two
+  // buses from colliding when both fire the same cycle — with a single shared
+  // wire and a scan-and-overwrite loop, whichever lane had the higher index
+  // would silently clobber the other's query.
+  always_comb begin
+    stq_fwd_addr_o    = '0;
+    stq_fwd_be_o      = '0;
+    stq_fwd_rob_idx_o = '0;
+    if (load_alloc_fire) begin
+      stq_fwd_addr_o    = lane_stq_fwd_addr[alloc_lane_idx];
+      stq_fwd_be_o      = load_fwd_be;
+      stq_fwd_rob_idx_o = lane_stq_fwd_rob_idx[alloc_lane_idx];
+    end
+
+    stq_fwd_addr_o2    = '0;
+    stq_fwd_be_o2      = '0;
+    stq_fwd_rob_idx_o2 = '0;
+    if (dual_fire) begin
+      stq_fwd_addr_o2    = lane_stq_fwd_addr[alloc_lane_idx_p1];
+      stq_fwd_be_o2      = load_fwd_be_p1;
+      stq_fwd_rob_idx_o2 = lane_stq_fwd_rob_idx[alloc_lane_idx_p1];
     end
   end
 
@@ -1040,8 +1347,8 @@ module lsu_group #(
   // 字段填入对应 stq 条目，等价于原 store_wb_q 的 push。faulting store 也在此
   // 上报（携带异常 ecause + 故障地址作为 tval）。
   assign st_complete_valid_o     = store_req_fire;
-  assign st_complete_id_o        = pend_valid_q ? pend_st_id_q : st_id_i;
-  assign st_complete_rob_idx_o   = pend_valid_q ? pend_rob_tag_q : rob_tag_i;
+  assign st_complete_id_o        = pend_valid_q ? pend_st_id_q : sel_st_id;
+  assign st_complete_rob_idx_o   = pend_valid_q ? pend_rob_tag_q : sel_rob_tag;
   assign st_complete_data_o      = (store_misaligned || store_page_fault) ?
                                    Cfg.XLEN'(req_eff_addr) :
                                    (is_sc && sc_fail) ? Cfg.XLEN'(1) : '0;
@@ -1052,7 +1359,7 @@ module lsu_group #(
   // 退休时 ROB 按 is_mispred 处理（提交该 store 后冲刷并重定向到违例 load PC）。
   assign st_complete_is_mispred_o   = ldq_violation_valid;
   assign st_complete_redirect_pc_o  = ldq_violation_pc;
-  assign st_complete_pc_o           = pend_valid_q ? pend_uop_q.pc : uop_i.pc;
+  assign st_complete_pc_o           = pend_valid_q ? pend_uop_q.pc : sel_uop.pc;
 
   // AMO completes on whichever granted load port carries the (single, due to
   // amo_inflight serialization) in-flight AMO lane.
@@ -1097,7 +1404,7 @@ module lsu_group #(
     end else begin
       if (flush_i) begin
         res_valid_q <= 1'b0;
-      end else if (load_alloc_fire && (pend_valid_q ? pend_uop_q.lsu_op : uop_i.lsu_op) == decode_pkg::LSU_LR) begin
+      end else if (load_alloc_fire && (pend_valid_q ? pend_uop_q.lsu_op : sel_uop.lsu_op) == decode_pkg::LSU_LR) begin
         res_valid_q <= 1'b1;
         res_addr_q <= req_eff_addr;
       end else if ((store_req_fire && (is_sc || (!store_misaligned && !store_page_fault))) ||
@@ -1109,7 +1416,7 @@ module lsu_group #(
         lane_amo_valid_q[alloc_lane_idx] <= 1'b1;
         lane_amo_op_q[alloc_lane_idx] <= selected_uop.amo_op;
         lane_amo_rs2_q[alloc_lane_idx] <= selected_rs2_data;
-        lane_amo_st_id_q[alloc_lane_idx] <= pend_valid_q ? pend_st_id_q : st_id_i;
+        lane_amo_st_id_q[alloc_lane_idx] <= pend_valid_q ? pend_st_id_q : sel_st_id;
         lane_amo_addr_q[alloc_lane_idx] <= req_eff_addr;
       end
 
@@ -1122,11 +1429,11 @@ module lsu_group #(
         if (lsu_trace_en_q && req_has_force_fault) begin
           if (lsu_pf_log_cnt_q < LSU_PF_LOG_BUDGET) begin
             $display("[lsu-force-fault] pc=%h addr=%h is_ld=%0d is_st=%0d ecause=%0d rob=%0d pend=%0d epoch=%0d flush=%0d",
-                     pend_valid_q ? pend_uop_q.pc : uop_i.pc,
+                     pend_valid_q ? pend_uop_q.pc : sel_uop.pc,
                      pend_valid_q ? pend_addr_q : req_in_eff_addr,
                      req_is_load, req_is_store, req_force_ecause,
-                     pend_valid_q ? pend_rob_tag_q : rob_tag_i, pend_valid_q,
-                     pend_valid_q ? pend_uop_q.fetch_epoch : uop_i.fetch_epoch, flush_i);
+                     pend_valid_q ? pend_rob_tag_q : sel_rob_tag, pend_valid_q,
+                     pend_valid_q ? pend_uop_q.fetch_epoch : sel_uop.fetch_epoch, flush_i);
             lsu_pf_log_cnt_q <= lsu_pf_log_cnt_q + 1'b1;
           end
         end
@@ -1169,7 +1476,7 @@ module lsu_group #(
       if ((lsu_stall_trace_log_cnt_q < LSU_STALL_TRACE_LOG_BUDGET) && should_log) begin
         $display("[lsu-stall] pc=%h streak=%0d pend=%0d mmu_state=%0d req(v/r)=%0d/%0d need_mmu=%0d req_is(ld/st)=%0d/%0d load_rdy=%0d store_rdy=%0d ldq_alloc=%0d stq_alloc=%0d ldq(cnt/full)=%0d/%0d stq(cnt/full)=%0d/%0d wb_cnt=%0d ld_pipe_req_ready=0x%h ld_pipe_ld_req_valid=0x%h ld_pipe_ld_rsp_ready=0x%h ld_rsp(v/r)=%0d/%0d",
                  lsu_diag_pc_w, next_streak, pend_valid_q, mmu_state_q,
-                 req_valid_i, req_ready_o, req_need_mmu_walk, req_is_load, req_is_store,
+                 req_valid_or, req_ready_o, req_need_mmu_walk, req_is_load, req_is_store,
                  load_req_ready, store_req_ready, ldq_alloc_ready, sq_alloc_ready,
                  dbg_ldq_count_o, ldq_full, dbg_sq_count_o, sq_full, st_unreported_count_i,
                  lane_req_ready, lane_ld_req_valid, lane_ld_rsp_ready,
@@ -1179,6 +1486,14 @@ module lsu_group #(
     end else begin
       lsu_stall_streak_q <= '0;
     end
+    // #region agent log
+    if (dual_pair_wanted && load_req_ready && !req_ready_o && !flush_i) begin
+      $fwrite(agent_dbg_fd,
+              "{\"sessionId\":\"0e02a7\",\"hypothesisId\":\"A\",\"location\":\"lsu_group.sv:dual_gate\",\"message\":\"dual_wanted_req_not_ready\",\"data\":{\"dual_fire\":%0d,\"load_req_ready_p1\":%0d,\"dual_pair_active\":%0d,\"rob_head\":%0d,\"ldq_free\":%0d},\"timestamp\":%0d}\n",
+              dual_fire, load_req_ready_p1, dual_pair_active, rob_head_i, ldq_free_count, $time);
+      $fflush(agent_dbg_fd);
+    end
+    // #endregion
   end
 `endif
 
@@ -1195,10 +1510,11 @@ module lsu_group #(
       .flush_i,
       .alloc_valid_i(ldq_alloc_valid),
       .alloc_ready_o(ldq_alloc_ready),
-      .alloc_rob_tag_i(pend_valid_q ? pend_rob_tag_q : rob_tag_i),
-      .alloc_pc_i(pend_valid_q ? pend_uop_q.pc : uop_i.pc),
-      .alloc_paddr_i(req_eff_addr),
-      .alloc_be_i(load_fwd_be),
+      .free_count_o(ldq_free_count),
+      .alloc_rob_tag_i(ldq_alloc_rob_tag),
+      .alloc_pc_i(ldq_alloc_pc),
+      .alloc_paddr_i(ldq_alloc_paddr),
+      .alloc_be_i(ldq_alloc_be),
       .commit_valid_i(commit_valid_i),
       .commit_rob_idx_i(commit_rob_idx_i),
       .exec_valid_i(ldq_exec_valid),

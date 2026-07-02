@@ -89,6 +89,13 @@ module stq #(
     input  logic [ROB_IDX_WIDTH-1:0] load_rob_idx_i,
     output logic                     load_hit_o,      // 在 STQ 中命中且數據完全覆蓋
     output logic [     Cfg.XLEN-1:0] load_data_o,     // 轉發的數據 (已對齊到字節 0)
+    // 第二條獨立查詢口 (dcache-load-dual-issue Phase 2：副 lane 的 load)。
+    // 與上面完全對稱，純組合、只讀，互不影響。
+    input  logic [   Cfg.XLEN/8-1:0] load_be_i2,
+    input  logic [     Cfg.PLEN-1:0] load_addr_i2,
+    input  logic [ROB_IDX_WIDTH-1:0] load_rob_idx_i2,
+    output logic                     load_hit_o2,
+    output logic [     Cfg.XLEN-1:0] load_data_o2,
     input  logic [ROB_IDX_WIDTH-1:0] rob_head_i,
 
     // =======================================================
@@ -530,6 +537,54 @@ module stq #(
     load_hit_o = ((covered_be & load_be_i) == load_be_i) && (load_be_i != '0);
     // 對齊到字節 0 (lane 的 extract_fwd 假設數據從 bit0 開始)
     load_data_o = merged_word >> (8 * load_off);
+  end
+
+  // 第二條查詢口：與上面完全對稱的獨立組合邏輯 (副 lane load)。
+  logic [ROB_IDX_WIDTH-1:0] load_age2;
+  logic [BYTE_OFF_W-1:0] load_off2;
+
+  always_comb begin
+    logic [BYTE_W-1:0] covered_be;
+    logic [Cfg.XLEN-1:0] merged_word;
+    logic [BYTE_W-1:0] st_be;
+    logic [Cfg.XLEN-1:0] st_aligned;
+
+    load_hit_o2 = 1'b0;
+    load_data_o2 = '0;
+    covered_be = '0;
+    merged_word = '0;
+
+    load_age2 = rob_age(load_rob_idx_i2, rob_head_i);
+    load_off2 = load_addr_i2[BYTE_OFF_W-1:0];
+
+    for (int i = 0; i < SB_DEPTH; i++) begin
+      logic [$clog2(SB_DEPTH)-1:0] idx;
+      logic older_than_load;
+      logic same_word;
+      idx = tail_ptr - 1 - i[$clog2(SB_DEPTH)-1:0];
+
+      older_than_load = mem[idx].committed ||
+                        (rob_age(mem[idx].rob_tag, rob_head_i) < load_age2);
+      same_word = (mem[idx].addr[Cfg.PLEN-1:BYTE_OFF_W] == load_addr_i2[Cfg.PLEN-1:BYTE_OFF_W]);
+
+      if (mem[idx].valid &&
+          mem[idx].addr_valid &&
+          mem[idx].data_valid &&
+          same_word &&
+          older_than_load) begin
+        st_be = store_be_mask(mem[idx].op, mem[idx].addr);
+        st_aligned = store_aligned_data(mem[idx].op, mem[idx].data, mem[idx].addr);
+        for (int b = 0; b < BYTE_W; b++) begin
+          if (load_be_i2[b] && st_be[b] && !covered_be[b]) begin
+            merged_word[(8*b)+:8] = st_aligned[(8*b)+:8];
+            covered_be[b] = 1'b1;
+          end
+        end
+      end
+    end
+
+    load_hit_o2 = ((covered_be & load_be_i2) == load_be_i2) && (load_be_i2 != '0);
+    load_data_o2 = merged_word >> (8 * load_off2);
   end
 
   // =======================================================
