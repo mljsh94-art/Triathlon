@@ -152,6 +152,10 @@ module bpu #(
   logic [FTQ_DEPTH-1:0] pred_snap_cond_in_range_q;
   logic [FTQ_DEPTH-1:0] pred_snap_jump_in_range_q;
   logic [FTQ_DEPTH-1:0] pred_snap_cond_taken_pred_q;
+  logic [FTQ_DEPTH-1:0][1:0] pred_snap_cond_lane_valid_q;
+  logic [FTQ_DEPTH-1:0][1:0] pred_snap_cond_lane_taken_q;
+  logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] pred_snap_cond_lane0_pc_q;
+  logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] pred_snap_cond_lane1_pc_q;
   logic [FTQ_DEPTH-1:0] pred_snap_pick_valid_q;
   logic [FTQ_DEPTH-1:0] pred_snap_pick_cond_q;
   logic [FTQ_DEPTH-1:0] pred_snap_pick_jump_q;
@@ -245,6 +249,9 @@ module bpu #(
   logic loop_hit_w;
   logic loop_taken_w;
   logic loop_confident_w;
+  logic [1:0] loop_hit_lane_w;
+  logic [1:0] loop_taken_lane_w;
+  logic [1:0] loop_confident_lane_w;
   logic cond_tage_base_w;
   logic cond_tage_override_w;
   logic cond_sc_override_w;
@@ -252,10 +259,16 @@ module bpu #(
   logic cond_tage_candidate_w;
   logic cond_sc_candidate_w;
   logic cond_loop_candidate_w;
+  logic cond_preloop_taken_w;
+  logic loop_spec_event_valid_w;
+  logic [Cfg.PLEN-1:0] loop_spec_event_pc_w;
+  logic loop_spec_event_taken_w;
   logic [1:0] cond_selected_provider_w;
   logic cond_selected_taken_w;
+  logic [1:0] dbg_snap_cond_lane_dir_w;
 
   // Bundle contract: predict/update 收口（逻辑不变，仅连线层）。
+  logic pred_fire_w;
   predict_req_t  cond_pred_req_w;
   predict_req_t  jump_pred_req_w;
   predict_resp_t tage_pred_resp_w;
@@ -288,6 +301,8 @@ module bpu #(
   update_t       sc_update_w;
   update_t       loop_update_w;
   update_t       ittage_update_w;
+
+  assign pred_fire_w = ftq_enq_valid_o && ftq_enq_ready_i;
 
   // ghr_q 别名保持对外不变（tb_bpu/tb_bpu_phase5_red 经 i_BPU.ghr_q 读取）。
   assign ghr_q = spec_ghr_q;
@@ -392,17 +407,22 @@ module bpu #(
 
   loop_predictor #(
       .Cfg(Cfg),
-      .INSTR_PER_FETCH(1),
+      .INSTR_PER_FETCH(2),
       .ENTRIES(LOOP_ENTRIES),
       .TAG_BITS(LOOP_TAG_BITS),
       .CONF_THRESH(LOOP_CONF_THRESH)
   ) u_loop_predictor (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .predict_base_pc_i(cond_pred_req_w.pc),
-      .predict_taken_o(loop_taken_w),
-      .predict_confident_o(loop_confident_w),
-      .predict_hit_o(loop_hit_w),
+      .predict_pc_i(cond_cand_pc_w),
+      .predict_taken_o(loop_taken_lane_w),
+      .predict_confident_o(loop_confident_lane_w),
+      .predict_hit_o(loop_hit_lane_w),
+      .flush_i(flush_i),
+      .predict_fire_i(pred_fire_w),
+      .predict_spec_valid_i(loop_spec_event_valid_w),
+      .predict_spec_pc_i(loop_spec_event_pc_w),
+      .predict_spec_taken_i(loop_spec_event_taken_w),
       .update_valid_i(loop_update_w.valid),
       .update_pc_i(loop_update_w.pc),
       .update_is_cond_i(loop_update_w.is_cond),
@@ -600,7 +620,11 @@ module bpu #(
       end else begin
         cond_dir[k] = tage_taken_lane_w[k];
       end
+      if (USE_LOOP && loop_confident_lane_w[k]) begin
+        cond_dir[k] = loop_taken_lane_w[k];
+      end
     end
+    dbg_snap_cond_lane_dir_w = cond_dir;
 
     cand_valid[0] = cond_cand_valid_w[0];
     cand_valid[1] = cond_cand_valid_w[1];
@@ -619,6 +643,25 @@ module bpu #(
     for (int c = 0; c < 4; c++) begin
       if (cand_valid[c] && cand_taken[c] && ((picked < 0) || (cand_pc[c] < cand_pc[picked]))) begin
         picked = c;
+      end
+    end
+
+    loop_spec_event_valid_w = 1'b0;
+    loop_spec_event_pc_w = '0;
+    loop_spec_event_taken_w = 1'b0;
+    for (int k = 0; k < 2; k++) begin
+      logic earlier_taken;
+      earlier_taken = 1'b0;
+      for (int c = 0; c < 4; c++) begin
+        if (cand_valid[c] && cand_taken[c] && (cand_pc[c] < cond_cand_pc_w[k])) begin
+          earlier_taken = 1'b1;
+        end
+      end
+      if (cond_cand_valid_w[k] && USE_LOOP && loop_confident_lane_w[k] && !earlier_taken &&
+          (!loop_spec_event_valid_w || (cond_cand_pc_w[k] < loop_spec_event_pc_w))) begin
+        loop_spec_event_valid_w = 1'b1;
+        loop_spec_event_pc_w = cond_cand_pc_w[k];
+        loop_spec_event_taken_w = loop_taken_lane_w[k];
       end
     end
 
@@ -677,9 +720,15 @@ module bpu #(
     if (picked_is_cond) begin
       sc_taken_w     = sc_taken_lane_w[picked_cond_lane];
       sc_confident_w = SC_OVERRIDE_EN && sc_use_lane_w[picked_cond_lane];
+      loop_hit_w        = loop_hit_lane_w[picked_cond_lane];
+      loop_taken_w      = loop_taken_lane_w[picked_cond_lane];
+      loop_confident_w  = loop_confident_lane_w[picked_cond_lane];
     end else begin
       sc_taken_w     = 1'b0;
       sc_confident_w = 1'b0;
+      loop_hit_w        = 1'b0;
+      loop_taken_w      = 1'b0;
+      loop_confident_w  = 1'b0;
     end
 
     // SC/Loop/BHT 单 lane，输入 picked cond PC（无 cond pick 时回退最早 cond 候选 / FTB 值）。
@@ -727,6 +776,7 @@ module bpu #(
     cond_loop_override_w = 1'b0;
     cond_selected_provider_w = COND_PROVIDER_TAGE;
     cond_selected_taken_w = cond_tage_base_w;
+    cond_preloop_taken_w = cond_tage_base_w;
 
     cond_tage_candidate_w = ftb_pick_is_cond_w;
     cond_sc_candidate_w = ftb_pick_is_cond_w && USE_SC && sc_confident_w;
@@ -740,8 +790,9 @@ module bpu #(
       end
     end
 
+    cond_preloop_taken_w = cond_selected_taken_w;
     if (cond_loop_candidate_w) begin
-      cond_loop_override_w = (loop_taken_w != cond_tage_base_w);
+      cond_loop_override_w = (loop_taken_w != cond_preloop_taken_w);
       cond_selected_provider_w = COND_PROVIDER_LOOP;
       cond_selected_taken_w = loop_taken_w;
     end
@@ -884,6 +935,10 @@ module bpu #(
       pred_snap_cond_in_range_q <= '0;
       pred_snap_jump_in_range_q <= '0;
       pred_snap_cond_taken_pred_q <= '0;
+      pred_snap_cond_lane_valid_q <= '0;
+      pred_snap_cond_lane_taken_q <= '0;
+      pred_snap_cond_lane0_pc_q <= '0;
+      pred_snap_cond_lane1_pc_q <= '0;
       pred_snap_pick_valid_q <= '0;
       pred_snap_pick_cond_q <= '0;
       pred_snap_pick_jump_q <= '0;
@@ -899,10 +954,6 @@ module bpu #(
       // T0 base 复位已随存储迁入 u_tage。
       // dbg_* 计数器与 override 追踪 FIFO 复位已随逻辑迁入 u_track。
     end else begin
-      logic pred_fire_w;
-
-      pred_fire_w = ftq_enq_valid_o && ftq_enq_ready_i;
-
       if (redirect_valid_i) begin
         pc_reg_q <= redirect_pc_i;
       end else if (pred_fire_w) begin
@@ -951,6 +1002,10 @@ module bpu #(
           pred_snap_cond_in_range_q[ftq_enq_id_i] <= dbg_snap_ftb_cond_in_range_w;
           pred_snap_jump_in_range_q[ftq_enq_id_i] <= dbg_snap_ftb_jump_in_range_w;
           pred_snap_cond_taken_pred_q[ftq_enq_id_i] <= dbg_snap_ftb_cond_taken_pred_w;
+          pred_snap_cond_lane_valid_q[ftq_enq_id_i] <= cond_cand_valid_w;
+          pred_snap_cond_lane_taken_q[ftq_enq_id_i] <= dbg_snap_cond_lane_dir_w;
+          pred_snap_cond_lane0_pc_q[ftq_enq_id_i] <= cond_cand_pc_w[0];
+          pred_snap_cond_lane1_pc_q[ftq_enq_id_i] <= cond_cand_pc_w[1];
           pred_snap_pick_valid_q[ftq_enq_id_i] <= ftb_pick_valid_w;
           pred_snap_pick_cond_q[ftq_enq_id_i] <= dbg_snap_ftb_pick_cond_w;
           pred_snap_pick_jump_q[ftq_enq_id_i] <= dbg_snap_ftb_pick_jump_w;

@@ -59,6 +59,7 @@ make -C npc sim DIFFTEST= IMG=.../dhrystone-riscv32i-npc.bin \
 | `kpi` | `ipc` / `cpi` / `cycles` / `commits` |
 | `commit` | `width_hist` 提交宽度分布 |
 | `flush` | 冲刷次数、误预测分类、`redirect`、原因直方图 |
+| `flush.mispredict_diag.detail` | TAGE 方向错与 FTB 结构桶的 PC/类型/slot 细分；`ftb_hit_shadowed_cond_nt` 表示前置 cond 判 NT 后被后续 taken 候选遮住 |
 | `stall` | `category` 八大类 + `decode_blocked` / `rob_backpressure` / `frontend_empty` / `other` 明细 |
 | `frontend` | `ifu_fq` Fetch Queue |
 | `control` | 控制流指令统计 |

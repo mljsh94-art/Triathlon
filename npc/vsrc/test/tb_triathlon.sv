@@ -385,6 +385,10 @@ module tb_triathlon #(
     output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_cond_in_range_o,
     output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_jump_in_range_o,
     output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_cond_taken_pred_o,
+    output logic [FTQ_DEPTH-1:0][1:0]          dbg_bpu_pred_snap_cond_lane_valid_o,
+    output logic [FTQ_DEPTH-1:0][1:0]          dbg_bpu_pred_snap_cond_lane_taken_o,
+    output logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] dbg_bpu_pred_snap_cond_lane0_pc_o,
+    output logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] dbg_bpu_pred_snap_cond_lane1_pc_o,
     output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_pick_cond_o,
     output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_pick_jump_o,
     output logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] dbg_bpu_pred_snap_fetch_pc_o,
@@ -951,6 +955,10 @@ module tb_triathlon #(
   assign dbg_bpu_pred_snap_cond_in_range_o = dut.u_frontend.i_bpu.pred_snap_cond_in_range_q;
   assign dbg_bpu_pred_snap_jump_in_range_o = dut.u_frontend.i_bpu.pred_snap_jump_in_range_q;
   assign dbg_bpu_pred_snap_cond_taken_pred_o = dut.u_frontend.i_bpu.pred_snap_cond_taken_pred_q;
+  assign dbg_bpu_pred_snap_cond_lane_valid_o = dut.u_frontend.i_bpu.pred_snap_cond_lane_valid_q;
+  assign dbg_bpu_pred_snap_cond_lane_taken_o = dut.u_frontend.i_bpu.pred_snap_cond_lane_taken_q;
+  assign dbg_bpu_pred_snap_cond_lane0_pc_o = dut.u_frontend.i_bpu.pred_snap_cond_lane0_pc_q;
+  assign dbg_bpu_pred_snap_cond_lane1_pc_o = dut.u_frontend.i_bpu.pred_snap_cond_lane1_pc_q;
   assign dbg_bpu_pred_snap_pick_cond_o = dut.u_frontend.i_bpu.pred_snap_pick_cond_q;
   assign dbg_bpu_pred_snap_pick_jump_o = dut.u_frontend.i_bpu.pred_snap_pick_jump_q;
   assign dbg_bpu_pred_snap_fetch_pc_o = dut.u_frontend.i_bpu.pred_snap_fetch_pc_q;

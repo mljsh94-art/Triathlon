@@ -35,6 +35,23 @@ class ProfileSchemaTest(unittest.TestCase):
         )
         self.assertEqual(len(schema.bench_hotspots(bench)["top_pc"]), 1)
 
+    def test_mispredict_diag_counts_skip_nested_detail(self):
+        schema = load_module("profile_schema")
+        bench = {
+            "flush": {
+                "mispredict_diag": {
+                    "dir_wrong": 10,
+                    "classified_total": 10,
+                    "rollup": {"tage_direction": 10},
+                    "detail": {"dir_wrong": {"top_pc": [{"pc": "0x1", "count": 10}]}},
+                }
+            }
+        }
+        counts = schema.bench_mispredict_diag_counts(bench)
+        self.assertEqual(counts, {"dir_wrong": 10})
+        self.assertNotIn("detail", counts)
+        self.assertNotIn("rollup", counts)
+
     def test_v1_flat_fallback(self):
         schema = load_module("profile_schema")
         bench = {

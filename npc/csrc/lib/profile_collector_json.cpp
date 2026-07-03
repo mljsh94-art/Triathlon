@@ -70,6 +70,21 @@ void append_top_uint(std::ostringstream &os,
   os << "]";
 }
 
+void append_uint_key_map(std::ostringstream &os,
+                         const std::unordered_map<uint32_t, uint64_t> &m) {
+  bool first = true;
+  os << "{";
+  std::vector<std::pair<uint32_t, uint64_t>> items(m.begin(), m.end());
+  std::sort(items.begin(), items.end(),
+            [](const auto &a, const auto &b) { return a.first < b.first; });
+  for (const auto &kv : items) {
+    if (!first) os << ",";
+    first = false;
+    os << "\"" << kv.first << "\":" << kv.second;
+  }
+  os << "}";
+}
+
 const char *frontend_empty_detail_key(int idx) {
   static const char *kKeys[] = {
       "fe_no_req",
@@ -452,14 +467,16 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
   const uint64_t md_ftb_hit_cond_nt = mispredict_diag_ftb_hit_cond_nt_;
   const uint64_t md_ftb_hit_oor = mispredict_diag_ftb_hit_out_of_range_;
   const uint64_t md_ftb_hit_shadowed = mispredict_diag_ftb_hit_shadowed_;
+  const uint64_t md_ftb_hit_shadowed_cond_nt = mispredict_diag_ftb_hit_shadowed_cond_nt_;
   const uint64_t md_ftb_snap_epoch_mismatch = mispredict_diag_ftb_snap_epoch_mismatch_;
   const uint64_t md_ftb_hit_oor_epoch_ok = mispredict_diag_ftb_hit_out_of_range_epoch_ok_;
   const uint64_t md_ftb_unclassified = mispredict_diag_ftb_unclassified_;
   const uint64_t md_other = mispredict_diag_other_;
   const uint64_t md_no_commit_slot = mispredict_diag_no_commit_slot_;
-  const uint64_t md_tage_direction = md_dir_wrong;
+  const uint64_t md_tage_direction =
+      md_dir_wrong + md_ftb_hit_cond_nt + md_ftb_hit_shadowed_cond_nt;
   const uint64_t md_ftb_structural =
-      md_ftb_no_entry + md_ftb_hit_cond_nt + md_ftb_hit_oor + md_ftb_hit_shadowed + md_slot_offset_bind;
+      md_ftb_no_entry + md_ftb_hit_oor + md_ftb_hit_shadowed + md_slot_offset_bind;
   const uint64_t md_target_wrong = md_dir_ok_target_wrong;
   const uint64_t md_unclassified =
       md_ftb_unclassified + md_other + md_no_commit_slot + md_ftb_snap_epoch_mismatch;
@@ -473,6 +490,7 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
      << ",\"ftb_hit_cond_nt\":" << md_ftb_hit_cond_nt
      << ",\"ftb_hit_out_of_range\":" << md_ftb_hit_oor
      << ",\"ftb_hit_shadowed\":" << md_ftb_hit_shadowed
+     << ",\"ftb_hit_shadowed_cond_nt\":" << md_ftb_hit_shadowed_cond_nt
      << ",\"ftb_snap_epoch_mismatch\":" << md_ftb_snap_epoch_mismatch
      << ",\"ftb_hit_out_of_range_epoch_ok\":" << md_ftb_hit_oor_epoch_ok
      << ",\"ftb_unclassified\":" << md_ftb_unclassified
@@ -493,6 +511,82 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
      << ",\"unclassified_ratio\":"
      << safe_div(static_cast<double>(md_unclassified), static_cast<double>(mispredict_flush_count_))
      << "}";
+  os << ",\"detail\":{";
+  os << "\"dir_wrong\":{";
+  os << "\"top_pc\":";
+  append_top_uint(os, mispredict_diag_dir_wrong_pc_hist_, "pc");
+  os << ",\"kind\":";
+  append_str_map(os, mispredict_diag_dir_wrong_kind_hist_);
+  os << "},\"ftb_no_entry_tag_miss\":{";
+  os << "\"top_branch_pc\":";
+  append_top_uint(os, mispredict_diag_ftb_no_entry_branch_pc_hist_, "pc");
+  os << ",\"top_fetch_pc\":";
+  append_top_uint(os, mispredict_diag_ftb_no_entry_fetch_pc_hist_, "pc");
+  os << ",\"fetch_rel\":";
+  append_uint_key_map(os, mispredict_diag_ftb_no_entry_fetch_rel_hist_);
+  os << ",\"fetch_byte_off\":";
+  append_uint_key_map(os, mispredict_diag_ftb_no_entry_fetch_byte_off_hist_);
+  os << ",\"block_byte_off\":";
+  append_uint_key_map(os, mispredict_diag_ftb_no_entry_block_byte_off_hist_);
+  os << ",\"block_delta\":";
+  append_str_map(os, mispredict_diag_ftb_no_entry_block_delta_hist_);
+  os << ",\"valid_count\":";
+  append_uint_key_map(os, mispredict_diag_ftb_no_entry_valid_count_hist_);
+  os << ",\"cond_count\":";
+  append_uint_key_map(os, mispredict_diag_ftb_no_entry_cond_count_hist_);
+  os << ",\"jump_count\":";
+  append_uint_key_map(os, mispredict_diag_ftb_no_entry_jump_count_hist_);
+  os << ",\"kind\":";
+  append_str_map(os, mispredict_diag_ftb_no_entry_kind_hist_);
+  os << ",\"cause\":";
+  append_str_map(os, mispredict_diag_ftb_no_entry_cause_hist_);
+  os << "},\"ftb_hit_cond_nt\":{";
+  os << "\"top_branch_pc\":";
+  append_top_uint(os, mispredict_diag_ftb_hit_cond_nt_branch_pc_hist_, "pc");
+  os << ",\"top_fetch_pc\":";
+  append_top_uint(os, mispredict_diag_ftb_hit_cond_nt_fetch_pc_hist_, "pc");
+  os << ",\"block_byte_off\":";
+  append_uint_key_map(os, mispredict_diag_ftb_hit_cond_nt_block_byte_off_hist_);
+  os << ",\"valid_count\":";
+  append_uint_key_map(os, mispredict_diag_ftb_hit_cond_nt_valid_count_hist_);
+  os << ",\"cond_count\":";
+  append_uint_key_map(os, mispredict_diag_ftb_hit_cond_nt_cond_count_hist_);
+  os << ",\"jump_count\":";
+  append_uint_key_map(os, mispredict_diag_ftb_hit_cond_nt_jump_count_hist_);
+  os << ",\"kind\":";
+  append_str_map(os, mispredict_diag_ftb_hit_cond_nt_kind_hist_);
+  os << "},\"ftb_hit_shadowed\":{";
+  os << "\"top_branch_pc\":";
+  append_top_uint(os, mispredict_diag_ftb_hit_shadowed_branch_pc_hist_, "pc");
+  os << ",\"top_snap_pc\":";
+  append_top_uint(os, mispredict_diag_ftb_hit_shadowed_snap_pc_hist_, "pc");
+  os << ",\"block_byte_off\":";
+  append_uint_key_map(os, mispredict_diag_ftb_hit_shadowed_block_byte_off_hist_);
+  os << ",\"kind\":";
+  append_str_map(os, mispredict_diag_ftb_hit_shadowed_kind_hist_);
+  os << ",\"pick\":";
+  append_str_map(os, mispredict_diag_ftb_hit_shadowed_pick_hist_);
+  os << "},\"ftb_hit_shadowed_cond_nt\":{";
+  os << "\"top_branch_pc\":";
+  append_top_uint(os, mispredict_diag_ftb_hit_shadowed_cond_nt_branch_pc_hist_, "pc");
+  os << ",\"top_shadow_pc\":";
+  append_top_uint(os, mispredict_diag_ftb_hit_shadowed_cond_nt_shadow_pc_hist_, "pc");
+  os << ",\"block_byte_off\":";
+  append_uint_key_map(os, mispredict_diag_ftb_hit_shadowed_cond_nt_block_byte_off_hist_);
+  os << ",\"kind\":";
+  append_str_map(os, mispredict_diag_ftb_hit_shadowed_cond_nt_kind_hist_);
+  os << ",\"pick\":";
+  append_str_map(os, mispredict_diag_ftb_hit_shadowed_cond_nt_pick_hist_);
+  os << "},\"ftb_hit_out_of_range\":{";
+  os << "\"top_branch_pc\":";
+  append_top_uint(os, mispredict_diag_ftb_oor_branch_pc_hist_, "pc");
+  os << ",\"top_snap_pc\":";
+  append_top_uint(os, mispredict_diag_ftb_oor_snap_pc_hist_, "pc");
+  os << ",\"block_byte_off\":";
+  append_uint_key_map(os, mispredict_diag_ftb_oor_block_byte_off_hist_);
+  os << ",\"kind\":";
+  append_str_map(os, mispredict_diag_ftb_oor_kind_hist_);
+  os << "}}";
   os << "},";
   os << "\"redirect\":{";
   os << "\"pc_delta_bytes_sum\":" << redirect_distance_sum_

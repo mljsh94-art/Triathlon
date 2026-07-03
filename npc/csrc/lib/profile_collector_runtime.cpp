@@ -30,6 +30,7 @@ enum class FtbFallthroughCause {
   kHitCondNt,
   kHitOutOfRange,
   kHitShadowed,
+  kHitShadowedCondNt,
   kUnclassified,
 };
 
@@ -47,6 +48,9 @@ struct FtbPredSnap {
   bool cond_in_range = false;
   bool jump_in_range = false;
   bool cond_taken_pred = false;
+  bool cond_lane_valid[2] = {};
+  bool cond_lane_taken[2] = {};
+  uint32_t cond_lane_pc[2] = {};
   bool pick_cond = false;
   bool pick_jump = false;
   uint32_t fetch_pc = 0;
@@ -54,6 +58,18 @@ struct FtbPredSnap {
   uint32_t cond_branch_pc = 0;
   uint32_t jump_branch_pc = 0;
 };
+
+const char *control_kind_name(bool is_jump, bool is_rvc) {
+  if (is_jump) return is_rvc ? "jump_rvc" : "jump_32";
+  return is_rvc ? "cond_rvc" : "cond_32";
+}
+
+const char *ftb_pick_name(const FtbPredSnap &snap) {
+  if (snap.pick_cond) return "pick_cond";
+  if (snap.pick_jump) return "pick_jump";
+  if (snap.cond_taken_pred) return "cond_taken_no_pick";
+  return "no_pick";
+}
 
 bool read_packed_bit(uint16_t vec, uint32_t idx) {
   return ((vec >> idx) & 1u) != 0u;
@@ -86,6 +102,14 @@ FtbPredSnap read_ftb_pred_snap(const Vtb_triathlon *top, uint32_t ftq_id, uint32
   snap.cond_in_range = read_packed_bit(top->dbg_bpu_pred_snap_cond_in_range_o, ftq_id);
   snap.jump_in_range = read_packed_bit(top->dbg_bpu_pred_snap_jump_in_range_o, ftq_id);
   snap.cond_taken_pred = read_packed_bit(top->dbg_bpu_pred_snap_cond_taken_pred_o, ftq_id);
+  const uint32_t cond_lane_valid =
+      read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_valid_o, ftq_id, 2);
+  const uint32_t cond_lane_taken =
+      read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_taken_o, ftq_id, 2);
+  for (uint32_t lane = 0; lane < 2; lane++) {
+    snap.cond_lane_valid[lane] = ((cond_lane_valid >> lane) & 1u) != 0u;
+    snap.cond_lane_taken[lane] = ((cond_lane_taken >> lane) & 1u) != 0u;
+  }
   snap.pick_cond = read_packed_bit(top->dbg_bpu_pred_snap_pick_cond_o, ftq_id);
   snap.pick_jump = read_packed_bit(top->dbg_bpu_pred_snap_pick_jump_o, ftq_id);
   snap.fetch_pc = top->dbg_bpu_pred_snap_fetch_pc_o[ftq_id];
@@ -93,7 +117,18 @@ FtbPredSnap read_ftb_pred_snap(const Vtb_triathlon *top, uint32_t ftq_id, uint32
                                          fetch_epoch_w);
   snap.cond_branch_pc = top->dbg_bpu_pred_snap_cond_branch_pc_o[ftq_id];
   snap.jump_branch_pc = top->dbg_bpu_pred_snap_jump_branch_pc_o[ftq_id];
+  snap.cond_lane_pc[0] = top->dbg_bpu_pred_snap_cond_lane0_pc_o[ftq_id];
+  snap.cond_lane_pc[1] = top->dbg_bpu_pred_snap_cond_lane1_pc_o[ftq_id];
   return snap;
+}
+
+int find_cond_lane(const FtbPredSnap &snap, uint32_t branch_pc) {
+  for (int lane = 0; lane < 2; lane++) {
+    if (snap.cond_lane_valid[lane] && snap.cond_lane_pc[lane] == branch_pc) {
+      return lane;
+    }
+  }
+  return -1;
 }
 
 FtbFallthroughCause classify_ftb_fallthrough(const FtbPredSnap &snap,
@@ -110,6 +145,13 @@ FtbFallthroughCause classify_ftb_fallthrough(const FtbPredSnap &snap,
   }
 
   if (!snap.cond_hit) return FtbFallthroughCause::kNoEntryTagMiss;
+  const int cond_lane = find_cond_lane(snap, branch_pc);
+  if (cond_lane >= 0 && !snap.cond_lane_taken[cond_lane]) {
+    if (snap.cond_taken_pred || snap.pick_cond || snap.pick_jump) {
+      return FtbFallthroughCause::kHitShadowedCondNt;
+    }
+    return FtbFallthroughCause::kHitCondNt;
+  }
   if (snap.cond_branch_pc != branch_pc) return FtbFallthroughCause::kHitShadowed;
   if (!snap.cond_taken_pred) return FtbFallthroughCause::kHitCondNt;
   if (!snap.cond_in_range) return FtbFallthroughCause::kHitOutOfRange;
@@ -404,6 +446,8 @@ void ProfileCollector::record_mispredict_diag(const Vtb_triathlon *top,
   switch (cls) {
     case MispredictDiagClass::kDirWrong:
       mispredict_diag_dir_wrong_++;
+      mispredict_diag_dir_wrong_pc_hist_[src_pc]++;
+      mispredict_diag_dir_wrong_kind_hist_[control_kind_name(is_jump, is_rvc)]++;
       break;
     case MispredictDiagClass::kDirOkTargetWrong:
       mispredict_diag_dir_ok_target_wrong_++;
@@ -446,15 +490,18 @@ void ProfileCollector::record_mispredict_diag(const Vtb_triathlon *top,
           mispredict_diag_ftb_no_entry_cond_count_hist_[snap.cond_count]++;
           mispredict_diag_ftb_no_entry_jump_count_hist_[snap.jump_count]++;
           mispredict_diag_ftb_no_entry_cause_hist_[no_entry_cause]++;
-          if (is_jump) {
-            mispredict_diag_ftb_no_entry_kind_hist_[is_rvc ? "jump_rvc" : "jump_32"]++;
-          } else {
-            mispredict_diag_ftb_no_entry_kind_hist_[is_rvc ? "cond_rvc" : "cond_32"]++;
-          }
+          mispredict_diag_ftb_no_entry_kind_hist_[control_kind_name(is_jump, is_rvc)]++;
           break;
         }
         case FtbFallthroughCause::kHitCondNt:
           mispredict_diag_ftb_hit_cond_nt_++;
+          mispredict_diag_ftb_hit_cond_nt_branch_pc_hist_[src_pc]++;
+          mispredict_diag_ftb_hit_cond_nt_fetch_pc_hist_[snap.fetch_pc]++;
+          mispredict_diag_ftb_hit_cond_nt_block_byte_off_hist_[src_pc & 0xFu]++;
+          mispredict_diag_ftb_hit_cond_nt_valid_count_hist_[snap.valid_count]++;
+          mispredict_diag_ftb_hit_cond_nt_cond_count_hist_[snap.cond_count]++;
+          mispredict_diag_ftb_hit_cond_nt_jump_count_hist_[snap.jump_count]++;
+          mispredict_diag_ftb_hit_cond_nt_kind_hist_[control_kind_name(is_jump, is_rvc)]++;
           break;
         case FtbFallthroughCause::kHitOutOfRange: {
           const uint32_t snap_pc = is_jump ? snap.jump_branch_pc : snap.cond_branch_pc;
@@ -463,16 +510,29 @@ void ProfileCollector::record_mispredict_diag(const Vtb_triathlon *top,
           mispredict_diag_ftb_oor_branch_pc_hist_[src_pc]++;
           mispredict_diag_ftb_oor_snap_pc_hist_[snap_pc]++;
           mispredict_diag_ftb_oor_block_byte_off_hist_[src_pc & 0xFu]++;
-          if (is_jump) {
-            mispredict_diag_ftb_oor_kind_hist_[is_rvc ? "jump_rvc" : "jump_32"]++;
-          } else {
-            mispredict_diag_ftb_oor_kind_hist_[is_rvc ? "cond_rvc" : "cond_32"]++;
-          }
+          mispredict_diag_ftb_oor_kind_hist_[control_kind_name(is_jump, is_rvc)]++;
           break;
         }
-        case FtbFallthroughCause::kHitShadowed:
+        case FtbFallthroughCause::kHitShadowed: {
+          const uint32_t snap_pc = is_jump ? snap.jump_branch_pc : snap.cond_branch_pc;
           mispredict_diag_ftb_hit_shadowed_++;
+          mispredict_diag_ftb_hit_shadowed_branch_pc_hist_[src_pc]++;
+          mispredict_diag_ftb_hit_shadowed_snap_pc_hist_[snap_pc]++;
+          mispredict_diag_ftb_hit_shadowed_block_byte_off_hist_[src_pc & 0xFu]++;
+          mispredict_diag_ftb_hit_shadowed_kind_hist_[control_kind_name(is_jump, is_rvc)]++;
+          mispredict_diag_ftb_hit_shadowed_pick_hist_[ftb_pick_name(snap)]++;
           break;
+        }
+        case FtbFallthroughCause::kHitShadowedCondNt: {
+          const uint32_t shadow_pc = is_jump ? snap.jump_branch_pc : snap.cond_branch_pc;
+          mispredict_diag_ftb_hit_shadowed_cond_nt_++;
+          mispredict_diag_ftb_hit_shadowed_cond_nt_branch_pc_hist_[src_pc]++;
+          mispredict_diag_ftb_hit_shadowed_cond_nt_shadow_pc_hist_[shadow_pc]++;
+          mispredict_diag_ftb_hit_shadowed_cond_nt_block_byte_off_hist_[src_pc & 0xFu]++;
+          mispredict_diag_ftb_hit_shadowed_cond_nt_kind_hist_[control_kind_name(is_jump, is_rvc)]++;
+          mispredict_diag_ftb_hit_shadowed_cond_nt_pick_hist_[ftb_pick_name(snap)]++;
+          break;
+        }
         default:
           mispredict_diag_ftb_unclassified_++;
           break;

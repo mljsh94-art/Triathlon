@@ -380,7 +380,7 @@ module tage #(
     upd_use_alt     = upd_prov_weak && use_alt_on_na_q[USE_ALT_BITS-1];
     upd_final_taken = upd_prov_found ? (upd_use_alt ? upd_alt_taken : upd_prov_taken)
                                      : upd_base_taken;
-    upd_mispred     = !upd_prov_found || (upd_final_taken != update_taken_i);
+    upd_mispred     = (upd_final_taken != update_taken_i);
 
     // 牺牲项：在比 provider 更长的表里挑第一个 useful==0 的条目。
     upd_alloc_found = 1'b0;

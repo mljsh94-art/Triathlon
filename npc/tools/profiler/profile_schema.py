@@ -246,6 +246,16 @@ def bench_mispredict_diag(bench: dict) -> dict:
     return out
 
 
+def bench_mispredict_diag_counts(bench: dict) -> dict[str, int | float]:
+    """Per-bucket mispredict counts only (excludes rollup, detail, classified_total)."""
+    skip = {"rollup", "classified_total", "detail"}
+    return {
+        k: v
+        for k, v in bench_mispredict_diag(bench).items()
+        if k not in skip and isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
+
+
 def bench_mispredict_diag_rollup(bench: dict) -> dict:
     diag = bench_mispredict_diag(bench)
     rollup = diag.get("rollup")

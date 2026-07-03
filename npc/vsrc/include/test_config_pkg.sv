@@ -30,7 +30,7 @@ package test_config_pkg;
       BPU_SC_HIST3 : unsigned'(32),
       BPU_SC_THRESH_INIT : unsigned'(10),
       BPU_TAGE_WAYS : unsigned'(2),
-      BPU_USE_LOOP : unsigned'(0),
+      BPU_USE_LOOP : unsigned'(1),
       BPU_LOOP_ENTRIES : unsigned'(128),
       BPU_LOOP_TAG_BITS : unsigned'(10),
       BPU_LOOP_CONF_THRESH : unsigned'(2),

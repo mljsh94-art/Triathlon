@@ -25,6 +25,7 @@ from profile_schema import (
     bench_ifu_fq,
     bench_ipc,
     bench_mispredict_diag,
+    bench_mispredict_diag_counts,
     bench_mispredict_diag_rollup,
     bench_predict,
     bench_predict_doc,
@@ -511,11 +512,7 @@ def render_benchmark_section(bench_name: str, raw: dict) -> str:
         sum(v for k, v in mispredict.items() if k != "flush_count" and v) or 1.0
     )
     mispredict_diag = bench_mispredict_diag(raw)
-    diag_detail = {
-        tr(k): v
-        for k, v in mispredict_diag.items()
-        if k not in ("rollup", "classified_total") and v
-    }
+    diag_detail = {tr(k): v for k, v in bench_mispredict_diag_counts(raw).items() if v}
     rollup = bench_mispredict_diag_rollup(raw)
     diag_rollup = {tr(k): v for k, v in rollup.items() if not k.endswith("_ratio") and v}
     diag_total = float(mispredict_diag.get("classified_total", 0) or mispredict.get("flush_count", 0) or 1.0)
