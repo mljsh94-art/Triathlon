@@ -217,6 +217,14 @@ module tb_triathlon #(
     output logic [3:0]                         dbg_lsu_ld_pipe_ld_req_valid_o,
     output logic [3:0]                         dbg_lsu_ld_pipe_ld_rsp_ready_o,
     output logic [3:0]                         dbg_lsu_ld_pipe_wb_valid_o,
+    output logic [3:0]                         dbg_lsu_accept_dcache_load_o,
+    output logic [3:0]                         dbg_lsu_accept_dcache_candidate_o,
+    output logic [3:0]                         dbg_lsu_accept_dcache_valid_o,
+    output logic [3:0]                         dbg_lsu_accept_dcache_fire_o,
+    output logic [3:0]                         dbg_lsu_accept_dcache_fallback_o,
+    output logic [3:0]                         dbg_lsu_accept_dcache_suppress_stq_o,
+    output logic [3:0]                         dbg_lsu_accept_dcache_suppress_mmio_o,
+    output logic [3:0]                         dbg_lsu_accept_dcache_suppress_complex_o,
     output logic [3:0][ROB_IDX_W-1:0]          dbg_lsu_ld_pipe_wb_rob_idx_o,
     // LSU writeback experiment: LSU exposes 3 CDB ports (2 load + 1 store) and
     // the total CDB width is 9 (6 non-LSU FUs + 3 LSU ports).
@@ -283,6 +291,7 @@ module tb_triathlon #(
     output logic [$bits(decode_pkg::lsu_op_e)-1:0] dbg_st_dcache_req_op_o,
     // Debug (D$ load/store arbitration)
     output logic [2:0]                         dbg_dcache_state_o,
+    output logic                               dbg_dcache_req_is_store_o,
     output logic                               dbg_dcache_refill_valid_o,
     output logic                               dbg_dcache_refill_ready_o,
     output logic                               dbg_dcache_pending_ld_valid_o,
@@ -662,6 +671,14 @@ module tb_triathlon #(
   assign dbg_lsu_ld_pipe_ld_req_valid_o = dut.u_backend.u_lsu_group.lane_ld_req_valid;
   assign dbg_lsu_ld_pipe_ld_rsp_ready_o = dut.u_backend.u_lsu_group.lane_ld_rsp_ready;
   assign dbg_lsu_ld_pipe_wb_valid_o = dut.u_backend.u_lsu_group.lane_wb_valid;
+  assign dbg_lsu_accept_dcache_load_o = dut.u_backend.u_lsu_group.lane_accept_dcache_load;
+  assign dbg_lsu_accept_dcache_candidate_o = dut.u_backend.u_lsu_group.lane_accept_dcache_candidate;
+  assign dbg_lsu_accept_dcache_valid_o = dut.u_backend.u_lsu_group.lane_accept_dcache_valid;
+  assign dbg_lsu_accept_dcache_fire_o = dut.u_backend.u_lsu_group.lane_accept_dcache_fire;
+  assign dbg_lsu_accept_dcache_fallback_o = dut.u_backend.u_lsu_group.lane_accept_dcache_fallback;
+  assign dbg_lsu_accept_dcache_suppress_stq_o = dut.u_backend.u_lsu_group.lane_accept_dcache_suppress_stq;
+  assign dbg_lsu_accept_dcache_suppress_mmio_o = dut.u_backend.u_lsu_group.lane_accept_dcache_suppress_mmio;
+  assign dbg_lsu_accept_dcache_suppress_complex_o = dut.u_backend.u_lsu_group.lane_accept_dcache_suppress_complex;
   assign dbg_lsu_ld_pipe_wb_rob_idx_o = dut.u_backend.u_lsu_group.lane_wb_rob_idx;
   assign dbg_lsu_wb_valid_o = dut.u_backend.lsu_wb_valid;
   assign dbg_lsu_wb_rob_idx_o = dut.u_backend.lsu_wb_tag;
@@ -801,6 +818,7 @@ module tb_triathlon #(
   assign dbg_st_dcache_req_data_o  = dut.u_backend.st_dcache_req_data;
   assign dbg_st_dcache_req_op_o    = dut.u_backend.st_dcache_req_op;
   assign dbg_dcache_state_o = dut.u_backend.u_dcache.state_q;
+  assign dbg_dcache_req_is_store_o = dut.u_backend.u_dcache.req_is_store_q;
   assign dbg_dcache_refill_valid_o = dcache_refill_valid_i;
   assign dbg_dcache_refill_ready_o = dcache_refill_ready_o;
   assign dbg_dcache_pending_ld_valid_o = dut.u_backend.u_dcache.pending_ld_valid_q;

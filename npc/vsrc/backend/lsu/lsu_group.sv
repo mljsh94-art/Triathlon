@@ -276,9 +276,23 @@ module lsu_group #(
   logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_ld_req_addr;
   decode_pkg::lsu_op_e                                         lane_ld_req_op       [N_LSU];
 
-  // Raw per-lane request straight from each ld_pipe (pre port-B-retry
-  // override). lane_ld_req_valid/addr/op above are the arbiter-facing signals
-  // driven, below, as raw OR'd with the single in-flight port-B retry.
+  // Accept-to-DCache bypass for clean cacheable loads. These live requests are
+  // OR'd into the arbiter input for the accept cycle only; if the DCache does
+  // not take them, the owning ld_pipe falls back to its registered S_LD_REQ.
+  logic                [         N_LSU-1:0]                    lane_accept_dcache_load;
+  logic                [         N_LSU-1:0]                    lane_accept_dcache_candidate;
+  logic                [         N_LSU-1:0]                    lane_accept_dcache_valid;
+  logic                [         N_LSU-1:0]                    lane_accept_dcache_fire;
+  logic                [         N_LSU-1:0]                    lane_accept_dcache_fallback;
+  logic                [         N_LSU-1:0]                    lane_accept_dcache_suppress_stq;
+  logic                [         N_LSU-1:0]                    lane_accept_dcache_suppress_mmio;
+  logic                [         N_LSU-1:0]                    lane_accept_dcache_suppress_complex;
+  logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_accept_dcache_addr;
+  decode_pkg::lsu_op_e                                         lane_accept_dcache_op [N_LSU];
+
+  // Raw per-lane request straight from each ld_pipe. lane_ld_req_valid/
+  // addr/op above are the arbiter-facing signals after accept-bypass and
+  // port-B-retry overrides are applied below.
   logic                [         N_LSU-1:0]                    lane_ld_req_valid_pipe;
   logic                [         N_LSU-1:0][     Cfg.PLEN-1:0] lane_ld_req_addr_pipe;
   decode_pkg::lsu_op_e                                         lane_ld_req_op_pipe  [N_LSU];
@@ -867,6 +881,7 @@ module lsu_group #(
 
           .ld_req_valid_o(lane_ld_req_valid_pipe[gi]),
           .ld_req_ready_i(lane_ld_req_ready[gi]),
+          .accept_dcache_fire_i(lane_accept_dcache_fire[gi]),
           .ld_req_addr_o(lane_ld_req_addr_pipe[gi]),
           .ld_req_op_o(lane_ld_req_op_pipe[gi]),
 
@@ -902,26 +917,36 @@ module lsu_group #(
           .fast_lsu_redirect_pc_o(lane_fast_lsu_redirect_pc[gi])
       );
 
-      assign dbg_lane_busy[gi] = lane_ld_req_valid[gi] | lane_ld_rsp_ready[gi] | lane_wb_valid[gi] | lane_mmio_req_valid[gi];
+      assign dbg_lane_busy[gi] = lane_ld_req_valid_pipe[gi] |
+                                 (pb_retry_valid_q && (pb_retry_lane_q == LANE_SEL_WIDTH'(gi))) |
+                                 lane_ld_rsp_ready[gi] | lane_wb_valid[gi] |
+                                 lane_mmio_req_valid[gi];
     end
   endgenerate
 
-  // Arbiter-facing DCache load request = raw per-lane request, OR'd with the
-  // single in-flight port-B-miss retry (forced onto its lane's slot so the
-  // owning lane wins the exact same arbitration path a fresh request would).
-  // The lane's own ld_pipe never observes this override: its ld_req_valid_o
-  // is already low (it moved past S_LD_REQ when port B first accepted it),
-  // and ld_req_ready_i is a don't-care in that state.
+  // Arbiter-facing DCache load request = registered per-lane requests, OR'd
+  // with accept-cycle clean-load bypasses and the single in-flight port-B-miss
+  // retry. The live bypass is intentionally not counted in dbg_lane_busy above,
+  // so it cannot feed back into LSU admission/AMO ordering ready logic.
   always_comb begin
-    lane_ld_req_valid = lane_ld_req_valid_pipe;
+    lane_ld_req_valid = lane_ld_req_valid_pipe | lane_accept_dcache_valid;
     lane_ld_req_addr  = lane_ld_req_addr_pipe;
     lane_ld_req_op    = lane_ld_req_op_pipe;
+    for (int i = 0; i < N_LSU; i++) begin
+      if (lane_accept_dcache_valid[i]) begin
+        lane_ld_req_addr[i] = lane_accept_dcache_addr[i];
+        lane_ld_req_op[i]   = lane_accept_dcache_op[i];
+      end
+    end
     if (pb_retry_valid_q) begin
       lane_ld_req_valid[pb_retry_lane_q] = 1'b1;
       lane_ld_req_addr[pb_retry_lane_q]  = pb_retry_addr_q;
       lane_ld_req_op[pb_retry_lane_q]    = pb_retry_op_q;
     end
   end
+
+  assign lane_accept_dcache_fire = lane_accept_dcache_valid & lane_ld_req_ready;
+  assign lane_accept_dcache_fallback = lane_accept_dcache_valid & ~lane_ld_req_ready;
 
   // ---------------------------------------------------------
   // Shared-resource arbitration (DCache req RR / MMIO / WB lane RR)
@@ -1225,6 +1250,52 @@ module lsu_group #(
     lane_req_valid = '0;
     for (int i = 0; i < N_LSU; i++) begin
       lane_req_valid[i] = (load_alloc_fire && alloc_grant[i]) || (dual_fire && alloc_grant_p1[i]);
+    end
+  end
+
+  always_comb begin
+    lane_accept_dcache_load             = lane_req_valid;
+    lane_accept_dcache_candidate        = '0;
+    lane_accept_dcache_valid            = '0;
+    lane_accept_dcache_suppress_stq     = '0;
+    lane_accept_dcache_suppress_mmio    = '0;
+    lane_accept_dcache_suppress_complex = lane_req_valid;
+    lane_accept_dcache_addr             = '0;
+    for (int i = 0; i < N_LSU; i++) begin
+      logic bus_candidate;
+      logic bus_stq_hit;
+      logic bus_mmio;
+      logic [Cfg.PLEN-1:0] bus_addr;
+      decode_pkg::lsu_op_e bus_op;
+
+      bus_candidate = 1'b0;
+      bus_stq_hit   = 1'b0;
+      bus_mmio      = 1'b0;
+      bus_addr      = '0;
+      bus_op        = decode_pkg::LSU_LW;
+
+      if (load_alloc_fire && alloc_grant[i]) begin
+        bus_addr      = req_eff_addr;
+        bus_op        = selected_uop.lsu_op;
+        bus_candidate = !req_ordered_load && !lane_misaligned && !req_has_force_fault;
+        bus_stq_hit   = stq_fwd_hit_i;
+        bus_mmio      = config_pkg::is_mmio_addr({{(32-Cfg.PLEN){1'b0}}, req_eff_addr});
+      end
+      if (dual_fire && alloc_grant_p1[i]) begin
+        bus_addr      = req_p1_eff_addr;
+        bus_op        = uop_i[1].lsu_op;
+        bus_candidate = !req_p1_misaligned;
+        bus_stq_hit   = stq_fwd_hit_i2;
+        bus_mmio      = config_pkg::is_mmio_addr({{(32-Cfg.PLEN){1'b0}}, req_p1_eff_addr});
+      end
+
+      lane_accept_dcache_candidate[i]        = lane_req_valid[i] && bus_candidate;
+      lane_accept_dcache_suppress_complex[i] = lane_req_valid[i] && !bus_candidate;
+      lane_accept_dcache_suppress_stq[i]     = lane_req_valid[i] && bus_candidate && bus_stq_hit;
+      lane_accept_dcache_suppress_mmio[i]    = lane_req_valid[i] && bus_candidate && !bus_stq_hit && bus_mmio;
+      lane_accept_dcache_valid[i]            = lane_req_valid[i] && bus_candidate && !bus_stq_hit && !bus_mmio;
+      lane_accept_dcache_addr[i]             = bus_addr;
+      lane_accept_dcache_op[i]               = bus_op;
     end
   end
 

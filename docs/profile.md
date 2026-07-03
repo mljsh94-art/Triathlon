@@ -69,6 +69,8 @@ make -C npc sim DIFFTEST= IMG=.../dhrystone-riscv32i-npc.bin \
 
 旧版扁平字段（v1）仍可通过 `npc/tools/profiler/profile_schema.py` 访问器读取；看板与回归脚本自动兼容。
 
+LSU load 等 DCache ready 的 stall 明细会区分 refill、pending load、MSHR、DCache state 与 store drain：`*_store_drain_*` 表示 DCache 当前锁存请求确认为 store；`*_store_waiting_not_cause` 表示 store 端同周期 valid/!ready，但不是 load 被阻塞的直接归因。
+
 BPU 重构 **行为 golden**（cycles + `dbg_bpu` 逐字段 diff）见 [bpu-refactor.md](bpu-refactor.md)，与本文性能 profile 互补。
 
 `summary.html` 报告按 **KPI → Flush → Stall → Predict → Hotspots** 分区展示；dashboard Run Details 显示 Top stall 与 decode_blocked 前列。

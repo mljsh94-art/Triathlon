@@ -211,9 +211,43 @@ const char *classify_lsu_head_lane_detail(const Vtb_triathlon *top, bool nonbp) 
                    : "rob_lsu_incomplete_sm_idle";
     case 1u:
       if (lane.ld_req_valid && !top->dbg_lsu_ld_req_ready_o) {
-        if (top->dbg_st_dcache_req_valid_o && !top->dbg_st_dcache_req_ready_o) {
-          return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_st_conflict_nonbp"
-                       : "rob_lsu_wait_ld_req_ready_st_conflict";
+        const uint32_t dc_state = static_cast<uint32_t>(top->dbg_dcache_state_o);
+        const bool store_req_wait = top->dbg_st_dcache_req_valid_o && !top->dbg_st_dcache_req_ready_o;
+        const bool store_drain_active = store_req_wait && top->dbg_dcache_req_is_store_o && dc_state != 0u;
+
+        if (top->dbg_dcache_refill_valid_o) {
+          return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_refill_nonbp"
+                       : "rob_lsu_wait_ld_req_ready_refill";
+        }
+        if (top->dbg_dcache_pending_ld_valid_o) {
+          return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_pending_load_nonbp"
+                       : "rob_lsu_wait_ld_req_ready_pending_load";
+        }
+        if (store_drain_active) {
+          switch (dc_state) {
+            case 1u:
+              return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_store_drain_lookup_nonbp"
+                           : "rob_lsu_wait_ld_req_ready_store_drain_lookup";
+            case 2u:
+              return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_store_drain_write_nonbp"
+                           : "rob_lsu_wait_ld_req_ready_store_drain_write";
+            case 3u:
+              return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_store_drain_wb_req_nonbp"
+                           : "rob_lsu_wait_ld_req_ready_store_drain_wb_req";
+            case 4u:
+              return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_store_drain_miss_req_nonbp"
+                           : "rob_lsu_wait_ld_req_ready_store_drain_miss_req";
+            case 5u:
+              return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_store_drain_wait_refill_nonbp"
+                           : "rob_lsu_wait_ld_req_ready_store_drain_wait_refill";
+            default:
+              return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_store_drain_other_nonbp"
+                           : "rob_lsu_wait_ld_req_ready_store_drain_other";
+          }
+        }
+        if (top->dbg_dcache_ld_line_in_mshr_o) {
+          return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_mshr_line_hit_nonbp"
+                       : "rob_lsu_wait_ld_req_ready_mshr_line_hit";
         }
         if (top->dbg_dc_mshr_full_o || !top->dbg_dc_mshr_alloc_ready_o) {
           return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_mshr_blocked_nonbp"
@@ -223,8 +257,36 @@ const char *classify_lsu_head_lane_detail(const Vtb_triathlon *top, bool nonbp) 
           return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_miss_port_busy_nonbp"
                        : "rob_lsu_wait_ld_req_ready_miss_port_busy";
         }
-        return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_nonbp"
-                     : "rob_lsu_wait_ld_req_ready";
+        if (store_req_wait) {
+          return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_store_waiting_not_cause_nonbp"
+                       : "rob_lsu_wait_ld_req_ready_store_waiting_not_cause";
+        }
+        switch (dc_state) {
+          case 0u:
+            return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_dcache_idle_nonbp"
+                         : "rob_lsu_wait_ld_req_ready_dcache_idle";
+          case 1u:
+            return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_dcache_lookup_nonbp"
+                         : "rob_lsu_wait_ld_req_ready_dcache_lookup";
+          case 2u:
+            return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_dcache_store_write_nonbp"
+                         : "rob_lsu_wait_ld_req_ready_dcache_store_write";
+          case 3u:
+            return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_dcache_wb_req_nonbp"
+                         : "rob_lsu_wait_ld_req_ready_dcache_wb_req";
+          case 4u:
+            return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_dcache_miss_req_nonbp"
+                         : "rob_lsu_wait_ld_req_ready_dcache_miss_req";
+          case 5u:
+            return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_dcache_wait_refill_nonbp"
+                         : "rob_lsu_wait_ld_req_ready_dcache_wait_refill";
+          case 6u:
+            return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_dcache_resp_nonbp"
+                         : "rob_lsu_wait_ld_req_ready_dcache_resp";
+          default:
+            return nonbp ? "rob_head_lsu_incomplete_wait_req_ready_dcache_unknown_nonbp"
+                         : "rob_lsu_wait_ld_req_ready_dcache_unknown";
+        }
       }
       if (lane.ld_req_valid && top->dbg_lsu_ld_req_ready_o && !top->dbg_lsu_ld_fire_o) {
         return nonbp ? "rob_head_lsu_incomplete_wait_req_grant_nonbp"
@@ -632,19 +694,31 @@ const char *ProfileCollector::classify_decode_blocked_detail_cycle(const Vtb_tri
     if (static_cast<uint32_t>(top->dbg_lsu_grp_ld_owner_o) == 0u) {
       const bool ld_req_wait = top->dbg_lsu_ld_req_valid_o && !top->dbg_lsu_ld_req_ready_o;
       if (ld_req_wait) {
+        const uint32_t dc_state = static_cast<uint32_t>(top->dbg_dcache_state_o);
+        const bool store_req_wait = top->dbg_st_dcache_req_valid_o && !top->dbg_st_dcache_req_ready_o;
+        const bool store_drain_active = store_req_wait && top->dbg_dcache_req_is_store_o && dc_state != 0u;
+
         if (top->dbg_lsu_pte_req_valid_o) return "lsug_wait_ld_req_not_ready_lsu_pte";
         if (top->dbg_ifu_pte_req_valid_o) return "lsug_wait_ld_req_not_ready_ifu_pte";
         if (top->dbg_dcache_refill_valid_o) return "lsug_wait_ld_req_not_ready_refill";
         if (top->dbg_dcache_pending_ld_valid_o) return "lsug_wait_ld_req_not_ready_pending_load";
-        if (top->dbg_st_dcache_req_valid_o && !top->dbg_st_dcache_req_ready_o) {
-          return "lsug_wait_ld_req_not_ready_store_conflict";
+        if (store_drain_active) {
+          switch (dc_state) {
+            case 1u: return "lsug_wait_ld_req_not_ready_store_drain_lookup";
+            case 2u: return "lsug_wait_ld_req_not_ready_store_drain_write";
+            case 3u: return "lsug_wait_ld_req_not_ready_store_drain_wb_req";
+            case 4u: return "lsug_wait_ld_req_not_ready_store_drain_miss_req";
+            case 5u: return "lsug_wait_ld_req_not_ready_store_drain_wait_refill";
+            default: return "lsug_wait_ld_req_not_ready_store_drain_other";
+          }
         }
         if (top->dbg_dcache_ld_line_in_mshr_o) return "lsug_wait_ld_req_not_ready_mshr_line_hit";
         if (top->dbg_dc_mshr_full_o || !top->dbg_dc_mshr_alloc_ready_o) {
           return "lsug_wait_ld_req_not_ready_mshr_blocked";
         }
+        if (store_req_wait) return "lsug_wait_ld_req_not_ready_store_waiting_not_cause";
 
-        switch (static_cast<uint32_t>(top->dbg_dcache_state_o)) {
+        switch (dc_state) {
           case 0u: return "lsug_wait_ld_req_not_ready_dcache_idle";
           case 1u: return "lsug_wait_ld_req_not_ready_dcache_lookup";
           case 2u: return "lsug_wait_ld_req_not_ready_dcache_store_write";

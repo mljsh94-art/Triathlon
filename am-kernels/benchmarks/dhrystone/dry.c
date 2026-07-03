@@ -940,9 +940,17 @@ int main ()
 
   printf ("Finished in %d ms\n", (int)User_Time);
   printf("==================================================\n");
-  printf("Dhrystone %s         %d Marks\n", pass ? "PASS" : "FAIL",
-      880900 / (int)User_Time * NUMBER_OF_RUNS/ 500000);
-  printf("                   vs. 100000 Marks (i7-7700K @ 4.20GHz)\n");
+  printf("Dhrystone %s\n", pass ? "PASS" : "FAIL");
+  {
+    /* Timer counts cycles; User_Time is cycles/1000 (same as CoreMark port). */
+    uint32_t t_ms = (uint32_t)User_Time;
+    uint32_t dmips_mhz_x1000 = t_ms ? (Number_Of_Runs * 1000000u) / (t_ms * 1757u) : 0;
+    uint32_t frac = dmips_mhz_x1000 % 1000;
+    printf("DMIPS/MHz     : %d.", (int)(dmips_mhz_x1000 / 1000));
+    if (frac < 100) printf("0");
+    if (frac < 10) printf("0");
+    printf("%d\n", (int)frac);
+  }
 
   return (pass ? 0 : 1);
 }

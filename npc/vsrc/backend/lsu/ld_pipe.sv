@@ -55,6 +55,8 @@ module ld_pipe #(
     // =========================================================
     output logic                               ld_req_valid_o,
     input  logic                               ld_req_ready_i,
+    // Asserted by lsu_group when the just-accepted clean load was accepted by DCache.
+    input  logic                               accept_dcache_fire_i,
     output logic                [Cfg.PLEN-1:0] ld_req_addr_o,
     output decode_pkg::lsu_op_e                ld_req_op_o,
 
@@ -322,6 +324,9 @@ module ld_pipe #(
         if (req_fire_w) begin
           state_d = next_state_after_accept(is_store, is_load, misaligned, force_exception_i,
                                             stq_fwd_hit_i, is_mmio);
+          if (accept_dcache_fire_i) begin
+            state_d = S_LD_RSP;
+          end
         end
       end
 
@@ -337,6 +342,9 @@ module ld_pipe #(
             if (req_fire_w) begin
               state_d = next_state_after_accept(is_store, is_load, misaligned, force_exception_i,
                                                 stq_fwd_hit_i, is_mmio);
+              if (accept_dcache_fire_i) begin
+                state_d = S_LD_RSP;
+              end
             end else begin
               state_d = S_IDLE;
             end
@@ -351,6 +359,9 @@ module ld_pipe #(
           if (req_fire_w) begin
             state_d = next_state_after_accept(is_store, is_load, misaligned, force_exception_i,
                                               stq_fwd_hit_i, is_mmio);
+            if (accept_dcache_fire_i) begin
+              state_d = S_LD_RSP;
+            end
           end else begin
             state_d = S_IDLE;
           end
@@ -371,6 +382,9 @@ module ld_pipe #(
             if (req_fire_w) begin
               state_d = next_state_after_accept(is_store, is_load, misaligned, force_exception_i,
                                                 stq_fwd_hit_i, is_mmio);
+              if (accept_dcache_fire_i) begin
+                state_d = S_LD_RSP;
+              end
             end else begin
               state_d = S_IDLE;
             end
