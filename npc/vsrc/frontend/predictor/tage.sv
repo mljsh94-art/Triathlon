@@ -21,7 +21,7 @@ module tage #(
     input logic rst_i,
 
     input  logic [LANES-1:0][Cfg.PLEN-1:0] predict_pc_i,
-    input  logic [((GHR_BITS > 0) ? GHR_BITS : 1)-1:0] predict_ghr_i,
+    input  logic [LANES-1:0][((GHR_BITS > 0) ? GHR_BITS : 1)-1:0] predict_ghr_i,
     // predict_hit_o: tagged provider 命中（顶层 override 门控用，语义不含 base）。
     output logic [LANES-1:0] predict_hit_o,
     // predict_taken_o: 最终方向（tagged provider/alt 或 T0 base 回退，始终有效）。
@@ -216,20 +216,22 @@ module tage #(
   assign dbg_cond_choose_local_o    = dbg_cond_update_total_q;
   assign dbg_cond_choose_global_o   = 64'd0;
 
-  // 折叠历史只依赖共享 GHR，与 lane/PC 无关：每表算一次，lane 内只算 PC 折叠再异或。
-  logic [IDX_W-1:0]   hist_idx_fold [NUM_TABLES];
-  logic [TAG_BITS-1:0] hist_tag_fold [NUM_TABLES];
+  // 预测端按 lane 使用前缀化 GHR；lane 内再与各自 PC 折叠。
+  logic [LANES-1:0][IDX_W-1:0] hist_idx_fold [NUM_TABLES];
+  logic [LANES-1:0][TAG_BITS-1:0] hist_tag_fold [NUM_TABLES];
 
   always_comb begin
     for (int t = 0; t < NUM_TABLES; t++) begin
-      hist_idx_fold[t] = fold_hist_idx(predict_ghr_i, HIST_LEN[t], IDX_HSALT[t]);
-      hist_tag_fold[t] = fold_hist_tag(predict_ghr_i, HIST_LEN[t], TAG_HSALT[t]);
+      for (int i = 0; i < LANES; i++) begin
+        hist_idx_fold[t][i] = fold_hist_idx(predict_ghr_i[i], HIST_LEN[t], IDX_HSALT[t]);
+        hist_tag_fold[t][i] = fold_hist_tag(predict_ghr_i[i], HIST_LEN[t], TAG_HSALT[t]);
+      end
     end
 
     for (int i = 0; i < LANES; i++) begin
       for (int t = 0; t < NUM_TABLES; t++) begin
-        pred_idx[t][i] = fold_pc_idx(predict_pc_i[i], IDX_SALT[t]) ^ hist_idx_fold[t];
-        pred_tag[t][i] = fold_pc_tag(predict_pc_i[i], TAG_SALT[t]) ^ hist_tag_fold[t];
+        pred_idx[t][i] = fold_pc_idx(predict_pc_i[i], IDX_SALT[t]) ^ hist_idx_fold[t][i];
+        pred_tag[t][i] = fold_pc_tag(predict_pc_i[i], TAG_SALT[t]) ^ hist_tag_fold[t][i];
       end
     end
 

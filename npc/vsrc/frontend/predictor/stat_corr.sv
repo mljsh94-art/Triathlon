@@ -31,9 +31,9 @@ module stat_corr #(
     input logic clk_i,
     input logic rst_i,
 
-    // 预测端（每 lane 一个 cond 候选 PC，共享 spec GHR）
+    // 预测端（每 lane 一个 cond 候选 PC/GHR；后续 lane 使用块内前缀历史）
     input  logic [LANES-1:0][Cfg.PLEN-1:0] predict_pc_i,
-    input  logic [((GHR_BITS > 0) ? GHR_BITS : 1)-1:0] predict_ghr_i,
+    input  logic [LANES-1:0][((GHR_BITS > 0) ? GHR_BITS : 1)-1:0] predict_ghr_i,
     // TAGE 侧带（provider/base 居中 ctr，signed）
     input  logic [LANES-1:0] tage_taken_i,
     input  logic [LANES-1:0] tage_hit_i,
@@ -152,7 +152,7 @@ module stat_corr #(
       logic                    sc_tk;
       sum_v = '0;
       for (int t = 0; t < NUM_TABLES; t++) begin
-        sum_v += SUM_W'(ctr_q[t][gehl_index(predict_pc_i[l], predict_ghr_i, t)]);
+        sum_v += SUM_W'(ctr_q[t][gehl_index(predict_pc_i[l], predict_ghr_i[l], t)]);
       end
       sum_v += tage_term(tage_conf_i[l]);
       pred_sum_w[l] = sum_v;

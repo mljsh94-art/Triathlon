@@ -38,6 +38,14 @@ module tb_ftq #(
   localparam int unsigned CNT_W = (TB_FTQ_DEPTH > 1) ? $clog2(TB_FTQ_DEPTH + 1) : 1;
 
   logic [CNT_W-1:0] count_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] enq_pred_ghr_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] deq_pred_ghr_w;
+
+  always_comb begin
+    for (int i = 0; i < Cfg.INSTR_PER_FETCH; i++) begin
+      enq_pred_ghr_w[i] = enq_pred_ghr_i;
+    end
+  end
 
   ftq #(
       .Cfg(Cfg),
@@ -54,7 +62,7 @@ module tb_ftq #(
       .enq_pred_slot_idx_i(enq_pred_slot_idx_i),
       .enq_pred_target_i(enq_pred_target_i),
       .enq_pred_npc_i(enq_pred_npc_i),
-      .enq_pred_ghr_i(enq_pred_ghr_i),
+      .enq_pred_ghr_i(enq_pred_ghr_w),
       .enq_epoch_i(enq_epoch_i),
       .deq_valid_o(deq_valid_o),
       .deq_ready_i(deq_ready_i),
@@ -63,12 +71,13 @@ module tb_ftq #(
       .deq_pred_slot_idx_o(deq_pred_slot_idx_o),
       .deq_pred_target_o(deq_pred_target_o),
       .deq_pred_npc_o(deq_pred_npc_o),
-      .deq_pred_ghr_o(deq_pred_ghr_o),
+      .deq_pred_ghr_o(deq_pred_ghr_w),
       .deq_epoch_o(deq_epoch_o),
       .deq_ftq_id_o(deq_ftq_id_o),
       .count_o(count_w)
   );
 
+  assign deq_pred_ghr_o = deq_pred_ghr_w[0];
   assign dbg_count_o = count_w;
   assign dbg_full_o = (count_w == CNT_W'(TB_FTQ_DEPTH));
   assign dbg_empty_o = (count_w == '0);

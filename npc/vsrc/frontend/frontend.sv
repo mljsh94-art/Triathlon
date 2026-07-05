@@ -63,7 +63,7 @@ module frontend #(
   logic [SLOT_IDX_W-1:0] ftq_enq_pred_slot_idx;
   logic [Cfg.PLEN-1:0] ftq_enq_pred_target;
   logic [Cfg.PLEN-1:0] ftq_enq_pred_npc;
-  logic [PRED_GHR_W-1:0] ftq_enq_pred_ghr;
+  logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] ftq_enq_pred_ghr;
   logic [EPOCH_W-1:0] ftq_enq_epoch;
   logic [FTQ_ID_W-1:0] ftq_enq_ftq_id;
   logic ftq_deq_valid;
@@ -73,7 +73,7 @@ module frontend #(
   logic [SLOT_IDX_W-1:0] ftq_deq_pred_slot_idx;
   logic [Cfg.PLEN-1:0] ftq_deq_pred_target;
   logic [Cfg.PLEN-1:0] ftq_deq_pred_npc;
-  logic [PRED_GHR_W-1:0] ftq_deq_pred_ghr;
+  logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] ftq_deq_pred_ghr;
   logic [EPOCH_W-1:0] ftq_deq_epoch;
   logic [FTQ_ID_W-1:0] ftq_deq_ftq_id;
   logic [FTQ_CNT_W-1:0] ftq_count;

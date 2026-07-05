@@ -18,7 +18,7 @@ module ftq #(
   input  logic [PRED_SLOT_IDX_W-1:0] enq_pred_slot_idx_i,
   input  logic [Cfg.PLEN-1:0] enq_pred_target_i,
     input  logic [Cfg.PLEN-1:0] enq_pred_npc_i,
-    input  logic [PRED_GHR_W-1:0] enq_pred_ghr_i,
+    input  logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] enq_pred_ghr_i,
     input  logic [EPOCH_W-1:0] enq_epoch_i,
     output logic [ID_W-1:0] enq_ftq_id_o,
 
@@ -29,7 +29,7 @@ module ftq #(
   output logic [PRED_SLOT_IDX_W-1:0] deq_pred_slot_idx_o,
   output logic [Cfg.PLEN-1:0] deq_pred_target_o,
     output logic [Cfg.PLEN-1:0] deq_pred_npc_o,
-    output logic [PRED_GHR_W-1:0] deq_pred_ghr_o,
+    output logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] deq_pred_ghr_o,
     output logic [EPOCH_W-1:0] deq_epoch_o,
     output logic [((DEPTH > 1) ? $clog2(DEPTH) : 1)-1:0] deq_ftq_id_o,
 
@@ -48,7 +48,7 @@ module ftq #(
   logic [DEPTH-1:0][SLOT_IDX_W-1:0] pred_slot_idx_q;
   logic [DEPTH-1:0][Cfg.PLEN-1:0] pred_target_q;
   logic [DEPTH-1:0][Cfg.PLEN-1:0] pred_npc_q;
-  logic [DEPTH-1:0][PRED_GHR_W-1:0] pred_ghr_q;
+  logic [DEPTH-1:0][Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] pred_ghr_q;
   logic [DEPTH-1:0][EPOCH_W-1:0] epoch_q;
 
   logic enq_fire_w;

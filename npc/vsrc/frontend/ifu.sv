@@ -23,7 +23,7 @@ module ifu #(
     input  logic [Cfg.PLEN-1:0]        ftq_deq_pred_npc_i,
     input  logic [2:0]                 ftq_deq_epoch_i,
     input  logic [((Cfg.FTQ_DEPTH >= 2) ? $clog2(Cfg.FTQ_DEPTH) : 1)-1:0] ftq_deq_ftq_id_i,
-    input  logic [PRED_GHR_W-1:0]      ftq_deq_pred_ghr_i,
+    input  logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] ftq_deq_pred_ghr_i,
     input  logic [Cfg.PLEN-1:0]        ftq_next_pc_i,
 
     //--- 2.ICache请求接口 (缓存提货，获取指令数据) ---
@@ -120,7 +120,7 @@ module ifu #(
   logic [REQ_DEPTH-1:0][SLOT_IDX_W-1:0] req_pred_slot_idx_fifo_q;
   logic [REQ_DEPTH-1:0][Cfg.PLEN-1:0] req_pred_target_fifo_q;
   logic [REQ_DEPTH-1:0][FTQ_ID_W-1:0] req_ftq_id_fifo_q;
-  logic [REQ_DEPTH-1:0][PRED_GHR_W-1:0] req_pred_ghr_fifo_q;
+  logic [REQ_DEPTH-1:0][Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] req_pred_ghr_fifo_q;
   logic [REQ_DEPTH-1:0][EPOCH_W-1:0] req_epoch_fifo_q;
   logic [REQ_PTR_W-1:0] req_head_q;
   logic [REQ_PTR_W-1:0] req_tail_q;
@@ -130,7 +130,7 @@ module ifu #(
   logic [SLOT_IDX_W-1:0] req_head_pred_slot_idx_w;
   logic [Cfg.PLEN-1:0] req_head_pred_target_w;
   logic [FTQ_ID_W-1:0] req_head_ftq_id_w;
-  logic [PRED_GHR_W-1:0] req_head_pred_ghr_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] req_head_pred_ghr_w;
   logic [EPOCH_W-1:0] req_head_epoch_w;
 
   // Inflight FIFO metadata
@@ -139,7 +139,7 @@ module ifu #(
   logic [INF_DEPTH-1:0][SLOT_IDX_W-1:0] inf_pred_slot_idx_fifo_q;
   logic [INF_DEPTH-1:0][Cfg.PLEN-1:0] inf_pred_target_fifo_q;
   logic [INF_DEPTH-1:0][FTQ_ID_W-1:0] inf_ftq_id_fifo_q;
-  logic [INF_DEPTH-1:0][PRED_GHR_W-1:0] inf_pred_ghr_fifo_q;
+  logic [INF_DEPTH-1:0][Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] inf_pred_ghr_fifo_q;
   logic [INF_DEPTH-1:0][EPOCH_W-1:0] inf_epoch_fifo_q;
   logic [INF_PTR_W-1:0] inf_head_q;
   logic [INF_PTR_W-1:0] inf_tail_q;
@@ -159,7 +159,7 @@ module ifu #(
   logic [SLOT_IDX_W-1:0] inf_head_pred_slot_idx_w;
   logic [Cfg.PLEN-1:0] inf_head_pred_target_w;
   logic [FTQ_ID_W-1:0] inf_head_ftq_id_w;
-  logic [PRED_GHR_W-1:0] inf_head_pred_ghr_w;
+  logic [Cfg.INSTR_PER_FETCH-1:0][PRED_GHR_W-1:0] inf_head_pred_ghr_w;
   logic [EPOCH_W-1:0] inf_head_epoch_w;
 
   logic [PRED_SLOT_COUNT-1:0] rsp_slot_valid_w;
@@ -374,7 +374,7 @@ module ifu #(
     end
     for (int w = 0; w < Cfg.INSTR_PER_FETCH; w++) begin
       rsp_ftq_id_w[w]      = inf_head_ftq_id_w;
-      rsp_pred_ghr_w[w]    = inf_head_pred_ghr_w;
+      rsp_pred_ghr_w[w]    = inf_head_pred_ghr_w[w];
       rsp_fetch_epoch_w[w] = inf_head_epoch_w;
     end
   end

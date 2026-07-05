@@ -50,6 +50,9 @@ struct FtbPredSnap {
   bool cond_taken_pred = false;
   bool cond_lane_valid[2] = {};
   bool cond_lane_taken[2] = {};
+  uint32_t cond_lane_provider[2] = {};
+  bool cond_lane_sc_override[2] = {};
+  bool cond_lane_loop_override[2] = {};
   uint32_t cond_lane_pc[2] = {};
   bool pick_cond = false;
   bool pick_jump = false;
@@ -58,6 +61,11 @@ struct FtbPredSnap {
   uint32_t cond_branch_pc = 0;
   uint32_t jump_branch_pc = 0;
 };
+
+uint64_t cond_provider_lane_key(uint32_t pc, uint32_t provider, uint32_t lane) {
+  return (static_cast<uint64_t>(pc) << 4) | ((static_cast<uint64_t>(provider) & 3ull) << 2) |
+         (static_cast<uint64_t>(lane) & 3ull);
+}
 
 const char *control_kind_name(bool is_jump, bool is_rvc) {
   if (is_jump) return is_rvc ? "jump_rvc" : "jump_32";
@@ -75,7 +83,20 @@ bool read_packed_bit(uint16_t vec, uint32_t idx) {
   return ((vec >> idx) & 1u) != 0u;
 }
 
+bool read_packed_bit(uint32_t vec, uint32_t idx) {
+  return ((vec >> idx) & 1u) != 0u;
+}
+
+bool read_packed_bit(uint64_t vec, uint32_t idx) {
+  return ((vec >> idx) & 1u) != 0u;
+}
+
 uint32_t read_packed_field(uint16_t vec, uint32_t idx, uint32_t width) {
+  const uint32_t mask = (width >= 32u) ? 0xFFFFFFFFu : ((1u << width) - 1u);
+  return (vec >> (idx * width)) & mask;
+}
+
+uint32_t read_packed_field(uint32_t vec, uint32_t idx, uint32_t width) {
   const uint32_t mask = (width >= 32u) ? 0xFFFFFFFFu : ((1u << width) - 1u);
   return (vec >> (idx * width)) & mask;
 }
@@ -83,6 +104,32 @@ uint32_t read_packed_field(uint16_t vec, uint32_t idx, uint32_t width) {
 uint32_t read_packed_field64(uint64_t vec, uint32_t idx, uint32_t width) {
   const uint64_t mask = (width >= 64u) ? ~0ull : ((1ull << width) - 1ull);
   return static_cast<uint32_t>((vec >> (idx * width)) & mask);
+}
+
+uint32_t read_packed_field_words(const uint32_t *words, uint32_t idx, uint32_t width) {
+  const uint32_t lsb = idx * width;
+  const uint32_t lo = lsb / 32u;
+  const uint32_t off = lsb % 32u;
+  const uint32_t mask = (width >= 32u) ? 0xFFFFFFFFu : ((1u << width) - 1u);
+  if (off + width <= 32u) {
+    return (words[lo] >> off) & mask;
+  }
+  const uint64_t chunk =
+      (static_cast<uint64_t>(words[lo]) >> off) |
+      (static_cast<uint64_t>(words[lo + 1u]) << (32u - off));
+  return static_cast<uint32_t>(chunk & static_cast<uint64_t>(mask));
+}
+
+bool read_packed_bit_words(const uint32_t *words, uint32_t idx) {
+  return ((words[idx / 32u] >> (idx % 32u)) & 1u) != 0u;
+}
+
+uint32_t read_packed_field64(WDataOutP words, uint32_t idx, uint32_t width) {
+  return read_packed_field_words(words, idx, width);
+}
+
+bool read_packed_bit(WDataOutP words, uint32_t idx) {
+  return read_packed_bit_words(words, idx);
 }
 
 FtbPredSnap read_ftb_pred_snap(const Vtb_triathlon *top, uint32_t ftq_id, uint32_t ftq_depth,
@@ -106,9 +153,18 @@ FtbPredSnap read_ftb_pred_snap(const Vtb_triathlon *top, uint32_t ftq_id, uint32
       read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_valid_o, ftq_id, 2);
   const uint32_t cond_lane_taken =
       read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_taken_o, ftq_id, 2);
+  const uint32_t cond_lane_provider =
+      read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_provider_o, ftq_id, 4);
+  const uint32_t cond_lane_sc_override =
+      read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_sc_override_o, ftq_id, 2);
+  const uint32_t cond_lane_loop_override =
+      read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_loop_override_o, ftq_id, 2);
   for (uint32_t lane = 0; lane < 2; lane++) {
     snap.cond_lane_valid[lane] = ((cond_lane_valid >> lane) & 1u) != 0u;
     snap.cond_lane_taken[lane] = ((cond_lane_taken >> lane) & 1u) != 0u;
+    snap.cond_lane_provider[lane] = (cond_lane_provider >> (lane * 2u)) & 3u;
+    snap.cond_lane_sc_override[lane] = ((cond_lane_sc_override >> lane) & 1u) != 0u;
+    snap.cond_lane_loop_override[lane] = ((cond_lane_loop_override >> lane) & 1u) != 0u;
   }
   snap.pick_cond = read_packed_bit(top->dbg_bpu_pred_snap_pick_cond_o, ftq_id);
   snap.pick_jump = read_packed_bit(top->dbg_bpu_pred_snap_pick_jump_o, ftq_id);
@@ -208,8 +264,8 @@ ProfileCollector::ProfileCollector(const SimArgs &args,
       cfg_commit_width_(cfg_commit_width),
       cfg_commit_mask_(make_low_mask(cfg_commit_width_)),
       cfg_fetch_width_bytes_(cfg_instr_per_fetch * 4u),
-      cfg_ftq_depth_(16u),
-      cfg_ftq_id_w_(4u),
+      cfg_ftq_depth_(32u),
+      cfg_ftq_id_w_(5u),
       cfg_fetch_epoch_w_(3u),
       commit_width_hist_(std::max<uint32_t>(5u, cfg_commit_width_ + 1u), 0) {}
 
@@ -240,6 +296,32 @@ void ProfileCollector::observe_cycle(const Vtb_triathlon *top) {
       const bool taken = is_jump || (top->commit_actual_npc_o[i] != pc + instr_size);
       if (taken) {
         bpu_taken_control_pc_hist_[pc]++;
+      }
+      if (!is_jump) {
+        const uint32_t ftq_id = read_packed_field(top->commit_ftq_id_o, i, cfg_ftq_id_w_);
+        const uint32_t commit_fetch_epoch =
+            read_packed_field(top->commit_fetch_epoch_o, i, cfg_fetch_epoch_w_);
+        const FtbPredSnap snap =
+            read_ftb_pred_snap(top, ftq_id, cfg_ftq_depth_, cfg_fetch_epoch_w_);
+        const int cond_lane = find_cond_lane(snap, pc);
+        if (snap.valid && snap.fetch_epoch == commit_fetch_epoch && cond_lane >= 0) {
+          const uint32_t lane = static_cast<uint32_t>(cond_lane);
+          const uint32_t provider = snap.cond_lane_provider[lane];
+          const uint64_t key = cond_provider_lane_key(pc, provider, lane);
+          const bool pred_correct = (snap.cond_lane_taken[lane] == taken);
+          const bool override_used =
+              snap.cond_lane_sc_override[lane] || snap.cond_lane_loop_override[lane];
+          cond_provider_lane_selected_hist_[key]++;
+          if (pred_correct) {
+            cond_provider_lane_correct_hist_[key]++;
+          } else {
+            cond_provider_lane_miss_hist_[key]++;
+          }
+          if (override_used) {
+            cond_provider_lane_override_hist_[key]++;
+            if (pred_correct) cond_provider_lane_override_correct_hist_[key]++;
+          }
+        }
       }
       if (!selected_update) {
         selected_update = true;

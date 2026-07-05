@@ -44,7 +44,8 @@ Key RTL tops: `frontend.sv`, `backend.sv`, `ifu.sv`, `bpu.sv`, `instr_aligner.sv
 | ROB_MAX_COMMIT_ST | 2 | Max store commits per cycle |
 | RS_DEPTH | 16 | Reservation station entries per FU queue |
 | ALU_COUNT | 2 | Config value (4 ALUs instantiated) |
-| FTQ_DEPTH | 16 | BPU→IFU fetch target queue |
+| BPU_BTB_ENTRIES (FTB) | 1024 | Fetch-target buffer (4 slots/block) |
+| FTQ_DEPTH | 32 | BPU→IFU fetch target queue |
 | ICACHE / DCACHE | 32KB, 4-way, 256-bit line | L1 caches |
 | ITLB / DTLB | 32 entries | SV32 TLBs |
 

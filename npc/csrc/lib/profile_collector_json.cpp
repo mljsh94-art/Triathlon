@@ -70,6 +70,62 @@ void append_top_uint(std::ostringstream &os,
   os << "]";
 }
 
+const char *cond_provider_name(uint32_t provider) {
+  switch (provider & 3u) {
+    case 1u: return "tage";
+    case 2u: return "sc";
+    case 3u: return "loop";
+    default: return "t0";
+  }
+}
+
+uint64_t lookup_u64(const std::unordered_map<uint64_t, uint64_t> &m, uint64_t key) {
+  const auto it = m.find(key);
+  return it == m.end() ? 0ull : it->second;
+}
+
+void append_cond_provider_lane_top(
+    std::ostringstream &os,
+    const std::unordered_map<uint64_t, uint64_t> &selected,
+    const std::unordered_map<uint64_t, uint64_t> &correct,
+    const std::unordered_map<uint64_t, uint64_t> &miss,
+    const std::unordered_map<uint64_t, uint64_t> &override,
+    const std::unordered_map<uint64_t, uint64_t> &override_correct) {
+  std::vector<std::pair<uint64_t, uint64_t>> items(selected.begin(), selected.end());
+  std::sort(items.begin(), items.end(), [](const auto &a, const auto &b) {
+    if (a.second != b.second) return a.second > b.second;
+    return a.first < b.first;
+  });
+  os << "[";
+  const size_t limit = std::min<size_t>(64, items.size());
+  for (size_t i = 0; i < limit; i++) {
+    const uint64_t key = items[i].first;
+    const uint64_t selected_v = items[i].second;
+    const uint64_t correct_v = lookup_u64(correct, key);
+    const uint64_t miss_v = lookup_u64(miss, key);
+    const uint64_t override_v = lookup_u64(override, key);
+    const uint64_t override_correct_v = lookup_u64(override_correct, key);
+    const uint32_t pc = static_cast<uint32_t>(key >> 4);
+    const uint32_t provider = static_cast<uint32_t>((key >> 2) & 3ull);
+    const uint32_t lane = static_cast<uint32_t>(key & 3ull);
+    if (i > 0) os << ",";
+    os << "{\"pc\":\"0x" << std::hex << pc << std::dec << "\""
+       << ",\"provider\":\"" << cond_provider_name(provider) << "\""
+       << ",\"lane\":" << lane
+       << ",\"selected\":" << selected_v
+       << ",\"correct\":" << correct_v
+       << ",\"miss\":" << miss_v
+       << ",\"accuracy\":" << safe_div(static_cast<double>(correct_v),
+                                          static_cast<double>(selected_v))
+       << ",\"override\":" << override_v
+       << ",\"override_correct\":" << override_correct_v
+       << ",\"override_accuracy\":" << safe_div(static_cast<double>(override_correct_v),
+                                                   static_cast<double>(override_v))
+       << "}";
+  }
+  os << "]";
+}
+
 void append_uint_key_map(std::ostringstream &os,
                          const std::unordered_map<uint32_t, uint64_t> &m) {
   bool first = true;
@@ -679,6 +735,15 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
       cond_provider_tage_correct);
 
   append_dbg_bpu_section(os, top);
+
+  os << "\"diagnostics\":{";
+  os << "\"cond_provider_lane_top\":";
+  append_cond_provider_lane_top(os, cond_provider_lane_selected_hist_,
+                                cond_provider_lane_correct_hist_,
+                                cond_provider_lane_miss_hist_,
+                                cond_provider_lane_override_hist_,
+                                cond_provider_lane_override_correct_hist_);
+  os << "},";
 
   os << "\"hotspots\":{";
   os << "\"top_pc\":";

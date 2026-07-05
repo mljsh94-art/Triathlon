@@ -25,6 +25,14 @@ module tb_stat_corr (
 );
   localparam config_pkg::cfg_t Cfg = build_config_pkg::build_config(test_config_pkg::TestCfg);
 
+  logic [1:0][31:0] predict_ghr_lane_w;
+
+  always_comb begin
+    for (int i = 0; i < 2; i++) begin
+      predict_ghr_lane_w[i] = predict_ghr_i;
+    end
+  end
+
   stat_corr #(
       .Cfg(Cfg),
       .LANES(2),
@@ -41,7 +49,7 @@ module tb_stat_corr (
       .clk_i(clk_i),
       .rst_i(rst_i),
       .predict_pc_i(predict_pc_i),
-      .predict_ghr_i(predict_ghr_i),
+      .predict_ghr_i(predict_ghr_lane_w),
       .tage_taken_i(tage_taken_i),
       .tage_hit_i(tage_hit_i),
       .tage_conf_i(tage_conf_i),

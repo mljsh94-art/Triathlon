@@ -220,43 +220,109 @@ TRANSLATIONS = {
 }
 
 SHARED_CSS = """
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 24px; background: #f4f7f9; color: #24292f; line-height: 1.5; }
-    a { color: #0969da; text-decoration: none; }
+    :root {
+      --bg: #f4f7f9;
+      --fg: #24292f;
+      --fg-strong: #111;
+      --muted: #57606a;
+      --card-bg: #fff;
+      --border: #d0d7de;
+      --border-light: #e1e4e8;
+      --bench-bg: #f6f8fa;
+      --link: #0969da;
+      --row-hover: #f6f8fa;
+      --bar-bg: #eaecef;
+      --shadow: rgba(140, 149, 159, 0.05);
+      --metric-shadow: rgba(27, 31, 36, 0.08);
+    }
+    [data-theme="dark"] {
+      --bg: #0d1117;
+      --fg: #e6edf3;
+      --fg-strong: #f0f6fc;
+      --muted: #8b949e;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --border-light: #21262d;
+      --bench-bg: #0d1117;
+      --link: #58a6ff;
+      --row-hover: #21262d;
+      --bar-bg: #30363d;
+      --shadow: rgba(0, 0, 0, 0.2);
+      --metric-shadow: rgba(0, 0, 0, 0.35);
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 24px; background: var(--bg); color: var(--fg); line-height: 1.5; transition: background 0.2s, color 0.2s; }
+    a { color: var(--link); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    h1 { margin: 0 0 16px; font-size: 26px; font-weight: 600; color: #111; }
-    h2 { margin: 0 0 16px; font-size: 20px; font-weight: 600; color: #222; border-bottom: 2px solid #e1e4e8; padding-bottom: 8px; }
-    h3 { margin: 20px 0 12px; font-size: 15px; font-weight: 600; color: #444; }
-    .meta { color: #57606a; font-size: 14px; margin-bottom: 24px; background: #fff; padding: 14px 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(27,31,36,0.04); display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
-    .meta span { background: #f6f8fa; padding: 4px 10px; border-radius: 6px; border: 1px solid #d0d7de; }
-    .nav { margin-bottom: 20px; font-size: 14px; font-weight: 600; }
-    .card { background: #fff; border: 1px solid #d0d7de; border-radius: 10px; padding: 24px; margin-bottom: 24px; box-shadow: 0 3px 6px rgba(140,149,159,0.05); }
+    h1 { margin: 0 0 16px; font-size: 26px; font-weight: 600; color: var(--fg-strong); }
+    h2 { margin: 0 0 16px; font-size: 20px; font-weight: 600; color: var(--fg-strong); border-bottom: 2px solid var(--border-light); padding-bottom: 8px; }
+    h3 { margin: 20px 0 12px; font-size: 15px; font-weight: 600; color: var(--fg); }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+    .meta { color: var(--muted); font-size: 14px; margin-bottom: 24px; background: var(--card-bg); padding: 14px 20px; border-radius: 8px; box-shadow: 0 1px 3px var(--shadow); display: flex; flex-wrap: wrap; gap: 16px; align-items: center; border: 1px solid var(--border); transition: background 0.2s, border-color 0.2s; }
+    .meta span { background: var(--bench-bg); padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); }
+    .nav { margin: 0; font-size: 14px; font-weight: 600; }
+    .theme-toggle { font: inherit; cursor: pointer; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--fg); }
+    .theme-toggle:hover { border-color: var(--muted); }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 24px; margin-bottom: 24px; box-shadow: 0 3px 6px var(--shadow); transition: background 0.2s, border-color 0.2s; }
     .bench { margin-top: 12px; }
-    .section { margin-top: 20px; padding-top: 16px; border-top: 1px solid #e1e4e8; }
+    .section { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-light); }
     .section:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
-    .section-title { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #57606a; margin: 0 0 12px; }
+    .section-title { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
     .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 16px; }
-    .metric { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 8px; padding: 16px; text-align: center; transition: transform 0.2s, box-shadow 0.2s; }
-    .metric:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(27,31,36,0.08); }
-    .metric .label { font-size: 12px; color: #57606a; margin-bottom: 6px; }
-    .metric .value { font-size: 22px; font-weight: 600; color: #0969da; }
+    .metric { background: var(--bench-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; text-align: center; transition: transform 0.2s, box-shadow 0.2s; }
+    .metric:hover { transform: translateY(-2px); box-shadow: 0 4px 12px var(--metric-shadow); }
+    .metric .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .metric .value { font-size: 22px; font-weight: 600; color: var(--link); }
     table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
-    th, td { border-bottom: 1px solid #e1e4e8; padding: 10px 12px; text-align: left; vertical-align: middle; }
-    th { background: #f6f8fa; color: #57606a; font-weight: 600; font-size: 12px; border-top: 1px solid #e1e4e8; }
-    th:first-child { border-top-left-radius: 6px; border-left: 1px solid #e1e4e8; }
-    th:last-child { border-top-right-radius: 6px; border-right: 1px solid #e1e4e8; }
-    tr td:first-child { border-left: 1px solid #e1e4e8; font-weight: 500; color: #24292f; }
-    tr td:last-child { border-right: 1px solid #e1e4e8; }
+    th, td { border-bottom: 1px solid var(--border-light); padding: 10px 12px; text-align: left; vertical-align: middle; }
+    th { background: var(--bench-bg); color: var(--muted); font-weight: 600; font-size: 12px; border-top: 1px solid var(--border-light); }
+    th:first-child { border-top-left-radius: 6px; border-left: 1px solid var(--border-light); }
+    th:last-child { border-top-right-radius: 6px; border-right: 1px solid var(--border-light); }
+    tr td:first-child { border-left: 1px solid var(--border-light); font-weight: 500; color: var(--fg); }
+    tr td:last-child { border-right: 1px solid var(--border-light); }
     tr:last-child td:first-child { border-bottom-left-radius: 6px; }
     tr:last-child td:last-child { border-bottom-right-radius: 6px; }
-    tr:hover td { background-color: #f6f8fa; }
-    .bar { background: #eaecef; border-radius: 4px; height: 8px; overflow: hidden; min-width: 100px; width: 100%; }
+    tr:hover td { background-color: var(--row-hover); }
+    .bar { background: var(--bar-bg); border-radius: 4px; height: 8px; overflow: hidden; min-width: 100px; width: 100%; }
     .bar-fill { background: #2da44e; height: 100%; transition: width 0.3s ease; }
     .bar-fill.warn { background: #bf8700; }
     .bar-fill.hot { background: #cf222e; }
+    [data-theme="dark"] .bar-fill { background: #3fb950; }
+    [data-theme="dark"] .bar-fill.warn { background: #d29922; }
+    [data-theme="dark"] .bar-fill.hot { background: #f85149; }
     .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-    details.hotspots { margin-top: 12px; border: 1px solid #d0d7de; border-radius: 8px; padding: 12px 16px; background: #fafbfc; }
-    details.hotspots summary { cursor: pointer; font-weight: 600; color: #444; }
+    details.hotspots { margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; background: var(--bench-bg); }
+    details.hotspots summary { cursor: pointer; font-weight: 600; color: var(--fg); }
+    .footer-note { margin-top: 32px; font-size: 13px; color: var(--muted); }
+    .footer-note code { background: var(--bench-bg); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); }
     @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+"""
+
+THEME_INIT_SCRIPT = """
+(function () {
+  const key = 'triathlon-dashboard-theme';
+  const stored = localStorage.getItem(key);
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.dataset.theme = stored || (prefersDark ? 'dark' : 'light');
+})();
+"""
+
+THEME_TOGGLE_SCRIPT = """
+(function () {
+  const THEME_KEY = 'triathlon-dashboard-theme';
+  const isDark = () => document.documentElement.dataset.theme === 'dark';
+  const syncToggleLabel = () => {
+    const btn = document.getElementById('themeToggle');
+    if (!btn) return;
+    btn.textContent = isDark() ? '☀️ 日间模式' : '🌙 夜晚模式';
+  };
+  syncToggleLabel();
+  document.getElementById('themeToggle')?.addEventListener('click', () => {
+    const next = isDark() ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem(THEME_KEY, next);
+    syncToggleLabel();
+  });
+})();
 """
 
 
@@ -581,13 +647,19 @@ def render_run_summary_page(
         "<!DOCTYPE html><html lang='zh-CN'><head>"
         "<meta charset='UTF-8' /><meta name='viewport' content='width=device-width, initial-scale=1' />"
         f"<title>Profile Report · {esc(display_name)}</title>"
-        f"<style>{SHARED_CSS}</style></head><body>"
+        f"<style>{SHARED_CSS}</style>"
+        f"<script>{THEME_INIT_SCRIPT}</script>"
+        "</head><body>"
+        "<div class='topbar'>"
         f"<p class='nav'><a href='{esc(dashboard_href)}'>← 返回看板 (Dashboard)</a></p>"
+        "<button type='button' class='theme-toggle' id='themeToggle' aria-label='切换主题'>🌙 夜晚模式</button>"
+        "</div>"
         f"<h1>性能分析报告 - {esc(display_name)}</h1>"
         f"<div class='meta'>{''.join(meta_bits)}</div>"
         f"{''.join(bench_sections)}"
-        "<div style='margin-top: 32px; font-size: 13px; color: #57606a;'>"
+        "<div class='footer-note'>"
         "原始数据：<code>summary.json</code>（schema v2 层级结构：meta / kpi / flush / stall / frontend / predict / hotspots）</div>"
+        f"<script>{THEME_TOGGLE_SCRIPT}</script>"
         "</body></html>"
     )
 

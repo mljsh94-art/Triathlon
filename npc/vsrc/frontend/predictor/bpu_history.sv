@@ -28,6 +28,9 @@ module bpu_history #(
     input logic                pred_event_is_cond_i,
     input logic                pred_event_taken_i,
     input logic [Cfg.PLEN-1:0] pred_event_pc_i,
+    input logic [1:0]          pred_cond_event_valid_i,
+    input logic [1:0]          pred_cond_event_taken_i,
+    input logic [1:0][Cfg.PLEN-1:0] pred_cond_event_pc_i,
 
     // History outputs consumed by predictors / update path.
     output logic [((GHR_BITS > 0) ? GHR_BITS : 1)-1:0]             arch_ghr_o,
@@ -68,8 +71,13 @@ module bpu_history #(
   // registered cond event folded in (unless flushing).
   always_comb begin
     ittage_predict_ctx_w = spec_path_hist_q;
-    if (!flush_i && pred_event_valid_i && pred_event_is_cond_i) begin
-      ittage_predict_ctx_w = path_shift(ittage_predict_ctx_w, pred_event_pc_i, pred_event_taken_i);
+    if (!flush_i) begin
+      for (int i = 0; i < 2; i++) begin
+        if (pred_cond_event_valid_i[i]) begin
+          ittage_predict_ctx_w =
+              path_shift(ittage_predict_ctx_w, pred_cond_event_pc_i[i], pred_cond_event_taken_i[i]);
+        end
+      end
     end
   end
 
@@ -108,9 +116,14 @@ module bpu_history #(
 
       if (flush_i) begin
         spec_ghr_n = arch_ghr_n;
-      end else if (pred_event_valid_i && pred_event_is_cond_i) begin
-        spec_ghr_n = ghr_shift(spec_ghr_n, pred_event_taken_i);
-        spec_path_hist_n = path_shift(spec_path_hist_n, pred_event_pc_i, pred_event_taken_i);
+      end else if (pred_event_valid_i) begin
+        for (int i = 0; i < 2; i++) begin
+          if (pred_cond_event_valid_i[i]) begin
+            spec_ghr_n = ghr_shift(spec_ghr_n, pred_cond_event_taken_i[i]);
+            spec_path_hist_n =
+                path_shift(spec_path_hist_n, pred_cond_event_pc_i[i], pred_cond_event_taken_i[i]);
+          end
+        end
       end
 
       arch_ghr_q <= arch_ghr_n;

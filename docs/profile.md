@@ -65,6 +65,7 @@ make -C npc sim DIFFTEST= IMG=.../dhrystone-riscv32i-npc.bin \
 | `control` | 控制流指令统计 |
 | `predict` | 分支预测（含 `ftb` / `ittage` / `cond_provider`） |
 | `dbg_bpu` | 原始 BPU 计数器（与 `tb_triathlon` 的 `dbg_bpu_*_o` 对应；供 golden baseline 抽取） |
+| `diagnostics` | 诊断扩展；`cond_provider_lane_top` 按 PC/provider/lane 汇总条件分支 selected/correct/miss/override |
 | `hotspots` | `top_pc` / `top_inst` / BPU 热点 |
 
 旧版扁平字段（v1）仍可通过 `npc/tools/profiler/profile_schema.py` 访问器读取；看板与回归脚本自动兼容。

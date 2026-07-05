@@ -117,8 +117,8 @@ class ProfileCollector {
   uint32_t cfg_commit_width_ = 4;
   uint32_t cfg_commit_mask_ = 0xFu;
   uint32_t cfg_fetch_width_bytes_ = 16;
-  uint32_t cfg_ftq_depth_ = 16;
-  uint32_t cfg_ftq_id_w_ = 4;
+  uint32_t cfg_ftq_depth_ = 32;
+  uint32_t cfg_ftq_id_w_ = 5;
   uint32_t cfg_fetch_epoch_w_ = 3;
 
   uint64_t total_commits_ = 0;
@@ -209,6 +209,11 @@ class ProfileCollector {
   std::unordered_map<uint32_t, uint64_t> bpu_taken_control_pc_hist_;
   std::unordered_map<uint32_t, uint64_t> bpu_update_pc_hist_;
   std::unordered_map<std::string, uint64_t> bpu_update_kind_hist_;
+  std::unordered_map<uint64_t, uint64_t> cond_provider_lane_selected_hist_;
+  std::unordered_map<uint64_t, uint64_t> cond_provider_lane_correct_hist_;
+  std::unordered_map<uint64_t, uint64_t> cond_provider_lane_miss_hist_;
+  std::unordered_map<uint64_t, uint64_t> cond_provider_lane_override_hist_;
+  std::unordered_map<uint64_t, uint64_t> cond_provider_lane_override_correct_hist_;
   std::unordered_map<std::string, uint64_t> flush_reason_hist_;
   std::unordered_map<std::string, uint64_t> flush_source_hist_;
 
