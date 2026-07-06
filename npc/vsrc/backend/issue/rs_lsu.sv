@@ -49,7 +49,8 @@ module reservation_station_lsu #(
     output logic [  DATA_W-1:0] out_v2_1,
     output logic [   ST_W-1:0]  out_st_id_0,
     output logic [   ST_W-1:0]  out_st_id_1,
-    output logic [   TAG_W-1:0] dst_tag_o[0:RS_DEPTH-1]
+    output logic [   TAG_W-1:0] dst_tag_o[0:RS_DEPTH-1],
+    output logic [RS_DEPTH-1:0] plain_load_mask_o
 );
 
   // RS 存储阵列
@@ -77,6 +78,15 @@ module reservation_station_lsu #(
   logic             [   TAG_W-1:0] q2_arr_d [0:RS_DEPTH-1];
   logic                            r2_arr_d [0:RS_DEPTH-1];
   logic             [   ST_W-1:0]  st_arr_d [0:RS_DEPTH-1];
+
+  logic [63:0] dbg_rs_load_block_store_total_q;
+  logic [63:0] dbg_rs_load_block_store_addr_not_ready_q;
+  logic [63:0] dbg_rs_load_block_store_data_not_ready_q;
+  logic [63:0] dbg_rs_load_block_store_not_issued_q;
+  logic [63:0] dbg_rs_load_block_store_total_inc_w;
+  logic [63:0] dbg_rs_load_block_store_addr_not_ready_inc_w;
+  logic [63:0] dbg_rs_load_block_store_data_not_ready_inc_w;
+  logic [63:0] dbg_rs_load_block_store_not_issued_inc_w;
 `ifndef SYNTHESIS
   localparam int unsigned RS_LSU_TRACE_BUDGET = 512;
   logic [31:0] rs_lsu_trace_cnt_q;
@@ -198,23 +208,62 @@ module reservation_station_lsu #(
 
   // Load/store ordering: block loads behind older stores.
   always_comb begin
+    dbg_rs_load_block_store_total_inc_w = '0;
+    dbg_rs_load_block_store_addr_not_ready_inc_w = '0;
+    dbg_rs_load_block_store_data_not_ready_inc_w = '0;
+    dbg_rs_load_block_store_not_issued_inc_w = '0;
+
     for (int m = 0; m < RS_DEPTH; m++) begin
       logic block_load;
       logic src_ready;
       logic block_spec_low;
+      logic best_store_found;
+      logic best_store_addr_ready;
+      logic best_store_data_ready;
       logic [DATA_W-1:0] eff_addr;
+      logic [TAG_W-1:0] load_age;
+      logic [TAG_W-1:0] store_age;
+      logic [TAG_W-1:0] best_store_age;
+
       block_load = 1'b0;
+      best_store_found = 1'b0;
+      best_store_addr_ready = 1'b1;
+      best_store_data_ready = 1'b1;
+      best_store_age = {TAG_W{1'b1}};
+      load_age = rob_age(dst_arr[m], rob_head_i);
+      store_age = '0;
+      src_ready = (op_arr[m].has_rs1 ? r1_arr[m] : 1'b1) &&
+                  (op_arr[m].has_rs2 ? r2_arr[m] : 1'b1);
+
       if (busy[m] && op_arr[m].is_load) begin
         for (int n = 0; n < RS_DEPTH; n++) begin
-          if (busy[n] && op_arr[n].is_store) begin
-            if (rob_age(dst_arr[n], rob_head_i) < rob_age(dst_arr[m], rob_head_i)) begin
-              block_load = 1'b1;
+          store_age = rob_age(dst_arr[n], rob_head_i);
+          if (busy[n] && op_arr[n].is_store && (store_age < load_age)) begin
+            block_load = 1'b1;
+            if (!best_store_found || (store_age < best_store_age)) begin
+              best_store_found = 1'b1;
+              best_store_age = store_age;
+              best_store_addr_ready = !op_arr[n].has_rs1 || r1_arr[n];
+              best_store_data_ready = !op_arr[n].has_rs2 || r2_arr[n];
             end
           end
         end
       end
-      src_ready = (op_arr[m].has_rs1 ? r1_arr[m] : 1'b1) &&
-                  (op_arr[m].has_rs2 ? r2_arr[m] : 1'b1);
+
+      if (busy[m] && op_arr[m].is_load && src_ready && best_store_found) begin
+        dbg_rs_load_block_store_total_inc_w = dbg_rs_load_block_store_total_inc_w + 64'd1;
+        if (!best_store_addr_ready) begin
+          dbg_rs_load_block_store_addr_not_ready_inc_w =
+              dbg_rs_load_block_store_addr_not_ready_inc_w + 64'd1;
+        end else if (!best_store_data_ready) begin
+          dbg_rs_load_block_store_data_not_ready_inc_w =
+              dbg_rs_load_block_store_data_not_ready_inc_w + 64'd1;
+        end else begin
+          dbg_rs_load_block_store_not_issued_inc_w =
+              dbg_rs_load_block_store_not_issued_inc_w + 64'd1;
+        end
+      end
+
       eff_addr = v1_arr[m] + op_arr[m].imm;
       block_spec_low = spec_low_addr_block_en_i &&
                        busy[m] &&
@@ -222,6 +271,26 @@ module reservation_station_lsu #(
                        is_spec_low_addr(eff_addr) &&
                        (dst_arr[m] != rob_head_i);
       ready_mask[m] = busy[m] && src_ready && !block_load && !block_spec_low;
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      dbg_rs_load_block_store_total_q <= '0;
+      dbg_rs_load_block_store_addr_not_ready_q <= '0;
+      dbg_rs_load_block_store_data_not_ready_q <= '0;
+      dbg_rs_load_block_store_not_issued_q <= '0;
+    end else begin
+      dbg_rs_load_block_store_total_q <=
+          dbg_rs_load_block_store_total_q + dbg_rs_load_block_store_total_inc_w;
+      dbg_rs_load_block_store_addr_not_ready_q <=
+          dbg_rs_load_block_store_addr_not_ready_q +
+          dbg_rs_load_block_store_addr_not_ready_inc_w;
+      dbg_rs_load_block_store_data_not_ready_q <=
+          dbg_rs_load_block_store_data_not_ready_q +
+          dbg_rs_load_block_store_data_not_ready_inc_w;
+      dbg_rs_load_block_store_not_issued_q <=
+          dbg_rs_load_block_store_not_issued_q + dbg_rs_load_block_store_not_issued_inc_w;
     end
   end
 
@@ -243,6 +312,9 @@ module reservation_station_lsu #(
   always_comb begin
     for (int i = 0; i < RS_DEPTH; i++) begin
       dst_tag_o[i] = dst_arr[i];
+      plain_load_mask_o[i] = busy[i] && op_arr[i].is_load && !op_arr[i].is_store &&
+                             (op_arr[i].lsu_op != decode_pkg::LSU_AMO) &&
+                             (op_arr[i].lsu_op != decode_pkg::LSU_LR);
     end
   end
 

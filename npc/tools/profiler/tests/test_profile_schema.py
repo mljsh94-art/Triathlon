@@ -25,6 +25,7 @@ class ProfileSchemaTest(unittest.TestCase):
         bench = json.loads((FIXTURES / "minimal_bench.json").read_text(encoding="utf-8"))
         self.assertTrue(schema.is_v2_bench(bench))
         self.assertAlmostEqual(schema.bench_ipc(bench), 0.5)
+        self.assertAlmostEqual(schema.bench_mkpi(bench), 2.0)
         self.assertEqual(schema.bench_stall_total(bench), 46)
         self.assertEqual(schema.bench_stall_category(bench)["frontend_empty"], 20)
         self.assertEqual(schema.bench_stall_detail(bench, "frontend_empty")["fe_wait_ibuffer_consume"], 20)

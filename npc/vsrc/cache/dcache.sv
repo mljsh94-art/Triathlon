@@ -1242,6 +1242,7 @@ module dcache #(
   logic [SETS_PER_BANK_WIDTH-1:0] ld_req_b_bank_addr;
   logic [     BANK_SEL_WIDTH-1:0] ld_req_b_bank_sel;
   logic                           ld_req_b_misaligned;
+  logic                           ld_req_b_write_bank_conflict;
 
   assign ld_req_b_line_addr = ld_req_b_addr_i[Cfg.PLEN-1:OFFSET_WIDTH];
   assign ld_req_b_index     = ld_req_b_line_addr[INDEX_WIDTH-1:0];
@@ -1250,6 +1251,7 @@ module dcache #(
   assign ld_req_b_bank_addr = ld_req_b_index[INDEX_WIDTH-1:BANK_SEL_WIDTH];
   assign ld_req_b_bank_sel  = ld_req_b_index[BANK_SEL_WIDTH-1:0];
   assign ld_req_b_misaligned = is_misaligned(ld_req_b_op_i, ld_req_b_addr_i);
+  assign ld_req_b_write_bank_conflict = (we_way_mask != '0) && (w_bank_sel == ld_req_b_bank_sel);
 
   // Hit detection on the port-B read (independent of port A's hit_way).
   logic [NUM_WAYS-1:0] way_valid_b;
@@ -1304,10 +1306,8 @@ module dcache #(
   logic b_pipe_free;
   assign b_pipe_free = (b_state_q == S_B_IDLE) || b_lookup_will_resolve;
 
-  // Ready gating: no array write this cycle, the new request's bank differs
-  // from port A's bank this cycle (so bank arbitration cannot starve it),
-  // no refill in progress, and the request is aligned (misaligned loads are
-  // never fast-pathed; they fall back to port A's full handling).
+  // Ready gating: keep port B conservative while counters below measure how
+  // often a different-bank array write could have been allowed.
   assign ld_req_b_ready_o = b_pipe_free && !flush_i && !refill_valid_i &&
                             (we_way_mask == '0) &&
                             (ld_req_b_bank_sel != r_bank_sel) &&
@@ -1315,6 +1315,68 @@ module dcache #(
 
   logic b_accept_fire;
   assign b_accept_fire = ld_req_b_valid_i && ld_req_b_ready_o;
+
+  logic [63:0] dbg_dc_pb_req_valid_q;
+  logic [63:0] dbg_dc_pb_accept_q;
+  logic [63:0] dbg_dc_pb_block_pipe_q;
+  logic [63:0] dbg_dc_pb_block_refill_q;
+  logic [63:0] dbg_dc_pb_block_write_same_bank_q;
+  logic [63:0] dbg_dc_pb_write_diff_bank_opportunity_q;
+  logic [63:0] dbg_dc_pb_block_porta_bank_q;
+  logic [63:0] dbg_dc_pb_block_misaligned_q;
+  logic [63:0] dbg_dc_pb_rsp_hit_q;
+  logic [63:0] dbg_dc_pb_rsp_hit_stall_q;
+  logic [63:0] dbg_dc_pb_rsp_miss_q;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      dbg_dc_pb_req_valid_q <= '0;
+      dbg_dc_pb_accept_q <= '0;
+      dbg_dc_pb_block_pipe_q <= '0;
+      dbg_dc_pb_block_refill_q <= '0;
+      dbg_dc_pb_block_write_same_bank_q <= '0;
+      dbg_dc_pb_write_diff_bank_opportunity_q <= '0;
+      dbg_dc_pb_block_porta_bank_q <= '0;
+      dbg_dc_pb_block_misaligned_q <= '0;
+      dbg_dc_pb_rsp_hit_q <= '0;
+      dbg_dc_pb_rsp_hit_stall_q <= '0;
+      dbg_dc_pb_rsp_miss_q <= '0;
+    end else begin
+      if (ld_req_b_valid_i) dbg_dc_pb_req_valid_q <= dbg_dc_pb_req_valid_q + 64'd1;
+      if (b_accept_fire) dbg_dc_pb_accept_q <= dbg_dc_pb_accept_q + 64'd1;
+      if (ld_req_b_valid_i && !b_pipe_free) begin
+        dbg_dc_pb_block_pipe_q <= dbg_dc_pb_block_pipe_q + 64'd1;
+      end
+      if (ld_req_b_valid_i && b_pipe_free && !flush_i && refill_valid_i) begin
+        dbg_dc_pb_block_refill_q <= dbg_dc_pb_block_refill_q + 64'd1;
+      end
+      if (ld_req_b_valid_i && b_pipe_free && !flush_i && !refill_valid_i &&
+          ld_req_b_write_bank_conflict) begin
+        dbg_dc_pb_block_write_same_bank_q <= dbg_dc_pb_block_write_same_bank_q + 64'd1;
+      end
+      if (ld_req_b_valid_i && b_pipe_free && !flush_i && !refill_valid_i &&
+          (we_way_mask != '0) && !ld_req_b_write_bank_conflict &&
+          (ld_req_b_bank_sel != r_bank_sel) && !ld_req_b_misaligned) begin
+        dbg_dc_pb_write_diff_bank_opportunity_q <= dbg_dc_pb_write_diff_bank_opportunity_q + 64'd1;
+      end
+      if (ld_req_b_valid_i && b_pipe_free && !flush_i && !refill_valid_i &&
+          !ld_req_b_write_bank_conflict && (ld_req_b_bank_sel == r_bank_sel)) begin
+        dbg_dc_pb_block_porta_bank_q <= dbg_dc_pb_block_porta_bank_q + 64'd1;
+      end
+      if (ld_req_b_valid_i && b_pipe_free && !flush_i && !refill_valid_i &&
+          !ld_req_b_write_bank_conflict && (ld_req_b_bank_sel != r_bank_sel) &&
+          ld_req_b_misaligned) begin
+        dbg_dc_pb_block_misaligned_q <= dbg_dc_pb_block_misaligned_q + 64'd1;
+      end
+      if (ld_rsp_b_valid_o && ld_rsp_b_ready_i) begin
+        dbg_dc_pb_rsp_hit_q <= dbg_dc_pb_rsp_hit_q + 64'd1;
+      end
+      if (ld_rsp_b_valid_o && !ld_rsp_b_ready_i) begin
+        dbg_dc_pb_rsp_hit_stall_q <= dbg_dc_pb_rsp_hit_stall_q + 64'd1;
+      end
+      if (ld_rsp_b_miss_o) dbg_dc_pb_rsp_miss_q <= dbg_dc_pb_rsp_miss_q + 64'd1;
+    end
+  end
 
   // Read-address mux for port B: hold the in-flight request's address by
   // default (keeps tag_b/line_b_all stable while stalled on backpressure),

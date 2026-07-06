@@ -19,6 +19,7 @@ from profile_schema import (
     bench_cycles,
     bench_flush,
     bench_ipc,
+    bench_mkpi,
     bench_predict,
     predict_miss_rates,
     stall_share_pct,
@@ -59,6 +60,7 @@ def extract_run_entry(run_dir: Path) -> dict | None:
         "summary_path": str(summary_path.resolve()),
         "run_dir": str(run_dir.resolve()),
         "ipc": {},
+        "mkpi": {},
         "cpi": {},
         "cycles": {},
         "commits": {},
@@ -71,6 +73,7 @@ def extract_run_entry(run_dir: Path) -> dict | None:
             continue
         b = summary[bench]
         entry["ipc"][bench] = bench_ipc(b)
+        entry["mkpi"][bench] = bench_mkpi(b)
         entry["cpi"][bench] = bench_cpi(b)
         entry["cycles"][bench] = bench_cycles(b)
         entry["commits"][bench] = bench_commits(b)

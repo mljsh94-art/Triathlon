@@ -70,6 +70,7 @@ module issue_lsu #(
 
   // B. RS <-> Select Logic 之间的握手线
   wire [RS_DEPTH-1:0] rs_ready_wires;
+  wire [RS_DEPTH-1:0] rs_plain_load_wires;
   wire [RS_DEPTH-1:0] grant_mask_wires;
 
   // C. Select Logic -> LSU
@@ -278,11 +279,13 @@ module issue_lsu #(
       .out_dst_tag_0(issue_dst_0),
       .out_dst_tag_1(issue_dst_1),
       .out_st_id_0  (issue_st_id_0),
-      .out_st_id_1  (issue_st_id_1),
-      .dst_tag_o    (rs_dst_tag)
+      .out_st_id_1       (issue_st_id_1),
+      .dst_tag_o         (rs_dst_tag),
+      .plain_load_mask_o (rs_plain_load_wires)
   );
 
-  // Pick the oldest ready RS entries by ROB age, not RS physical index.
+  // Pick port0 by ROB age. Port1 prefers the oldest remaining plain load,
+  // then falls back to the oldest remaining ready entry.
   always_comb begin
     logic found0;
     logic found1;
@@ -290,33 +293,45 @@ module issue_lsu #(
     logic [$clog2(RS_DEPTH)-1:0] pick_idx1;
     logic [TAG_W-1:0] best_age0;
     logic [TAG_W-1:0] best_age1;
+    logic [TAG_W-1:0] age;
 
     issue_valid_raw[0] = 1'b0;
     issue_valid_raw[1] = 1'b0;
+    issue_rs_idx_raw[0] = '0;
+    issue_rs_idx_raw[1] = '0;
     pick_idx0 = '0;
     pick_idx1 = '0;
     found0 = 1'b0;
     found1 = 1'b0;
     best_age0 = {TAG_W{1'b1}};
     best_age1 = {TAG_W{1'b1}};
+    age = '0;
 
     for (int i = 0; i < RS_DEPTH; i++) begin
-      if (rs_ready_wires[i]) begin
-        automatic logic [TAG_W-1:0] age;
-        age = rob_age(rs_dst_tag[i], rob_head_i);
-        if (!found0 || (age < best_age0)) begin
-          found0 = 1'b1;
-          best_age0 = age;
-          pick_idx0 = i[$clog2(RS_DEPTH)-1:0];
-        end
+      age = rob_age(rs_dst_tag[i], rob_head_i);
+      if (rs_ready_wires[i] && (!found0 || (age < best_age0))) begin
+        found0 = 1'b1;
+        best_age0 = age;
+        pick_idx0 = i[$clog2(RS_DEPTH)-1:0];
       end
     end
 
     for (int i = 0; i < RS_DEPTH; i++) begin
-      if (rs_ready_wires[i] && (i[$clog2(RS_DEPTH)-1:0] != pick_idx0)) begin
-        automatic logic [TAG_W-1:0] age;
+      age = rob_age(rs_dst_tag[i], rob_head_i);
+      if (rs_ready_wires[i] && rs_plain_load_wires[i] &&
+          (i[$clog2(RS_DEPTH)-1:0] != pick_idx0) &&
+          (!found1 || (age < best_age1))) begin
+        found1 = 1'b1;
+        best_age1 = age;
+        pick_idx1 = i[$clog2(RS_DEPTH)-1:0];
+      end
+    end
+
+    if (!found1) begin
+      for (int i = 0; i < RS_DEPTH; i++) begin
         age = rob_age(rs_dst_tag[i], rob_head_i);
-        if (!found1 || (age < best_age1)) begin
+        if (rs_ready_wires[i] && (i[$clog2(RS_DEPTH)-1:0] != pick_idx0) &&
+            (!found1 || (age < best_age1))) begin
           found1 = 1'b1;
           best_age1 = age;
           pick_idx1 = i[$clog2(RS_DEPTH)-1:0];

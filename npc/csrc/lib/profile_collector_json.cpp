@@ -487,8 +487,10 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
   os << "},";
 
   os << "\"kpi\":{";
-  os << "\"ipc\":" << ipc << ",\"cpi\":" << cpi << ",\"cycles\":" << cycles
-     << ",\"commits\":" << commits;
+  os << "\"ipc\":" << ipc << ",\"mkpi\":"
+     << safe_div(static_cast<double>(mispredict_flush_count_) * 1000.0,
+                 static_cast<double>(commits))
+     << ",\"cpi\":" << cpi << ",\"cycles\":" << cycles << ",\"commits\":" << commits;
   os << "},";
 
   os << "\"commit\":{";
@@ -743,6 +745,46 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
                                 cond_provider_lane_miss_hist_,
                                 cond_provider_lane_override_hist_,
                                 cond_provider_lane_override_correct_hist_);
+  os << ",\"memory\":{";
+  os << "\"dcache_port_b\":{"
+     << "\"req_valid\":" << static_cast<uint64_t>(top->dbg_dc_pb_req_valid_o)
+     << ",\"accept\":" << static_cast<uint64_t>(top->dbg_dc_pb_accept_o)
+     << ",\"block_pipe\":" << static_cast<uint64_t>(top->dbg_dc_pb_block_pipe_o)
+     << ",\"block_refill\":" << static_cast<uint64_t>(top->dbg_dc_pb_block_refill_o)
+     << ",\"block_write_same_bank\":" << static_cast<uint64_t>(top->dbg_dc_pb_block_write_same_bank_o)
+     << ",\"write_diff_bank_opportunity\":" << static_cast<uint64_t>(top->dbg_dc_pb_write_diff_bank_opportunity_o)
+     << ",\"block_porta_bank\":" << static_cast<uint64_t>(top->dbg_dc_pb_block_porta_bank_o)
+     << ",\"block_misaligned\":" << static_cast<uint64_t>(top->dbg_dc_pb_block_misaligned_o)
+     << ",\"rsp_hit\":" << static_cast<uint64_t>(top->dbg_dc_pb_rsp_hit_o)
+     << ",\"rsp_hit_stall\":" << static_cast<uint64_t>(top->dbg_dc_pb_rsp_hit_stall_o)
+     << ",\"rsp_miss\":" << static_cast<uint64_t>(top->dbg_dc_pb_rsp_miss_o)
+     << "},\"lsu_rs_store_order\":{"
+     << "\"ready_src_load_blocked\":"
+     << static_cast<uint64_t>(top->dbg_lsu_rs_load_block_store_o)
+     << ",\"older_store_addr_not_ready\":"
+     << static_cast<uint64_t>(top->dbg_lsu_rs_load_block_store_addr_not_ready_o)
+     << ",\"older_store_data_not_ready\":"
+     << static_cast<uint64_t>(top->dbg_lsu_rs_load_block_store_data_not_ready_o)
+     << ",\"older_store_not_issued\":"
+     << static_cast<uint64_t>(top->dbg_lsu_rs_load_block_store_not_issued_o)
+     << "},\"lsu_dual_load\":{"
+     << "\"pick_pair\":" << static_cast<uint64_t>(top->dbg_lsu_dual_pick_pair_o)
+     << ",\"block_shape\":" << static_cast<uint64_t>(top->dbg_lsu_dual_block_shape_o)
+     << ",\"pair_wanted\":" << static_cast<uint64_t>(top->dbg_lsu_dual_pair_wanted_o)
+     << ",\"candidate_ok\":" << static_cast<uint64_t>(top->dbg_lsu_dual_candidate_ok_o)
+     << ",\"fire\":" << static_cast<uint64_t>(top->dbg_lsu_dual_fire_o)
+     << ",\"block_ldq\":" << static_cast<uint64_t>(top->dbg_lsu_dual_block_ldq_o)
+     << ",\"block_p0_lane\":" << static_cast<uint64_t>(top->dbg_lsu_dual_block_p0_lane_o)
+     << ",\"block_p1_lane\":" << static_cast<uint64_t>(top->dbg_lsu_dual_block_p1_lane_o)
+     << ",\"shape_breakdown\":{"
+     << "\"pend\":" << static_cast<uint64_t>(top->dbg_lsu_dual_shape_block_pend_o)
+     << ",\"mmu_busy\":" << static_cast<uint64_t>(top->dbg_lsu_dual_shape_block_mmu_busy_o)
+     << ",\"amo_inflight\":" << static_cast<uint64_t>(top->dbg_lsu_dual_shape_block_amo_inflight_o)
+     << ",\"p0_not_plain\":" << static_cast<uint64_t>(top->dbg_lsu_dual_shape_block_p0_not_plain_o)
+     << ",\"p1_not_plain\":" << static_cast<uint64_t>(top->dbg_lsu_dual_shape_block_p1_not_plain_o)
+     << ",\"p0_walk\":" << static_cast<uint64_t>(top->dbg_lsu_dual_shape_block_p0_walk_o)
+     << ",\"p1_walk\":" << static_cast<uint64_t>(top->dbg_lsu_dual_shape_block_p1_walk_o)
+     << "}}}";
   os << "},";
 
   os << "\"hotspots\":{";

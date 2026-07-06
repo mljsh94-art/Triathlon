@@ -21,6 +21,7 @@ from profile_schema import (  # noqa: E402
     bench_cycles,
     bench_flush,
     bench_ipc,
+    bench_mkpi,
     bench_predict,
     bench_stall_detail,
     bench_stall_section_total,
@@ -97,6 +98,8 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
     labels = [r.get("display_name") or r.get("run_id", "?") for r in runs]
     core_ipc = [r.get("ipc", {}).get("coremark", 0) for r in runs]
     micro_ipc = [r.get("ipc", {}).get("microbench", 0) for r in runs]
+    core_mkpi = [r.get("mkpi", {}).get("coremark", 0) for r in runs]
+    micro_mkpi = [r.get("mkpi", {}).get("microbench", 0) for r in runs]
     core_cycles = [r.get("cycles", {}).get("coremark", 0) for r in runs]
     micro_cycles = [r.get("cycles", {}).get("microbench", 0) for r in runs]
 
@@ -122,12 +125,16 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
         ipc_cells = "".join(
             f"<td>{run.get('ipc', {}).get(bench, 0):.4f}</td>" for bench in BENCHMARKS
         )
+        mkpi_cells = "".join(
+            f"<td>{run.get('mkpi', {}).get(bench, 0):.4f}</td>" for bench in BENCHMARKS
+        )
         run_rows.append(
             f"<tr><td>{html.escape(run_label)}</td>"
             f"<td>{html.escape(str(run.get('git_sha') or '-'))}</td>"
             f"<td>{html.escape(str(run.get('created_at') or '-'))}</td>"
             f"<td class='{status_class}'>{html.escape(status)}</td>"
             f"{ipc_cells}"
+            f"{mkpi_cells}"
             f"<td>{alert_html}</td></tr>"
         )
 
@@ -161,8 +168,8 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
             miss_line, acc_line = format_predict_dashboard_lines(predict, flush_b)
             bench_blocks.append(
                 f"<div class='bench-block'><h4>{html.escape(bench)}</h4>"
-                f"<p><b>KPI:</b> IPC={bench_ipc(b):.4f} CPI={bench_cpi(b):.4f} "
-                f"cycles={bench_cycles(b)} commits={bench_commits(b)}</p>"
+                f"<p><b>KPI:</b> IPC={bench_ipc(b):.4f} MKPI={bench_mkpi(b):.4f} "
+                f"CPI={bench_cpi(b):.4f} cycles={bench_cycles(b)} commits={bench_commits(b)}</p>"
                 f"<p><b>Top stall:</b> {html.escape(' | '.join(stall_lines) or '-')}</p>"
                 f"<p><b>Decode blocked top:</b> {html.escape(decode_line)}</p>"
                 f"<p><b>Predict miss:</b> {html.escape(miss_line)}</p>"
@@ -184,6 +191,8 @@ def render_dashboard(profile_root: Path, script_dir: Path, npc_home: Path | None
         .replace("{{LABELS_JSON}}", json.dumps(labels))
         .replace("{{CORE_IPC_JSON}}", json.dumps(core_ipc))
         .replace("{{MICRO_IPC_JSON}}", json.dumps(micro_ipc))
+        .replace("{{CORE_MKPI_JSON}}", json.dumps(core_mkpi))
+        .replace("{{MICRO_MKPI_JSON}}", json.dumps(micro_mkpi))
         .replace("{{CORE_CYCLES_JSON}}", json.dumps(core_cycles))
         .replace("{{MICRO_CYCLES_JSON}}", json.dumps(micro_cycles))
         .replace("{{RUN_TABLE_ROWS}}", "\n".join(run_rows))

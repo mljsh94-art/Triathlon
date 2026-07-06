@@ -59,6 +59,19 @@ def bench_ipc(bench: dict) -> float:
     return float(_dig(bench, "kpi", "ipc", default=bench.get("ipc", 0.0)) or 0.0)
 
 
+def bench_mkpi(bench: dict) -> float:
+    mkpi = _dig(bench, "kpi", "mkpi")
+    if mkpi is not None:
+        return float(mkpi or 0.0)
+    flush = bench_flush(bench)
+    mispredict = flush.get("mispredict") or {}
+    miss_count = float(mispredict.get("flush_count", 0) or 0)
+    commits = float(bench_commits(bench))
+    if commits <= 0:
+        return 0.0
+    return miss_count * 1000.0 / commits
+
+
 def bench_cpi(bench: dict) -> float:
     return float(_dig(bench, "kpi", "cpi", default=bench.get("cpi", 0.0)) or 0.0)
 

@@ -487,11 +487,27 @@ module lsu_group #(
   logic                                                        req_p1_need_walk;
   logic                                                        req_p0_plain_load;
   logic                                                        req_p1_plain_load;
+  logic                                                        dual_pick_pair_w;
   logic                                                        dual_pair_shape_ok;
   logic                                                        dual_pair_wanted;
   logic                                                        dual_pair_active;
   logic                                                        dual_candidate_ok;
   logic                                                        dual_fire;
+  logic [63:0]                                                 dbg_dual_pick_pair_q;
+  logic [63:0]                                                 dbg_dual_block_shape_q;
+  logic [63:0]                                                 dbg_dual_pair_wanted_q;
+  logic [63:0]                                                 dbg_dual_candidate_ok_q;
+  logic [63:0]                                                 dbg_dual_fire_q;
+  logic [63:0]                                                 dbg_dual_block_ldq_q;
+  logic [63:0]                                                 dbg_dual_block_p0_lane_q;
+  logic [63:0]                                                 dbg_dual_block_p1_lane_q;
+  logic [63:0]                                                 dbg_dual_shape_block_pend_q;
+  logic [63:0]                                                 dbg_dual_shape_block_mmu_busy_q;
+  logic [63:0]                                                 dbg_dual_shape_block_amo_inflight_q;
+  logic [63:0]                                                 dbg_dual_shape_block_p0_not_plain_q;
+  logic [63:0]                                                 dbg_dual_shape_block_p1_not_plain_q;
+  logic [63:0]                                                 dbg_dual_shape_block_p0_walk_q;
+  logic [63:0]                                                 dbg_dual_shape_block_p1_walk_q;
   logic                [         N_LSU-1:0]                    alloc_grant_p1;
   logic                [LANE_SEL_WIDTH-1:0]                    alloc_lane_idx_p1;
   logic                                                        load_req_ready_p1;
@@ -1175,6 +1191,7 @@ module lsu_group #(
   // distinct free ld_pipe lane so port0 and port1 fire into different lanes
   // in the same cycle; ldq's second alloc port (free_count_o >= 2, checked
   // in dual_candidate_ok) is what makes that safe on the ldq side.
+  assign dual_pick_pair_w = pick_valid_i[0] && pick_valid_i[1];
   assign dual_pair_shape_ok = !pend_valid_q && (mmu_state_q == MMU_ST_IDLE) &&
                               !amo_inflight && req_p0_plain_load && req_p1_plain_load &&
                               !req_p0_need_walk && !req_p1_need_walk;
@@ -1200,6 +1217,64 @@ module lsu_group #(
   end
   assign dual_fire = load_req_ready && load_req_ready_p1;
   assign dual_pair_active = dual_fire && dual_pair_wanted;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      dbg_dual_pick_pair_q <= '0;
+      dbg_dual_block_shape_q <= '0;
+      dbg_dual_pair_wanted_q <= '0;
+      dbg_dual_candidate_ok_q <= '0;
+      dbg_dual_fire_q <= '0;
+      dbg_dual_block_ldq_q <= '0;
+      dbg_dual_block_p0_lane_q <= '0;
+      dbg_dual_block_p1_lane_q <= '0;
+      dbg_dual_shape_block_pend_q <= '0;
+      dbg_dual_shape_block_mmu_busy_q <= '0;
+      dbg_dual_shape_block_amo_inflight_q <= '0;
+      dbg_dual_shape_block_p0_not_plain_q <= '0;
+      dbg_dual_shape_block_p1_not_plain_q <= '0;
+      dbg_dual_shape_block_p0_walk_q <= '0;
+      dbg_dual_shape_block_p1_walk_q <= '0;
+    end else begin
+      if (dual_pick_pair_w) dbg_dual_pick_pair_q <= dbg_dual_pick_pair_q + 64'd1;
+      if (dual_pick_pair_w && !dual_pair_shape_ok) begin
+        dbg_dual_block_shape_q <= dbg_dual_block_shape_q + 64'd1;
+        if (pend_valid_q) begin
+          dbg_dual_shape_block_pend_q <= dbg_dual_shape_block_pend_q + 64'd1;
+        end
+        if (mmu_state_q != MMU_ST_IDLE) begin
+          dbg_dual_shape_block_mmu_busy_q <= dbg_dual_shape_block_mmu_busy_q + 64'd1;
+        end
+        if (amo_inflight) begin
+          dbg_dual_shape_block_amo_inflight_q <= dbg_dual_shape_block_amo_inflight_q + 64'd1;
+        end
+        if (!req_p0_plain_load) begin
+          dbg_dual_shape_block_p0_not_plain_q <= dbg_dual_shape_block_p0_not_plain_q + 64'd1;
+        end
+        if (!req_p1_plain_load) begin
+          dbg_dual_shape_block_p1_not_plain_q <= dbg_dual_shape_block_p1_not_plain_q + 64'd1;
+        end
+        if (req_p0_need_walk) begin
+          dbg_dual_shape_block_p0_walk_q <= dbg_dual_shape_block_p0_walk_q + 64'd1;
+        end
+        if (req_p1_need_walk) begin
+          dbg_dual_shape_block_p1_walk_q <= dbg_dual_shape_block_p1_walk_q + 64'd1;
+        end
+      end
+      if (dual_pair_wanted) dbg_dual_pair_wanted_q <= dbg_dual_pair_wanted_q + 64'd1;
+      if (dual_candidate_ok) dbg_dual_candidate_ok_q <= dbg_dual_candidate_ok_q + 64'd1;
+      if (dual_fire) dbg_dual_fire_q <= dbg_dual_fire_q + 64'd1;
+      if (dual_pair_wanted && (ldq_free_count < 2)) begin
+        dbg_dual_block_ldq_q <= dbg_dual_block_ldq_q + 64'd1;
+      end
+      if (dual_candidate_ok && !load_req_ready) begin
+        dbg_dual_block_p0_lane_q <= dbg_dual_block_p0_lane_q + 64'd1;
+      end
+      if (dual_candidate_ok && load_req_ready && !load_req_ready_p1) begin
+        dbg_dual_block_p1_lane_q <= dbg_dual_block_p1_lane_q + 64'd1;
+      end
+    end
+  end
   // Port1 co-issue only when dual_fire is real; otherwise serialize through port0.
   assign dual_port1_en_o = !pick_valid_i[0] || !pick_valid_i[1] || dual_fire;
 

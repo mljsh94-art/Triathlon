@@ -24,6 +24,7 @@ from profile_schema import (
     bench_hotspots,
     bench_ifu_fq,
     bench_ipc,
+    bench_mkpi,
     bench_mispredict_diag,
     bench_mispredict_diag_counts,
     bench_mispredict_diag_rollup,
@@ -51,6 +52,7 @@ STALL_DETAIL_SECTIONS = (
 
 TRANSLATIONS = {
     "IPC": "IPC (每周期指令数)",
+    "MKPI": "MKPI (每千次提交误预测次数)",
     "CPI": "CPI (每指令周期数)",
     "Cycles": "总周期数",
     "Commits": "提交指令数",
@@ -515,6 +517,7 @@ def render_benchmark_section(bench_name: str, raw: dict) -> str:
     kpi_metrics = "".join(
         [
             metric_card(tr("IPC"), fmt_num(bench_ipc(raw))),
+            metric_card(tr("MKPI"), fmt_num(bench_mkpi(raw))),
             metric_card(tr("CPI"), fmt_num(bench_cpi(raw))),
             metric_card(tr("Cycles"), fmt_num(cycles, 0)),
             metric_card(tr("Commits"), fmt_num(bench_commits(raw), 0)),

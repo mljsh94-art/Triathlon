@@ -297,6 +297,36 @@ module tb_triathlon #(
     output logic                               dbg_dcache_pending_ld_valid_o,
     output logic                               dbg_dcache_ld_line_in_mshr_o,
     output logic                               dbg_dcache_st_line_in_mshr_o,
+    output logic [63:0]                        dbg_dc_pb_req_valid_o,
+    output logic [63:0]                        dbg_dc_pb_accept_o,
+    output logic [63:0]                        dbg_dc_pb_block_pipe_o,
+    output logic [63:0]                        dbg_dc_pb_block_refill_o,
+    output logic [63:0]                        dbg_dc_pb_block_write_same_bank_o,
+    output logic [63:0]                        dbg_dc_pb_write_diff_bank_opportunity_o,
+    output logic [63:0]                        dbg_dc_pb_block_porta_bank_o,
+    output logic [63:0]                        dbg_dc_pb_block_misaligned_o,
+    output logic [63:0]                        dbg_dc_pb_rsp_hit_o,
+    output logic [63:0]                        dbg_dc_pb_rsp_hit_stall_o,
+    output logic [63:0]                        dbg_dc_pb_rsp_miss_o,
+    output logic [63:0]                        dbg_lsu_dual_pick_pair_o,
+    output logic [63:0]                        dbg_lsu_dual_block_shape_o,
+    output logic [63:0]                        dbg_lsu_dual_pair_wanted_o,
+    output logic [63:0]                        dbg_lsu_dual_candidate_ok_o,
+    output logic [63:0]                        dbg_lsu_dual_fire_o,
+    output logic [63:0]                        dbg_lsu_dual_block_ldq_o,
+    output logic [63:0]                        dbg_lsu_dual_block_p0_lane_o,
+    output logic [63:0]                        dbg_lsu_dual_block_p1_lane_o,
+    output logic [63:0]                        dbg_lsu_dual_shape_block_pend_o,
+    output logic [63:0]                        dbg_lsu_dual_shape_block_mmu_busy_o,
+    output logic [63:0]                        dbg_lsu_dual_shape_block_amo_inflight_o,
+    output logic [63:0]                        dbg_lsu_dual_shape_block_p0_not_plain_o,
+    output logic [63:0]                        dbg_lsu_dual_shape_block_p1_not_plain_o,
+    output logic [63:0]                        dbg_lsu_dual_shape_block_p0_walk_o,
+    output logic [63:0]                        dbg_lsu_dual_shape_block_p1_walk_o,
+    output logic [63:0]                        dbg_lsu_rs_load_block_store_o,
+    output logic [63:0]                        dbg_lsu_rs_load_block_store_addr_not_ready_o,
+    output logic [63:0]                        dbg_lsu_rs_load_block_store_data_not_ready_o,
+    output logic [63:0]                        dbg_lsu_rs_load_block_store_not_issued_o,
     // Debug (D$ MSHR)
     output logic [7:0]                         dbg_dc_mshr_count_o,
     output logic                               dbg_dc_mshr_full_o,
@@ -719,6 +749,14 @@ module tb_triathlon #(
   assign dbg_lsu_sq_count_o = dut.u_backend.u_lsu_group.dbg_sq_count_o;
   assign dbg_lsu_rs_busy_o      = dut.u_backend.u_issue_lsu.u_rs.busy;
   assign dbg_lsu_rs_ready_o     = dut.u_backend.u_issue_lsu.u_rs.ready_mask;
+  assign dbg_lsu_rs_load_block_store_o =
+      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_block_store_total_q;
+  assign dbg_lsu_rs_load_block_store_addr_not_ready_o =
+      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_block_store_addr_not_ready_q;
+  assign dbg_lsu_rs_load_block_store_data_not_ready_o =
+      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_block_store_data_not_ready_q;
+  assign dbg_lsu_rs_load_block_store_not_issued_o =
+      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_block_store_not_issued_q;
 
   logic [Cfg.RS_DEPTH-1:0] lsu_rs_head_match;
   logic lsu_rs_head_found;
@@ -827,6 +865,32 @@ module tb_triathlon #(
   assign dbg_dcache_pending_ld_valid_o = dut.u_backend.u_dcache.pending_ld_valid_q;
   assign dbg_dcache_ld_line_in_mshr_o = dut.u_backend.u_dcache.ld_req_line_in_mshr;
   assign dbg_dcache_st_line_in_mshr_o = dut.u_backend.u_dcache.st_req_line_in_mshr;
+  assign dbg_dc_pb_req_valid_o = dut.u_backend.u_dcache.dbg_dc_pb_req_valid_q;
+  assign dbg_dc_pb_accept_o = dut.u_backend.u_dcache.dbg_dc_pb_accept_q;
+  assign dbg_dc_pb_block_pipe_o = dut.u_backend.u_dcache.dbg_dc_pb_block_pipe_q;
+  assign dbg_dc_pb_block_refill_o = dut.u_backend.u_dcache.dbg_dc_pb_block_refill_q;
+  assign dbg_dc_pb_block_write_same_bank_o = dut.u_backend.u_dcache.dbg_dc_pb_block_write_same_bank_q;
+  assign dbg_dc_pb_write_diff_bank_opportunity_o = dut.u_backend.u_dcache.dbg_dc_pb_write_diff_bank_opportunity_q;
+  assign dbg_dc_pb_block_porta_bank_o = dut.u_backend.u_dcache.dbg_dc_pb_block_porta_bank_q;
+  assign dbg_dc_pb_block_misaligned_o = dut.u_backend.u_dcache.dbg_dc_pb_block_misaligned_q;
+  assign dbg_dc_pb_rsp_hit_o = dut.u_backend.u_dcache.dbg_dc_pb_rsp_hit_q;
+  assign dbg_dc_pb_rsp_hit_stall_o = dut.u_backend.u_dcache.dbg_dc_pb_rsp_hit_stall_q;
+  assign dbg_dc_pb_rsp_miss_o = dut.u_backend.u_dcache.dbg_dc_pb_rsp_miss_q;
+  assign dbg_lsu_dual_pick_pair_o = dut.u_backend.u_lsu_group.dbg_dual_pick_pair_q;
+  assign dbg_lsu_dual_block_shape_o = dut.u_backend.u_lsu_group.dbg_dual_block_shape_q;
+  assign dbg_lsu_dual_pair_wanted_o = dut.u_backend.u_lsu_group.dbg_dual_pair_wanted_q;
+  assign dbg_lsu_dual_candidate_ok_o = dut.u_backend.u_lsu_group.dbg_dual_candidate_ok_q;
+  assign dbg_lsu_dual_fire_o = dut.u_backend.u_lsu_group.dbg_dual_fire_q;
+  assign dbg_lsu_dual_block_ldq_o = dut.u_backend.u_lsu_group.dbg_dual_block_ldq_q;
+  assign dbg_lsu_dual_block_p0_lane_o = dut.u_backend.u_lsu_group.dbg_dual_block_p0_lane_q;
+  assign dbg_lsu_dual_block_p1_lane_o = dut.u_backend.u_lsu_group.dbg_dual_block_p1_lane_q;
+  assign dbg_lsu_dual_shape_block_pend_o = dut.u_backend.u_lsu_group.dbg_dual_shape_block_pend_q;
+  assign dbg_lsu_dual_shape_block_mmu_busy_o = dut.u_backend.u_lsu_group.dbg_dual_shape_block_mmu_busy_q;
+  assign dbg_lsu_dual_shape_block_amo_inflight_o = dut.u_backend.u_lsu_group.dbg_dual_shape_block_amo_inflight_q;
+  assign dbg_lsu_dual_shape_block_p0_not_plain_o = dut.u_backend.u_lsu_group.dbg_dual_shape_block_p0_not_plain_q;
+  assign dbg_lsu_dual_shape_block_p1_not_plain_o = dut.u_backend.u_lsu_group.dbg_dual_shape_block_p1_not_plain_q;
+  assign dbg_lsu_dual_shape_block_p0_walk_o = dut.u_backend.u_lsu_group.dbg_dual_shape_block_p0_walk_q;
+  assign dbg_lsu_dual_shape_block_p1_walk_o = dut.u_backend.u_lsu_group.dbg_dual_shape_block_p1_walk_q;
   always_comb begin
     commit_store_valid_o = '0;
     commit_store_addr_o  = '0;
