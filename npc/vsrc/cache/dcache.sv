@@ -224,6 +224,9 @@ module dcache #(
   logic ld_req_line_in_mshr;
   logic st_req_line_in_mshr;
   logic st_req_is_mmio;
+  logic ld_req_ready_base_w;
+  logic st_req_ready_base_w;
+  logic store_wbuf_ready_for_store_w;
   logic rsp_fire_w;
   logic rsp_handoff_use_pending_w;
   logic rsp_handoff_use_live_req_w;
@@ -262,20 +265,24 @@ module dcache #(
   logic                           lookup_handoff_err_w;
 
   // Ready policy: serve requests in IDLE, but give refill handshake priority.
+  // Allow one buffered load request only when waiting on load response (S_RESP).
+  // This avoids accepting a same-line request during miss LOOKUP before MSHR is visible.
+  // Lookup fast path: also accept the next load on a consumed hit cycle
+  // (gated by ld_rsp_ready_i; miss LOOKUP has hit=0 so it is still blocked).
+  assign ld_req_ready_base_w = ((state_q == S_IDLE) || (state_q == S_RESP) ||
+                                (state_q == S_LOOKUP && lookup_load_fast && ld_rsp_ready_i)) &&
+                               !pending_ld_valid_q && !flush_i && !refill_valid_i &&
+                               (!ld_req_valid_i || !ld_req_line_in_mshr);
+  assign st_req_ready_base_w = st_req_is_mmio
+                                   ? ((state_q == S_IDLE) && !flush_i)
+                                   : ((state_q == S_IDLE) && !pending_ld_valid_q && !ld_req_valid_i &&
+                                      mshr_empty && !flush_i && !refill_valid_i &&
+                                      (!st_req_valid_i || !st_req_line_in_mshr));
+
   always_comb begin
-    // Allow one buffered load request only when waiting on load response (S_RESP).
-    // This avoids accepting a same-line request during miss LOOKUP before MSHR is visible.
-    // Lookup fast path: also accept the next load on a consumed hit cycle
-    // (gated by ld_rsp_ready_i; miss LOOKUP has hit=0 so it is still blocked).
-    ld_req_ready_o = ((state_q == S_IDLE) || (state_q == S_RESP) ||
-                      (state_q == S_LOOKUP && lookup_load_fast && ld_rsp_ready_i)) &&
-                     !pending_ld_valid_q && !flush_i && !refill_valid_i &&
-                     (!ld_req_valid_i || !ld_req_line_in_mshr);
-    st_req_ready_o = st_req_is_mmio
-                         ? ((state_q == S_IDLE) && !flush_i)
-                         : ((state_q == S_IDLE) && !pending_ld_valid_q && !ld_req_valid_i &&
-                            mshr_empty && !flush_i && !refill_valid_i &&
-                            (!st_req_valid_i || !st_req_line_in_mshr));
+    ld_req_ready_o = ld_req_ready_base_w;
+    st_req_ready_o = st_req_is_mmio ? st_req_ready_base_w
+                                    : (st_req_ready_base_w && store_wbuf_ready_for_store_w);
 
     sel_is_load    = 1'b0;
     sel_is_store   = 1'b0;
@@ -340,6 +347,13 @@ module dcache #(
   logic [   OFFSET_WIDTH-1:0] sel_byte_off;
   logic [LINE_ADDR_WIDTH-1:0] ld_req_line_addr;
   logic [LINE_ADDR_WIDTH-1:0] st_req_line_addr;
+  logic [LINE_ADDR_WIDTH-1:0] pending_ld_line_addr;
+  logic [INDEX_WIDTH-1:0]     ld_req_index;
+  logic [INDEX_WIDTH-1:0]     st_req_index;
+  logic [INDEX_WIDTH-1:0]     pending_ld_index;
+  logic [BANK_SEL_WIDTH-1:0]  ld_req_bank_sel;
+  logic [BANK_SEL_WIDTH-1:0]  st_req_bank_sel;
+  logic [BANK_SEL_WIDTH-1:0]  pending_ld_bank_sel;
 
   assign sel_line_addr = sel_addr[Cfg.PLEN-1:OFFSET_WIDTH];
   assign sel_index     = sel_line_addr[INDEX_WIDTH-1:0];
@@ -347,6 +361,13 @@ module dcache #(
   assign sel_byte_off  = sel_addr[OFFSET_WIDTH-1:0];
   assign ld_req_line_addr = ld_req_addr_i[Cfg.PLEN-1:OFFSET_WIDTH];
   assign st_req_line_addr = st_req_addr_i[Cfg.PLEN-1:OFFSET_WIDTH];
+  assign pending_ld_line_addr = pending_ld_addr_q[Cfg.PLEN-1:OFFSET_WIDTH];
+  assign ld_req_index = ld_req_line_addr[INDEX_WIDTH-1:0];
+  assign st_req_index = st_req_line_addr[INDEX_WIDTH-1:0];
+  assign pending_ld_index = pending_ld_line_addr[INDEX_WIDTH-1:0];
+  assign ld_req_bank_sel = ld_req_index[BANK_SEL_WIDTH-1:0];
+  assign st_req_bank_sel = st_req_index[BANK_SEL_WIDTH-1:0];
+  assign pending_ld_bank_sel = pending_ld_index[BANK_SEL_WIDTH-1:0];
   assign st_req_is_mmio   = config_pkg::is_mmio_addr({{(32 - Cfg.PLEN) {1'b0}}, st_req_addr_i});
 
   logic [SETS_PER_BANK_WIDTH-1:0] sel_bank_addr;
@@ -444,9 +465,21 @@ module dcache #(
 
   logic                [                  Cfg.PLEN-1:0] wb_paddr_q;
 
-  // Store-hit update buffer
-  logic                [                LINE_WIDTH-1:0] store_new_line_q;
-  logic                [Cfg.DCACHE_SET_ASSOC_WIDTH-1:0] store_hit_way_q;
+  // Committed store-hit write buffer. Store hits enqueue the merged line here
+  // and let the main FSM return to load service; the buffer drains through the
+  // array write port when it does not steal port A's active bank read.
+  logic                                                 store_wbuf_valid_q;
+  logic                                                 store_wbuf_alloc_w;
+  logic                                                 store_wbuf_alloc_ready_w;
+  logic                                                 store_wbuf_drain_w;
+  logic                                                 store_wbuf_array_write_busy_w;
+  logic                                                 store_wbuf_port_a_bank_conflict_w;
+  logic                [                 TAG_WIDTH-1:0] store_wbuf_tag_q;
+  logic                [               INDEX_WIDTH-1:0] store_wbuf_index_q;
+  logic                [       SETS_PER_BANK_WIDTH-1:0] store_wbuf_bank_addr_q;
+  logic                [            BANK_SEL_WIDTH-1:0] store_wbuf_bank_sel_q;
+  logic                [Cfg.DCACHE_SET_ASSOC_WIDTH-1:0] store_wbuf_way_q;
+  logic                [                LINE_WIDTH-1:0] store_wbuf_line_q;
 
   // Last write bypass (fix RAW hazard on back-to-back stores/loads)
   logic                                 last_write_valid_q;
@@ -635,6 +668,9 @@ module dcache #(
   // ---------------------------------------------------------------------------
   logic [NUM_WAYS-1:0] way_valid;
   logic [NUM_WAYS-1:0] way_dirty;
+  logic [NUM_WAYS-1:0] hit_way_raw;
+  logic [NUM_WAYS-1:0] last_write_hit_way;
+  logic [NUM_WAYS-1:0] store_wbuf_hit_way;
   logic [NUM_WAYS-1:0] hit_way;
   logic hit;
   logic [Cfg.DCACHE_SET_ASSOC_WIDTH-1:0] hit_way_idx;
@@ -644,7 +680,16 @@ module dcache #(
     for (w = 0; w < NUM_WAYS; w++) begin : gen_meta_extract
       assign way_valid[w] = meta_a[w][0];
       assign way_dirty[w] = meta_a[w][1];
-      assign hit_way[w]   = way_valid[w] && (tag_a[w] == req_tag_q);
+      assign hit_way_raw[w] = way_valid[w] && (tag_a[w] == req_tag_q);
+      assign last_write_hit_way[w] = last_write_valid_q &&
+                                     (last_write_tag_q == req_tag_q) &&
+                                     (last_write_index_q == req_index_q) &&
+                                     (last_write_way_q == w[Cfg.DCACHE_SET_ASSOC_WIDTH-1:0]);
+      assign store_wbuf_hit_way[w] = store_wbuf_valid_q &&
+                                     (store_wbuf_tag_q == req_tag_q) &&
+                                     (store_wbuf_index_q == req_index_q) &&
+                                     (store_wbuf_way_q == w[Cfg.DCACHE_SET_ASSOC_WIDTH-1:0]);
+      assign hit_way[w] = hit_way_raw[w] || last_write_hit_way[w] || store_wbuf_hit_way[w];
     end
   endgenerate
 
@@ -677,6 +722,20 @@ module dcache #(
     if (has_invalid) victim_way_d = first_invalid_idx;
     else victim_way_d = lfsr_out;
   end
+
+  logic victim_hits_store_wbuf;
+  logic victim_valid_eff;
+  logic victim_dirty_eff;
+  logic [TAG_WIDTH-1:0] victim_tag_eff;
+  logic [LINE_WIDTH-1:0] victim_line_eff;
+
+  assign victim_hits_store_wbuf = store_wbuf_valid_q &&
+                                  (store_wbuf_index_q == req_index_q) &&
+                                  (store_wbuf_way_q == victim_way_d);
+  assign victim_valid_eff = way_valid[victim_way_d] || victim_hits_store_wbuf;
+  assign victim_dirty_eff = way_dirty[victim_way_d] || victim_hits_store_wbuf;
+  assign victim_tag_eff = victim_hits_store_wbuf ? store_wbuf_tag_q : tag_a[victim_way_d];
+  assign victim_line_eff = victim_hits_store_wbuf ? store_wbuf_line_q : line_a_all[victim_way_d];
 
   assign refill_line_addr = refill_paddr_i[Cfg.PLEN-1:OFFSET_WIDTH];
 
@@ -730,6 +789,52 @@ module dcache #(
       (state_q == S_LOOKUP) && !req_is_store_q && !req_err_q && !hit &&
       !mshr_req_line_hit && mshr_alloc_ready;
 
+  assign store_wbuf_alloc_ready_w = !store_wbuf_valid_q || store_wbuf_drain_w;
+  assign store_wbuf_alloc_w =
+      (state_q == S_LOOKUP) && req_is_store_q && !req_err_q && hit && store_wbuf_alloc_ready_w;
+  assign store_wbuf_ready_for_store_w =
+      !store_wbuf_valid_q ||
+      (store_wbuf_drain_w && (!st_req_valid_i || (store_wbuf_bank_sel_q != st_req_bank_sel)));
+  assign store_wbuf_array_write_busy_w =
+      refill_valid_i || idle_refill_match || lookup_store_refill_fire;
+
+  always_comb begin
+    store_wbuf_port_a_bank_conflict_w = 1'b0;
+    if (store_wbuf_valid_q) begin
+      if ((state_q == S_IDLE) && !flush_i && !refill_valid_i) begin
+        if (pending_ld_valid_q) begin
+          store_wbuf_port_a_bank_conflict_w =
+              (store_wbuf_bank_sel_q == pending_ld_bank_sel);
+        end else if (ld_req_valid_i && ld_req_ready_base_w) begin
+          store_wbuf_port_a_bank_conflict_w =
+              (store_wbuf_bank_sel_q == ld_req_bank_sel);
+        end
+      end
+
+      if (rsp_fire_w && pending_ld_valid_q && !flush_i && !refill_valid_i) begin
+        store_wbuf_port_a_bank_conflict_w |=
+            (store_wbuf_bank_sel_q == pending_ld_bank_sel);
+      end else if (rsp_fire_w && !pending_ld_valid_q && ld_req_valid_i &&
+                   ld_req_ready_base_w && !flush_i && !refill_valid_i) begin
+        store_wbuf_port_a_bank_conflict_w |=
+            (store_wbuf_bank_sel_q == ld_req_bank_sel);
+      end
+
+      if (lookup_rsp_fire_w && pending_ld_valid_q && !flush_i && !refill_valid_i) begin
+        store_wbuf_port_a_bank_conflict_w |=
+            (store_wbuf_bank_sel_q == pending_ld_bank_sel);
+      end else if (lookup_rsp_fire_w && !pending_ld_valid_q && ld_req_valid_i &&
+                   ld_req_ready_base_w && !flush_i && !refill_valid_i) begin
+        store_wbuf_port_a_bank_conflict_w |=
+            (store_wbuf_bank_sel_q == ld_req_bank_sel);
+      end
+    end
+  end
+
+  assign store_wbuf_drain_w = store_wbuf_valid_q &&
+                              !store_wbuf_array_write_busy_w &&
+                              !store_wbuf_port_a_bank_conflict_w;
+
   always_comb begin
     mshr_alloc_valid = 1'b0;
     mshr_alloc_key = req_line_addr_q;
@@ -745,14 +850,14 @@ module dcache #(
     mshr_dealloc_idx = '0;
 
     if (miss_alloc_fire) begin
-      mshr_alloc_entry_d.wb_done = !(way_valid[victim_way_d] && way_dirty[victim_way_d]);
+      mshr_alloc_entry_d.wb_done = !(victim_valid_eff && victim_dirty_eff);
       mshr_alloc_entry_d.miss_sent = 1'b0;
       mshr_alloc_entry_d.is_store = req_is_store_q;
       mshr_alloc_entry_d.victim_way = victim_way_d;
-      mshr_alloc_entry_d.victim_tag = tag_a[victim_way_d];
-      mshr_alloc_entry_d.victim_line = line_a_all[victim_way_d];
-      mshr_alloc_entry_d.victim_valid = way_valid[victim_way_d];
-      mshr_alloc_entry_d.victim_dirty = way_dirty[victim_way_d];
+      mshr_alloc_entry_d.victim_tag = victim_tag_eff;
+      mshr_alloc_entry_d.victim_line = victim_line_eff;
+      mshr_alloc_entry_d.victim_valid = victim_valid_eff;
+      mshr_alloc_entry_d.victim_dirty = victim_dirty_eff;
       mshr_alloc_entry_d.index = req_index_q;
       mshr_alloc_entry_d.bank_addr = req_bank_addr_q;
       mshr_alloc_entry_d.bank_sel = req_bank_sel_q;
@@ -806,12 +911,6 @@ module dcache #(
       r_bank_sel  = mshr_entry_data[mshr_refill_idx].bank_sel;
     end
 
-    // During store-hit update, force read A to same bank/address as the write
-    if (state_q == S_STORE_WRITE) begin
-      r_bank_addr = req_bank_addr_q;
-      r_bank_sel  = req_bank_sel_q;
-    end
-
     // Response handoff: predrive next lookup address because SRAM read is sync.
     if ((state_q == S_RESP) && rsp_handoff_fire_w) begin
       r_bank_addr = rsp_handoff_bank_addr_w;
@@ -841,7 +940,7 @@ module dcache #(
     else         r_bank_sel_o_q <= r_bank_sel;
   end
 
-  // Select the freshest line data for a hit (bypass last write if same line/way).
+  // Select the freshest line data for a hit (bypass pending/last writes).
   logic [LINE_WIDTH-1:0] hit_line;
   always_comb begin
     hit_line = line_a_all[hit_way_idx];
@@ -850,6 +949,12 @@ module dcache #(
         (last_write_index_q == req_index_q) &&
         (last_write_way_q == hit_way_idx)) begin
       hit_line = last_write_line_q;
+    end
+    if (store_wbuf_valid_q &&
+        (store_wbuf_tag_q == req_tag_q) &&
+        (store_wbuf_index_q == req_index_q) &&
+        (store_wbuf_way_q == hit_way_idx)) begin
+      hit_line = store_wbuf_line_q;
     end
   end
 
@@ -919,14 +1024,8 @@ module dcache #(
 
     unique case (state_q)
       S_STORE_WRITE: begin
-        // Write back the merged line to the hit way and mark dirty.
-        we_way_mask                  = '0;
-        we_way_mask[store_hit_way_q] = 1'b1;
-        w_bank_addr                  = req_bank_addr_q;
-        w_bank_sel                   = req_bank_sel_q;
-        w_tag                        = req_tag_q;
-        w_meta                       = {1'b1  /*dirty*/, 1'b1  /*valid*/};
-        w_line                       = store_new_line_q;
+        // Kept as a stable debug enum value; store hits now drain via
+        // store_wbuf_* instead of occupying the main FSM for this state.
       end
 
       S_WB_REQ: begin
@@ -996,6 +1095,16 @@ module dcache #(
       end
     end
 
+    if (store_wbuf_drain_w) begin
+      we_way_mask = '0;
+      we_way_mask[store_wbuf_way_q] = 1'b1;
+      w_bank_addr = store_wbuf_bank_addr_q;
+      w_bank_sel = store_wbuf_bank_sel_q;
+      w_tag = store_wbuf_tag_q;
+      w_meta = {1'b1, 1'b1};
+      w_line = store_wbuf_line_q;
+    end
+
     // On flush, suppress new external handshakes. Keep the current load
     // response purely state/data driven: ROB may derive the same-cycle flush
     // from an LSU fast completion, so feeding that flush back into ld_rsp_*
@@ -1032,7 +1141,7 @@ module dcache #(
           end
         end else if (hit) begin
           if (req_is_store_q) begin
-            state_d = S_STORE_WRITE;
+            state_d = store_wbuf_alloc_ready_w ? S_IDLE : S_LOOKUP;
           end else begin
             // Load hit fast path: response is driven combinationally this cycle.
             // If consumed, hand off to the next load (stay in S_LOOKUP) or go
@@ -1046,7 +1155,7 @@ module dcache #(
           // the only in-flight copy before refill+merge updates the cache line.
           if (mshr_req_line_hit) begin
             state_d = S_LOOKUP;
-          end else if (way_valid[victim_way_d] && way_dirty[victim_way_d]) begin
+          end else if (victim_valid_eff && victim_dirty_eff) begin
             state_d = S_WB_REQ;
           end else begin
             state_d = S_MISS_REQ;
@@ -1177,6 +1286,12 @@ module dcache #(
         (last_write_index_q == req_b_index_q) &&
         (last_write_way_q == hit_way_b_idx)) begin
       hit_line_b = last_write_line_q;
+    end
+    if (store_wbuf_valid_q &&
+        (store_wbuf_tag_q == req_b_tag_q) &&
+        (store_wbuf_index_q == req_b_index_q) &&
+        (store_wbuf_way_q == hit_way_b_idx)) begin
+      hit_line_b = store_wbuf_line_q;
     end
   end
 
@@ -1318,8 +1433,13 @@ module dcache #(
 
       wb_paddr_q       <= '0;
 
-      store_new_line_q <= '0;
-      store_hit_way_q  <= '0;
+      store_wbuf_valid_q <= 1'b0;
+      store_wbuf_tag_q   <= '0;
+      store_wbuf_index_q <= '0;
+      store_wbuf_bank_addr_q <= '0;
+      store_wbuf_bank_sel_q  <= '0;
+      store_wbuf_way_q   <= '0;
+      store_wbuf_line_q  <= '0;
 
       rsp_err_q        <= 1'b0;
       rsp_data_q       <= '0;
@@ -1363,9 +1483,6 @@ module dcache #(
       miss_bank_sel_q  <= '0;
 
       wb_paddr_q       <= '0;
-
-      store_new_line_q <= '0;
-      store_hit_way_q  <= '0;
 
       rsp_err_q        <= 1'b0;
       rsp_data_q       <= '0;
@@ -1459,10 +1576,10 @@ module dcache #(
       if (state_q == S_LOOKUP) begin
         // Precompute victim context (valid in miss case)
         victim_way_q     <= victim_way_d;
-        victim_tag_q     <= tag_a[victim_way_d];
-        victim_line_q    <= line_a_all[victim_way_d];
-        victim_valid_q   <= way_valid[victim_way_d];
-        victim_dirty_q   <= way_dirty[victim_way_d];
+        victim_tag_q     <= victim_tag_eff;
+        victim_line_q    <= victim_line_eff;
+        victim_valid_q   <= victim_valid_eff;
+        victim_dirty_q   <= victim_dirty_eff;
 
         // Miss context (line-aligned request)
         miss_paddr_q     <= {req_line_addr_q, {OFFSET_WIDTH{1'b0}}};
@@ -1472,7 +1589,7 @@ module dcache #(
 
         // Writeback address from current victim tag + current index.
         // NOTE: must use tag_a[...] of this cycle; victim_tag_q updates with NBA.
-        wb_paddr_q       <= {{tag_a[victim_way_d], req_index_q}, {OFFSET_WIDTH{1'b0}}};
+        wb_paddr_q       <= {{victim_tag_eff, req_index_q}, {OFFSET_WIDTH{1'b0}}};
 
         if (req_err_q) begin
           // Only loads have response
@@ -1490,11 +1607,7 @@ module dcache #(
             rsp_data_q <= extract_load(hit_line, req_byte_off_q, req_op_q);
             rsp_id_q   <= req_id_q;
           end else begin
-            // Store hit: compute merged line, write in next state.
-            store_hit_way_q <= hit_way_idx;
-            store_new_line_q <= apply_store(
-                hit_line, req_byte_off_q, req_op_q, req_wdata_q
-            );
+            // Store hit enqueue is handled below after the lookup data is stable.
           end
         end
       end
@@ -1521,14 +1634,30 @@ module dcache #(
       end
 
       // ----------------------------------------------------------
-      // Track last write to handle RAW hazards on the same line/way
+      // Store-hit write buffer and RAW tracking
       // ----------------------------------------------------------
-      if (state_q == S_STORE_WRITE) begin
+      if (store_wbuf_drain_w && !store_wbuf_alloc_w) begin
+        store_wbuf_valid_q <= 1'b0;
+      end
+
+      if (store_wbuf_alloc_w) begin
+        store_wbuf_valid_q     <= 1'b1;
+        store_wbuf_tag_q       <= req_tag_q;
+        store_wbuf_index_q     <= req_index_q;
+        store_wbuf_bank_addr_q <= req_bank_addr_q;
+        store_wbuf_bank_sel_q  <= req_bank_sel_q;
+        store_wbuf_way_q       <= hit_way_idx;
+        store_wbuf_line_q      <= apply_store(
+            hit_line, req_byte_off_q, req_op_q, req_wdata_q
+        );
+      end
+
+      if (store_wbuf_drain_w) begin
         last_write_valid_q <= 1'b1;
-        last_write_tag_q   <= req_tag_q;
-        last_write_index_q <= req_index_q;
-        last_write_way_q   <= store_hit_way_q;
-        last_write_line_q  <= store_new_line_q;
+        last_write_tag_q   <= store_wbuf_tag_q;
+        last_write_index_q <= store_wbuf_index_q;
+        last_write_way_q   <= store_wbuf_way_q;
+        last_write_line_q  <= store_wbuf_line_q;
       end else if (idle_refill_match || lookup_store_refill_fire) begin
         last_write_valid_q <= 1'b1;
         last_write_tag_q   <= refill_paddr_i[Cfg.PLEN-1:OFFSET_WIDTH][INDEX_WIDTH+:TAG_WIDTH];

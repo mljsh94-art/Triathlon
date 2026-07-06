@@ -52,6 +52,25 @@ module tb_dcache #(
     output logic [global_config_pkg::Cfg.DCACHE_LINE_WIDTH-1:0] wb_req_data_o
 );
 
+  logic                                                  ld_req_b_valid_i;
+  logic                                                  ld_req_b_ready_o;
+  logic                [global_config_pkg::Cfg.PLEN-1:0] ld_req_b_addr_i;
+  decode_pkg::lsu_op_e                                   ld_req_b_op_i;
+  logic                             [TB_LD_ID_WIDTH-1:0] ld_req_b_id_i;
+  logic                                                  ld_rsp_b_valid_o;
+  logic                                                  ld_rsp_b_ready_i;
+  logic                [global_config_pkg::Cfg.XLEN-1:0] ld_rsp_b_data_o;
+  logic                                                  ld_rsp_b_err_o;
+  logic                             [TB_LD_ID_WIDTH-1:0] ld_rsp_b_id_o;
+  logic                                                  ld_rsp_b_miss_o;
+  logic                             [TB_LD_ID_WIDTH-1:0] ld_rsp_b_miss_id_o;
+
+  assign ld_req_b_valid_i = 1'b0;
+  assign ld_req_b_addr_i  = '0;
+  assign ld_req_b_op_i    = decode_pkg::LSU_LW;
+  assign ld_req_b_id_i    = '0;
+  assign ld_rsp_b_ready_i = 1'b1;
+
   dcache #(
       .Cfg(global_config_pkg::Cfg),
       .N_MSHR(TB_N_MSHR),

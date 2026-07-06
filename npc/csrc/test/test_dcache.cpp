@@ -42,6 +42,7 @@ void reset(Vtb_dcache *top, VerilatedVcdC *tfp) {
 // 等待直到 Cache 准备好接收请求
 void wait_until_ready(Vtb_dcache *top, VerilatedVcdC *tfp, bool is_store) {
   while (sim_time < MAX_SIM_TIME) {
+    top->eval();
     if (is_store && top->st_req_ready_o)
       return;
     if (!is_store && top->ld_req_ready_o)
@@ -118,6 +119,7 @@ void check_load(Vtb_dcache *top, VerilatedVcdC *tfp, uint32_t addr,
   top->ld_req_addr_i = addr;
   top->ld_req_op_i = op;
   top->ld_req_id_i = 0;
+  top->eval();
 
   bool req_accepted = false;
   while (!req_accepted && sim_time < MAX_SIM_TIME) {
@@ -184,6 +186,7 @@ void send_store(Vtb_dcache *top, VerilatedVcdC *tfp, uint32_t addr,
   top->st_req_addr_i = addr;
   top->st_req_data_i = data;
   top->st_req_op_i = op;
+  top->eval();
 
   bool req_accepted = false;
   while (!req_accepted && sim_time < MAX_SIM_TIME) {
@@ -460,9 +463,9 @@ int main(int argc, char **argv) {
   std::cout << "[PASS] Case 8: Non-blocking miss path works." << std::endl;
 
   // ============================================================
-  // Test 9: Store miss should not be blocked by pending load miss
+  // Test 9: Store miss waits behind pending load miss
   // ============================================================
-  std::cout << "[TEST] Case 9: Store miss with pending load miss" << std::endl;
+  std::cout << "[TEST] Case 9: Store miss waits for pending load miss" << std::endl;
 
   reset(top, tfp);
   top->miss_req_ready_i = 1;
@@ -480,46 +483,78 @@ int main(int argc, char **argv) {
   tick(top, tfp);
   top->ld_req_valid_i = 0;
 
-  int miss_fire_count = 0;
+  bool case9_first_miss_seen = false;
+  uint32_t case9_first_miss_addr = 0;
+  uint32_t case9_first_miss_way = 0;
   for (int i = 0; i < 40; i++) {
     if (top->miss_req_valid_o && top->miss_req_ready_i) {
-      miss_fire_count++;
+      case9_first_miss_seen = true;
+      case9_first_miss_addr = top->miss_req_paddr_o;
+      case9_first_miss_way = top->miss_req_victim_way_o;
       tick(top, tfp);
       break;
     }
     tick(top, tfp);
   }
-  if (miss_fire_count < 1) {
+  if (!case9_first_miss_seen) {
     std::cout << "[FAIL] Case 9: first miss request not observed." << std::endl;
     assert(false);
   }
 
-  // Keep first miss outstanding (no refill yet), then issue store miss.
-  wait_until_ready(top, tfp, true);
+  // Store miss remains back-pressured while the load miss is outstanding.
   top->st_req_valid_i = 1;
   top->st_req_addr_i = 0x80007000;
   top->st_req_data_i = 0xA5A5A5A5;
   top->st_req_op_i = OP_SW;
-  tick(top, tfp);
-  top->st_req_valid_i = 0;
+  top->eval();
+  for (int i = 0; i < 8; i++) {
+    if (top->st_req_ready_o) {
+      std::cout << "[FAIL] Case 9: store miss accepted before load refill." << std::endl;
+      assert(false);
+    }
+    tick(top, tfp);
+  }
 
-  bool second_store_miss_seen = false;
+  // Complete the load miss, then the held store request may enter and issue its miss.
+  top->refill_valid_i = 1;
+  top->refill_paddr_i = case9_first_miss_addr;
+  top->refill_way_i = case9_first_miss_way;
+  for (int i = 0; i < 8; i++)
+    top->refill_data_i[i] = 0x12345678;
+  tick(top, tfp);
+  top->refill_valid_i = 0;
+
+  bool store_accepted = false;
+  for (int i = 0; i < 40; i++) {
+    top->eval();
+    if (top->st_req_ready_o) {
+      tick(top, tfp);
+      store_accepted = true;
+      break;
+    }
+    tick(top, tfp);
+  }
+  top->st_req_valid_i = 0;
+  if (!store_accepted) {
+    std::cout << "[FAIL] Case 9: store miss not accepted after load refill." << std::endl;
+    assert(false);
+  }
+
+  bool store_miss_seen = false;
   for (int i = 0; i < 60; i++) {
     if (top->miss_req_valid_o && top->miss_req_ready_i) {
-      miss_fire_count++;
-      second_store_miss_seen = true;
+      store_miss_seen = true;
       tick(top, tfp);
       break;
     }
     tick(top, tfp);
   }
-  if (!second_store_miss_seen || miss_fire_count < 2) {
-    std::cout << "[FAIL] Case 9: store miss request not issued while first load "
-                 "miss is pending."
+  if (!store_miss_seen) {
+    std::cout << "[FAIL] Case 9: store miss request not issued after load refill."
               << std::endl;
     assert(false);
   }
-  std::cout << "[PASS] Case 9: Store miss non-blocking path works." << std::endl;
+  std::cout << "[PASS] Case 9: Store miss waits for pending load miss." << std::endl;
 
   // ============================================================
   // Test 10: Accept next load while previous load response is stalled
