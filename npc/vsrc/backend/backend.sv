@@ -523,6 +523,28 @@ module backend #(
   logic [Cfg.XLEN-1:0] st_ex_data;
   decode_pkg::lsu_op_e st_ex_op;
   logic [ROB_IDX_WIDTH-1:0] st_ex_rob_idx;
+  logic lsu_sta_early_valid;
+  decode_pkg::uop_t lsu_sta_early_uop;
+  logic [Cfg.PLEN-1:0] lsu_sta_early_addr;
+  logic [ROB_IDX_WIDTH-1:0] lsu_sta_early_rob_idx;
+  logic [ST_IDX_WIDTH-1:0] lsu_sta_early_st_id;
+  logic lsu_sta_early_ready;
+  logic lsu_std_early_valid;
+  logic [Cfg.XLEN-1:0] lsu_std_early_data;
+  logic [ST_IDX_WIDTH-1:0] lsu_std_early_st_id;
+
+  assign lsu_sta_early_ready = !csr_satp_state[31] || (csr_priv_mode == 2'b11);
+
+  logic stq_order_load_query_valid;
+  logic [Cfg.PLEN-1:0] stq_order_load_query_addr;
+  logic [Cfg.XLEN/8-1:0] stq_order_load_query_be;
+  logic [ROB_IDX_WIDTH-1:0] stq_order_load_query_rob_idx;
+  logic stq_order_load_query_block;
+  logic stq_order_load_query_addr_unknown;
+  logic stq_order_load_query_overlap;
+  logic stq_order_load_query_data_not_ready;
+  logic stq_order_load_query_forward_full;
+  logic stq_order_load_query_safe;
 
   logic [Cfg.PLEN-1:0] stq_fwd_addr[0:1];
   logic [Cfg.XLEN/8-1:0] stq_fwd_be[0:1];
@@ -553,6 +575,9 @@ module backend #(
   logic st_wb_is_mispred;
   logic [Cfg.PLEN-1:0] st_wb_redirect_pc;
   logic [$clog2(SB_DEPTH+1)-1:0] st_unreported_count;
+  logic stq_order_oldest_store_valid;
+  logic [ROB_IDX_WIDTH-1:0] stq_order_oldest_store_rob_idx;
+  logic stq_order_has_committed_store;
 
   stq #(
       .SB_DEPTH     (SB_DEPTH),
@@ -565,16 +590,30 @@ module backend #(
       .rst_ni(rst_ni),
 
       .alloc_req_i(st_alloc_req),
+      .alloc_rob_idx_i(rob_dispatch_rob_index),
       .alloc_ready_o(st_alloc_ready),
       .alloc_id_o(st_alloc_id),
       .alloc_fire_i(st_alloc_fire),
 
-      .ex_valid_i  (st_ex_valid),
-      .ex_st_id_i  (st_ex_st_id),
-      .ex_addr_i   (st_ex_addr),
-      .ex_data_i   (st_ex_data),
-      .ex_op_i     (st_ex_op),
-      .ex_rob_idx_i(st_ex_rob_idx),
+      .sta_valid_i  (st_ex_valid),
+      .sta_st_id_i  (st_ex_st_id),
+      .sta_addr_i   (st_ex_addr),
+      .sta_op_i     (st_ex_op),
+      .sta_rob_idx_i(st_ex_rob_idx),
+
+      .std_valid_i(st_ex_valid),
+      .std_st_id_i(st_ex_st_id),
+      .std_data_i (st_ex_data),
+
+      .std_early_valid_i(lsu_std_early_valid),
+      .std_early_st_id_i(lsu_std_early_st_id),
+      .std_early_data_i (lsu_std_early_data),
+
+      .sta_early_valid_i  (lsu_sta_early_valid),
+      .sta_early_st_id_i  (lsu_sta_early_st_id),
+      .sta_early_addr_i   (lsu_sta_early_addr),
+      .sta_early_op_i     (lsu_sta_early_uop.lsu_op),
+      .sta_early_rob_idx_i(lsu_sta_early_rob_idx),
 
       .commit_valid_i(st_commit_valid),
       .commit_st_id_i(st_commit_id),
@@ -619,6 +658,20 @@ module backend #(
       .load_rob_idx_i2(stq_fwd_rob_idx[1]),
       .load_hit_o2(stq_fwd_hit[1]),
       .load_data_o2(stq_fwd_data[1]),
+
+      .load_order_query_valid_i(stq_order_load_query_valid),
+      .load_order_query_be_i(stq_order_load_query_be),
+      .load_order_query_addr_i(stq_order_load_query_addr),
+      .load_order_query_rob_idx_i(stq_order_load_query_rob_idx),
+      .load_order_query_block_o(stq_order_load_query_block),
+      .load_order_query_addr_unknown_o(stq_order_load_query_addr_unknown),
+      .load_order_query_overlap_o(stq_order_load_query_overlap),
+      .load_order_query_data_not_ready_o(stq_order_load_query_data_not_ready),
+      .load_order_query_forward_full_o(stq_order_load_query_forward_full),
+      .load_order_query_safe_o(stq_order_load_query_safe),
+      .load_order_oldest_store_valid_o(stq_order_oldest_store_valid),
+      .load_order_oldest_store_rob_idx_o(stq_order_oldest_store_rob_idx),
+      .load_order_has_committed_store_o(stq_order_has_committed_store),
 
       .rob_head_i(rob_head_ptr),
 
@@ -1510,7 +1563,25 @@ module backend #(
       .lsu_stq_id(lsu_stq_id),
       .lsu_cand_v(lsu_cand_v),
       .lsu_pick_v(lsu_pick_v),
-      .dual_port1_en_i(lsu_dual_port1_en)
+      .dual_port1_en_i(lsu_dual_port1_en),
+      .sta_ready_i(lsu_sta_early_ready),
+      .sta_valid_o(lsu_sta_early_valid),
+      .sta_uop_o(lsu_sta_early_uop),
+      .sta_addr_o(lsu_sta_early_addr),
+      .sta_dst_o(lsu_sta_early_rob_idx),
+      .sta_stq_id_o(lsu_sta_early_st_id),
+      .std_valid_o(lsu_std_early_valid),
+      .std_data_o(lsu_std_early_data),
+      .std_stq_id_o(lsu_std_early_st_id),
+      .stq_order_query_valid_o(stq_order_load_query_valid),
+      .stq_order_query_addr_o(stq_order_load_query_addr),
+      .stq_order_query_be_o(stq_order_load_query_be),
+      .stq_order_query_rob_idx_o(stq_order_load_query_rob_idx),
+      .stq_order_query_safe_i(stq_order_load_query_safe),
+      .stq_order_query_forward_full_i(stq_order_load_query_forward_full),
+      .stq_order_oldest_store_valid_i(stq_order_oldest_store_valid),
+      .stq_order_oldest_store_rob_idx_i(stq_order_oldest_store_rob_idx),
+      .stq_order_has_committed_store_i(stq_order_has_committed_store)
   );
 
   issue_single #(

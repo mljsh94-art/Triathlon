@@ -16,20 +16,39 @@ module stq #(
     // 1. Dispatch (From Rename) - 分配 STQ 條目
     // =======================================================
     input logic [DISPATCH_WIDTH-1:0] alloc_req_i,
+    input logic [DISPATCH_WIDTH-1:0][ROB_IDX_WIDTH-1:0] alloc_rob_idx_i,
     output logic alloc_ready_o,  // STQ 可接受本周期所有请求
     output logic [DISPATCH_WIDTH-1:0][$clog2(SB_DEPTH)-1:0] alloc_id_o,  // 分配到的 STQ ID（每条store）
     input logic alloc_fire_i,  // 真正执行分配（由上游控制）
 
     // =======================================================
-    // 2. Execute (From AGU/ALU) - 填入地址和數據
+    // 2. Execute fill ports - STA/STD split, currently driven together
     // =======================================================
-    // Store 指令計算完地址和數據後，寫入 STQ (亂序寫入)
-    input logic                                       ex_valid_i,
-    input logic                [$clog2(SB_DEPTH)-1:0] ex_st_id_i,
-    input logic                [        Cfg.PLEN-1:0] ex_addr_i,
-    input logic                [        Cfg.XLEN-1:0] ex_data_i,
-    input decode_pkg::lsu_op_e                        ex_op_i,
-    input logic                [   ROB_IDX_WIDTH-1:0] ex_rob_idx_i,
+    // STA writes address/op/ROB tag; STD writes store data. Stage 2 keeps
+    // behavior equivalent by driving both ports from the old store execute path.
+    input logic                                       sta_valid_i,
+    input logic                [$clog2(SB_DEPTH)-1:0] sta_st_id_i,
+    input logic                [        Cfg.PLEN-1:0] sta_addr_i,
+    input decode_pkg::lsu_op_e                        sta_op_i,
+    input logic                [   ROB_IDX_WIDTH-1:0] sta_rob_idx_i,
+
+    input logic                                       std_valid_i,
+    input logic                [$clog2(SB_DEPTH)-1:0] std_st_id_i,
+    input logic                [        Cfg.XLEN-1:0] std_data_i,
+
+    // Early STD writes store data and is allowed to target a different entry
+    // from the full store execute STD in the same cycle.
+    input logic                                       std_early_valid_i,
+    input logic                [$clog2(SB_DEPTH)-1:0] std_early_st_id_i,
+    input logic                [        Cfg.XLEN-1:0] std_early_data_i,
+
+    // Early STA writes only address/op/tag and is allowed to target a different
+    // entry from the full store execute STA in the same cycle.
+    input logic                                       sta_early_valid_i,
+    input logic                [$clog2(SB_DEPTH)-1:0] sta_early_st_id_i,
+    input logic                [        Cfg.PLEN-1:0] sta_early_addr_i,
+    input decode_pkg::lsu_op_e                        sta_early_op_i,
+    input logic                [   ROB_IDX_WIDTH-1:0] sta_early_rob_idx_i,
 
     // =======================================================
     // 3. Commit (From ROB) - 標記為 "Senior Store"
@@ -96,6 +115,24 @@ module stq #(
     input  logic [ROB_IDX_WIDTH-1:0] load_rob_idx_i2,
     output logic                     load_hit_o2,
     output logic [     Cfg.XLEN-1:0] load_data_o2,
+
+    // Observability/order-query port for issue-stage migration. It classifies
+    // older STQ entries for one source-ready load candidate without affecting
+    // forwarding or issue decisions yet.
+    input  logic [   Cfg.XLEN/8-1:0] load_order_query_be_i,
+    input  logic [     Cfg.PLEN-1:0] load_order_query_addr_i,
+    input  logic [ROB_IDX_WIDTH-1:0] load_order_query_rob_idx_i,
+    input  logic                     load_order_query_valid_i,
+    output logic                     load_order_query_block_o,
+    output logic                     load_order_query_addr_unknown_o,
+    output logic                     load_order_query_overlap_o,
+    output logic                     load_order_query_data_not_ready_o,
+    output logic                     load_order_query_forward_full_o,
+    output logic                     load_order_query_safe_o,
+    output logic                     load_order_oldest_store_valid_o,
+    output logic [ROB_IDX_WIDTH-1:0] load_order_oldest_store_rob_idx_o,
+    output logic                     load_order_has_committed_store_o,
+
     input  logic [ROB_IDX_WIDTH-1:0] rob_head_i,
 
     // =======================================================
@@ -132,6 +169,13 @@ module stq #(
   localparam int unsigned BYTE_W = Cfg.XLEN / 8;
   localparam int unsigned BYTE_OFF_W = (BYTE_W <= 1) ? 1 : $clog2(BYTE_W);
 
+  logic [63:0] dbg_load_order_query_total_q;
+  logic [63:0] dbg_load_order_query_addr_unknown_q;
+  logic [63:0] dbg_load_order_query_overlap_q;
+  logic [63:0] dbg_load_order_query_data_not_ready_q;
+  logic [63:0] dbg_load_order_query_forward_full_q;
+  logic [63:0] dbg_load_order_query_safe_q;
+
   function automatic logic [ROB_IDX_WIDTH-1:0] rob_age(input logic [ROB_IDX_WIDTH-1:0] idx,
                                                        input logic [ROB_IDX_WIDTH-1:0] head);
     logic [ROB_IDX_WIDTH-1:0] diff;
@@ -140,6 +184,35 @@ module stq #(
       return diff;
     end
   endfunction
+
+  always_comb begin
+    logic found_oldest;
+    logic [ROB_IDX_WIDTH-1:0] best_age;
+    logic [ROB_IDX_WIDTH-1:0] age;
+
+    found_oldest = 1'b0;
+    best_age = {ROB_IDX_WIDTH{1'b1}};
+    age = '0;
+    load_order_oldest_store_valid_o = 1'b0;
+    load_order_oldest_store_rob_idx_o = '0;
+    load_order_has_committed_store_o = 1'b0;
+
+    for (int i = 0; i < SB_DEPTH; i++) begin
+      if (mem[i].valid) begin
+        if (mem[i].committed) begin
+          load_order_has_committed_store_o = 1'b1;
+        end else begin
+          age = rob_age(mem[i].rob_tag, rob_head_i);
+          if (!found_oldest || (age < best_age)) begin
+            found_oldest = 1'b1;
+            best_age = age;
+            load_order_oldest_store_valid_o = 1'b1;
+            load_order_oldest_store_rob_idx_o = mem[i].rob_tag;
+          end
+        end
+      end
+    end
+  end
 
   // Byte-enable mask of a buffered store, relative to its containing word.
   // SC_FAIL / 非 store op 返回 0，使其不参与转发覆盖。
@@ -310,20 +383,36 @@ module stq #(
     end else begin
 
       // ------------------------------------
-      // 1. Execute Write (亂序寫入)
+      // 1. Execute Fill (乱序写入，STA/STD 分口)
       // ------------------------------------
-      if (ex_valid_i) begin
-        mem[ex_st_id_i].addr       <= ex_addr_i;
-        mem[ex_st_id_i].data       <= ex_data_i;
-        mem[ex_st_id_i].op         <= ex_op_i;
-        mem[ex_st_id_i].rob_tag    <= ex_rob_idx_i;
-        mem[ex_st_id_i].addr_valid <= 1'b1;
-        mem[ex_st_id_i].data_valid <= 1'b1;
-        if (ex_op_i == decode_pkg::LSU_SW || ex_op_i == decode_pkg::LSU_SC || ex_op_i == decode_pkg::LSU_SC_FAIL) begin
+      if (sta_valid_i) begin
+        mem[sta_st_id_i].addr       <= sta_addr_i;
+        mem[sta_st_id_i].op         <= sta_op_i;
+        mem[sta_st_id_i].rob_tag    <= sta_rob_idx_i;
+        mem[sta_st_id_i].addr_valid <= 1'b1;
+        if (sta_op_i == decode_pkg::LSU_SW || sta_op_i == decode_pkg::LSU_SC ||
+            sta_op_i == decode_pkg::LSU_SC_FAIL) begin
 `ifndef SYNTHESIS
-          // $display("[SB] Store Insert! id=%d addr=%x data=%x op=%d", ex_st_id_i, ex_addr_i, ex_data_i, ex_op_i);
+          // $display("[SB] Store STA! id=%d addr=%x op=%d", sta_st_id_i, sta_addr_i, sta_op_i);
 `endif
         end
+      end
+
+      if (std_valid_i) begin
+        mem[std_st_id_i].data       <= std_data_i;
+        mem[std_st_id_i].data_valid <= 1'b1;
+      end
+
+      if (std_early_valid_i && !(std_valid_i && (std_st_id_i == std_early_st_id_i))) begin
+        mem[std_early_st_id_i].data       <= std_early_data_i;
+        mem[std_early_st_id_i].data_valid <= 1'b1;
+      end
+
+      if (sta_early_valid_i && !(sta_valid_i && (sta_st_id_i == sta_early_st_id_i))) begin
+        mem[sta_early_st_id_i].addr       <= sta_early_addr_i;
+        mem[sta_early_st_id_i].op         <= sta_early_op_i;
+        mem[sta_early_st_id_i].rob_tag    <= sta_early_rob_idx_i;
+        mem[sta_early_st_id_i].addr_valid <= 1'b1;
       end
 
       // ------------------------------------
@@ -363,7 +452,7 @@ module stq #(
             mem[idx].committed  <= 1'b0;  // 默認為推測狀態
             mem[idx].addr_valid <= 1'b0;
             mem[idx].data_valid <= 1'b0;
-            mem[idx].rob_tag    <= '0;
+            mem[idx].rob_tag    <= alloc_rob_idx_i[i];
             mem[idx].executed   <= 1'b0;  // 重置完成上报状态
             mem[idx].reported   <= 1'b0;
             off++;
@@ -484,6 +573,102 @@ module stq #(
   assign st_wb_redirect_pc_o = mem[wb_sel_idx].redirect_pc;
 
   // =======================================================
+  // Load-order query for issue-stage migration profiling
+  // =======================================================
+  always_comb begin
+    logic [ROB_IDX_WIDTH-1:0] q_load_age;
+    logic raw_addr_unknown;
+    logic raw_overlap;
+    logic raw_overlap_data_not_ready;
+    logic [BYTE_W-1:0] covered_be;
+
+    raw_addr_unknown = 1'b0;
+    raw_overlap = 1'b0;
+    raw_overlap_data_not_ready = 1'b0;
+    covered_be = '0;
+    q_load_age = rob_age(load_order_query_rob_idx_i, rob_head_i);
+
+    for (int i = 0; i < SB_DEPTH; i++) begin
+      logic [$clog2(SB_DEPTH)-1:0] idx;
+      logic older_than_load;
+      logic same_word;
+      logic [BYTE_W-1:0] st_be;
+      logic [BYTE_W-1:0] overlap_be;
+      idx = tail_ptr - 1 - i[$clog2(SB_DEPTH)-1:0];
+      older_than_load = mem[idx].committed ||
+                        (rob_age(mem[idx].rob_tag, rob_head_i) < q_load_age);
+      same_word = mem[idx].addr_valid &&
+                  (mem[idx].addr[Cfg.PLEN-1:BYTE_OFF_W] ==
+                   load_order_query_addr_i[Cfg.PLEN-1:BYTE_OFF_W]);
+      st_be = store_be_mask(mem[idx].op, mem[idx].addr);
+      overlap_be = st_be & load_order_query_be_i;
+
+      if (load_order_query_valid_i && mem[idx].valid && older_than_load) begin
+        if (!mem[idx].addr_valid) begin
+          raw_addr_unknown = 1'b1;
+        end else if (same_word && (|overlap_be)) begin
+          raw_overlap = 1'b1;
+          if (!mem[idx].data_valid) begin
+            raw_overlap_data_not_ready = 1'b1;
+          end else begin
+            covered_be = covered_be | overlap_be;
+          end
+        end
+      end
+    end
+
+    load_order_query_forward_full_o = load_order_query_valid_i && raw_overlap &&
+                                      !raw_addr_unknown && !raw_overlap_data_not_ready &&
+                                      ((covered_be & load_order_query_be_i) ==
+                                       load_order_query_be_i) &&
+                                      (load_order_query_be_i != '0);
+
+    // Mutually-exclusive priority: unknown address first; otherwise an overlap
+    // without data, then partial data-ready overlap, then full-cover forward,
+    // then no-overlap safe. Full-cover can issue because ld_pipe suppresses
+    // DCache and completes from STQ forwarding on stq_fwd_hit_i.
+    load_order_query_addr_unknown_o = raw_addr_unknown;
+    load_order_query_data_not_ready_o = !raw_addr_unknown && raw_overlap_data_not_ready;
+    load_order_query_overlap_o = !raw_addr_unknown && raw_overlap &&
+                                 !raw_overlap_data_not_ready &&
+                                 !load_order_query_forward_full_o;
+    load_order_query_block_o = load_order_query_addr_unknown_o ||
+                               load_order_query_data_not_ready_o ||
+                               load_order_query_overlap_o;
+    load_order_query_safe_o = load_order_query_valid_i && !load_order_query_block_o;
+  end
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      dbg_load_order_query_total_q <= '0;
+      dbg_load_order_query_addr_unknown_q <= '0;
+      dbg_load_order_query_overlap_q <= '0;
+      dbg_load_order_query_data_not_ready_q <= '0;
+      dbg_load_order_query_forward_full_q <= '0;
+      dbg_load_order_query_safe_q <= '0;
+    end else begin
+      if (load_order_query_valid_i) begin
+        dbg_load_order_query_total_q <= dbg_load_order_query_total_q + 64'd1;
+        if (load_order_query_addr_unknown_o) begin
+          dbg_load_order_query_addr_unknown_q <= dbg_load_order_query_addr_unknown_q + 64'd1;
+        end
+        if (load_order_query_overlap_o) begin
+          dbg_load_order_query_overlap_q <= dbg_load_order_query_overlap_q + 64'd1;
+        end
+        if (load_order_query_data_not_ready_o) begin
+          dbg_load_order_query_data_not_ready_q <= dbg_load_order_query_data_not_ready_q + 64'd1;
+        end
+        if (load_order_query_forward_full_o) begin
+          dbg_load_order_query_forward_full_q <= dbg_load_order_query_forward_full_q + 64'd1;
+        end
+        if (load_order_query_safe_o && !load_order_query_forward_full_o) begin
+          dbg_load_order_query_safe_q <= dbg_load_order_query_safe_q + 64'd1;
+        end
+      end
+    end
+  end
+
+  // =======================================================
   // Store-to-Load Forwarding Logic (唯一轉發源, byte-merge)
   // =======================================================
   // 策略：從最新分配的條目 (tail-1) 向最舊 (head) 掃描，對每個更老、同字、
@@ -602,8 +787,17 @@ module stq #(
         end
       end
 
-      if (ex_valid_i) begin
-        `NPC_ASSERT(mem[ex_st_id_i].valid, "stq/ex_to_invalid")
+      if (sta_valid_i) begin
+        `NPC_ASSERT(mem[sta_st_id_i].valid, "stq/sta_to_invalid")
+      end
+      if (std_valid_i) begin
+        `NPC_ASSERT(mem[std_st_id_i].valid, "stq/std_to_invalid")
+      end
+      if (sta_early_valid_i) begin
+        `NPC_ASSERT(mem[sta_early_st_id_i].valid, "stq/early_sta_to_invalid")
+      end
+      if (std_early_valid_i) begin
+        `NPC_ASSERT(mem[std_early_st_id_i].valid, "stq/early_std_to_invalid")
       end
 
       if (alloc_fire_i && alloc_ready_o) begin

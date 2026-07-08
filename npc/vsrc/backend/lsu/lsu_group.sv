@@ -487,6 +487,15 @@ module lsu_group #(
   logic                                                        req_p1_need_walk;
   logic                                                        req_p0_plain_load;
   logic                                                        req_p1_plain_load;
+  logic                                                        req_p0_special_load;
+  logic                                                        req_p1_special_load;
+  logic                                                        req_p0_store_only;
+  logic                                                        req_p1_store_only;
+  logic                                                        dual_pair_shape_load_store_w;
+  logic                                                        dual_pair_shape_store_load_w;
+  logic                                                        dual_pair_shape_store_store_w;
+  logic                                                        dual_pair_shape_load_special_w;
+  logic                                                        dual_pair_shape_other_w;
   logic                                                        dual_pick_pair_w;
   logic                                                        dual_pair_shape_ok;
   logic                                                        dual_pair_wanted;
@@ -508,6 +517,11 @@ module lsu_group #(
   logic [63:0]                                                 dbg_dual_shape_block_p1_not_plain_q;
   logic [63:0]                                                 dbg_dual_shape_block_p0_walk_q;
   logic [63:0]                                                 dbg_dual_shape_block_p1_walk_q;
+  logic [63:0]                                                 dbg_dual_pair_load_store_q;
+  logic [63:0]                                                 dbg_dual_pair_store_load_q;
+  logic [63:0]                                                 dbg_dual_pair_store_store_q;
+  logic [63:0]                                                 dbg_dual_pair_load_special_q;
+  logic [63:0]                                                 dbg_dual_pair_other_q;
   logic                [         N_LSU-1:0]                    alloc_grant_p1;
   logic                [LANE_SEL_WIDTH-1:0]                    alloc_lane_idx_p1;
   logic                                                        load_req_ready_p1;
@@ -762,6 +776,19 @@ module lsu_group #(
   assign req_p1_plain_load = uop_i[1].is_load && !uop_i[1].is_store &&
                              (uop_i[1].lsu_op != decode_pkg::LSU_AMO) &&
                              (uop_i[1].lsu_op != decode_pkg::LSU_LR);
+  assign req_p0_special_load = uop_i[0].is_load && !req_p0_plain_load;
+  assign req_p1_special_load = uop_i[1].is_load && !req_p1_plain_load;
+  assign req_p0_store_only = uop_i[0].is_store && !uop_i[0].is_load;
+  assign req_p1_store_only = uop_i[1].is_store && !uop_i[1].is_load;
+  assign dual_pair_shape_load_store_w = req_p0_plain_load && req_p1_store_only;
+  assign dual_pair_shape_store_load_w = req_p0_store_only && req_p1_plain_load;
+  assign dual_pair_shape_store_store_w = req_p0_store_only && req_p1_store_only;
+  assign dual_pair_shape_load_special_w = (req_p0_plain_load && req_p1_special_load) ||
+                                          (req_p1_plain_load && req_p0_special_load);
+  assign dual_pair_shape_other_w = !(dual_pair_wanted || dual_pair_shape_load_store_w ||
+                                     dual_pair_shape_store_load_w ||
+                                     dual_pair_shape_store_store_w ||
+                                     dual_pair_shape_load_special_w);
 
   assign bus1_uop      = uop_i[1];
   assign bus1_rs2_data = rs2_data_i[1];
@@ -1235,8 +1262,26 @@ module lsu_group #(
       dbg_dual_shape_block_p1_not_plain_q <= '0;
       dbg_dual_shape_block_p0_walk_q <= '0;
       dbg_dual_shape_block_p1_walk_q <= '0;
+      dbg_dual_pair_load_store_q <= '0;
+      dbg_dual_pair_store_load_q <= '0;
+      dbg_dual_pair_store_store_q <= '0;
+      dbg_dual_pair_load_special_q <= '0;
+      dbg_dual_pair_other_q <= '0;
     end else begin
-      if (dual_pick_pair_w) dbg_dual_pick_pair_q <= dbg_dual_pick_pair_q + 64'd1;
+      if (dual_pick_pair_w) begin
+        dbg_dual_pick_pair_q <= dbg_dual_pick_pair_q + 64'd1;
+        if (dual_pair_shape_load_store_w) begin
+          dbg_dual_pair_load_store_q <= dbg_dual_pair_load_store_q + 64'd1;
+        end else if (dual_pair_shape_store_load_w) begin
+          dbg_dual_pair_store_load_q <= dbg_dual_pair_store_load_q + 64'd1;
+        end else if (dual_pair_shape_store_store_w) begin
+          dbg_dual_pair_store_store_q <= dbg_dual_pair_store_store_q + 64'd1;
+        end else if (dual_pair_shape_load_special_w) begin
+          dbg_dual_pair_load_special_q <= dbg_dual_pair_load_special_q + 64'd1;
+        end else if (dual_pair_shape_other_w) begin
+          dbg_dual_pair_other_q <= dbg_dual_pair_other_q + 64'd1;
+        end
+      end
       if (dual_pick_pair_w && !dual_pair_shape_ok) begin
         dbg_dual_block_shape_q <= dbg_dual_block_shape_q + 64'd1;
         if (pend_valid_q) begin

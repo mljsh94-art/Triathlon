@@ -323,10 +323,43 @@ module tb_triathlon #(
     output logic [63:0]                        dbg_lsu_dual_shape_block_p1_not_plain_o,
     output logic [63:0]                        dbg_lsu_dual_shape_block_p0_walk_o,
     output logic [63:0]                        dbg_lsu_dual_shape_block_p1_walk_o,
+    output logic [63:0]                        dbg_lsu_dual_pair_load_store_o,
+    output logic [63:0]                        dbg_lsu_dual_pair_store_load_o,
+    output logic [63:0]                        dbg_lsu_dual_pair_store_store_o,
+    output logic [63:0]                        dbg_lsu_dual_pair_load_special_o,
+    output logic [63:0]                        dbg_lsu_dual_pair_other_o,
     output logic [63:0]                        dbg_lsu_rs_load_block_store_o,
     output logic [63:0]                        dbg_lsu_rs_load_block_store_addr_not_ready_o,
     output logic [63:0]                        dbg_lsu_rs_load_block_store_data_not_ready_o,
     output logic [63:0]                        dbg_lsu_rs_load_block_store_not_issued_o,
+    output logic [63:0]                        dbg_lsu_sta_early_fire_o,
+    output logic [63:0]                        dbg_lsu_std_early_fire_o,
+    output logic [63:0]                        dbg_lsu_dispatch_load_o,
+    output logic [63:0]                        dbg_lsu_dispatch_store_o,
+    output logic [63:0]                        dbg_lsu_dispatch_both_o,
+    output logic [63:0]                        dbg_lsu_dispatch_other_o,
+    output logic [63:0]                        dbg_lsu_dispatch_load_block_full_o,
+    output logic [63:0]                        dbg_lsu_dispatch_store_block_full_o,
+    output logic [63:0]                        dbg_lsu_dispatch_both_block_full_o,
+    output logic [63:0]                        dbg_lsu_dispatch_other_block_full_o,
+    output logic [63:0]                        dbg_stq_load_order_query_total_o,
+    output logic [63:0]                        dbg_stq_load_order_query_addr_unknown_o,
+    output logic [63:0]                        dbg_stq_load_order_query_overlap_o,
+    output logic [63:0]                        dbg_stq_load_order_query_data_not_ready_o,
+    output logic [63:0]                        dbg_stq_load_order_query_forward_full_o,
+    output logic [63:0]                        dbg_stq_load_order_query_safe_o,
+    output logic [63:0]                        dbg_lsu_rs_load_order_override_ready_o,
+    output logic [63:0]                        dbg_lsu_rs_load_order_forward_full_ready_o,
+    output logic [63:0]                        dbg_lsu_rs_load_order_forward_full_issue_o,
+    output logic [63:0]                        dbg_lsu_rs_load_order_forward_full_not_issue_o,
+    output logic [63:0]                        dbg_lsu_ff_query_active_o,
+    output logic [63:0]                        dbg_lsu_ff_query_issue_o,
+    output logic [63:0]                        dbg_lsu_ff_query_not_issue_o,
+    output logic [63:0]                        dbg_lsu_ff_not_issue_base_block_o,
+    output logic [63:0]                        dbg_lsu_ff_not_issue_p1_gated_o,
+    output logic [63:0]                        dbg_lsu_ff_not_issue_low_addr_o,
+    output logic [63:0]                        dbg_lsu_ff_not_issue_not_selected_o,
+    output logic [63:0]                        dbg_lsu_ff_not_issue_selected_other_o,
     // Debug (D$ MSHR)
     output logic [7:0]                         dbg_dc_mshr_count_o,
     output logic                               dbg_dc_mshr_full_o,
@@ -429,6 +462,15 @@ module tb_triathlon #(
     output logic [FTQ_DEPTH-1:0][3:0]          dbg_bpu_pred_snap_cond_lane_provider_o,
     output logic [FTQ_DEPTH-1:0][1:0]          dbg_bpu_pred_snap_cond_lane_sc_override_o,
     output logic [FTQ_DEPTH-1:0][1:0]          dbg_bpu_pred_snap_cond_lane_loop_override_o,
+    output logic [FTQ_DEPTH-1:0][1:0]          dbg_bpu_pred_snap_cond_lane_tage_hit_o,
+    output logic [FTQ_DEPTH-1:0][1:0]          dbg_bpu_pred_snap_cond_lane_tage_strong_o,
+    output logic [FTQ_DEPTH-1:0][3:0]          dbg_bpu_pred_snap_cond_lane_tage_provider_o,
+    output logic [FTQ_DEPTH-1:0][5:0]          dbg_bpu_pred_snap_cond_lane_tage_conf_o,
+    output logic [FTQ_DEPTH-1:0][1:0]          dbg_bpu_pred_snap_cond_lane_sc_use_o,
+    output logic [FTQ_DEPTH-1:0][1:0]          dbg_bpu_pred_snap_cond_lane_loop_hit_o,
+    output logic [FTQ_DEPTH-1:0][1:0]          dbg_bpu_pred_snap_cond_lane_loop_conf_o,
+    output logic [FTQ_DEPTH-1:0][PRED_GHR_W-1:0] dbg_bpu_pred_snap_cond_lane0_ghr_o,
+    output logic [FTQ_DEPTH-1:0][PRED_GHR_W-1:0] dbg_bpu_pred_snap_cond_lane1_ghr_o,
     output logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] dbg_bpu_pred_snap_cond_lane0_pc_o,
     output logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] dbg_bpu_pred_snap_cond_lane1_pc_o,
     output logic [FTQ_DEPTH-1:0]               dbg_bpu_pred_snap_pick_cond_o,
@@ -747,26 +789,35 @@ module tb_triathlon #(
   assign dbg_lsu_sq_alloc_ready_o = dut.u_backend.u_lsu_group.sq_alloc_ready;
   assign dbg_lsu_ldq_count_o = dut.u_backend.u_lsu_group.dbg_ldq_count_o;
   assign dbg_lsu_sq_count_o = dut.u_backend.u_lsu_group.dbg_sq_count_o;
-  assign dbg_lsu_rs_busy_o      = dut.u_backend.u_issue_lsu.u_rs.busy;
-  assign dbg_lsu_rs_ready_o     = dut.u_backend.u_issue_lsu.u_rs.ready_mask;
+  assign dbg_lsu_rs_busy_o = dut.u_backend.u_issue_lsu.u_rs.busy |
+                             dut.u_backend.u_issue_lsu.u_load_rs.busy;
+  assign dbg_lsu_rs_ready_o = dut.u_backend.u_issue_lsu.u_rs.ready_mask |
+                              dut.u_backend.u_issue_lsu.u_load_rs.ready_mask;
   assign dbg_lsu_rs_load_block_store_o =
-      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_block_store_total_q;
+      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_block_store_total_q +
+      dut.u_backend.u_issue_lsu.u_load_rs.dbg_rs_load_block_store_total_q;
   assign dbg_lsu_rs_load_block_store_addr_not_ready_o =
-      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_block_store_addr_not_ready_q;
+      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_block_store_addr_not_ready_q +
+      dut.u_backend.u_issue_lsu.u_load_rs.dbg_rs_load_block_store_addr_not_ready_q;
   assign dbg_lsu_rs_load_block_store_data_not_ready_o =
-      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_block_store_data_not_ready_q;
+      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_block_store_data_not_ready_q +
+      dut.u_backend.u_issue_lsu.u_load_rs.dbg_rs_load_block_store_data_not_ready_q;
   assign dbg_lsu_rs_load_block_store_not_issued_o =
-      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_block_store_not_issued_q;
+      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_block_store_not_issued_q +
+      dut.u_backend.u_issue_lsu.u_load_rs.dbg_rs_load_block_store_not_issued_q;
 
   logic [Cfg.RS_DEPTH-1:0] lsu_rs_head_match;
   logic lsu_rs_head_found;
+  logic lsu_rs_head_from_load_rs;
   logic [$clog2(Cfg.RS_DEPTH)-1:0] lsu_rs_head_idx;
 
   always_comb begin
     lsu_rs_head_match = '0;
     for (int i = 0; i < Cfg.RS_DEPTH; i++) begin
-      if (dut.u_backend.u_issue_lsu.u_rs.busy[i] &&
-          (dut.u_backend.u_issue_lsu.u_rs.dst_arr[i] == dut.u_backend.rob_head_ptr)) begin
+      if ((dut.u_backend.u_issue_lsu.u_rs.busy[i] &&
+           (dut.u_backend.u_issue_lsu.u_rs.dst_arr[i] == dut.u_backend.rob_head_ptr)) ||
+          (dut.u_backend.u_issue_lsu.u_load_rs.busy[i] &&
+           (dut.u_backend.u_issue_lsu.u_load_rs.dst_arr[i] == dut.u_backend.rob_head_ptr))) begin
         lsu_rs_head_match[i] = 1'b1;
       end
     end
@@ -774,10 +825,18 @@ module tb_triathlon #(
 
   always_comb begin
     lsu_rs_head_found = 1'b0;
+    lsu_rs_head_from_load_rs = 1'b0;
     lsu_rs_head_idx = '0;
     for (int i = 0; i < Cfg.RS_DEPTH; i++) begin
-      if (!lsu_rs_head_found && lsu_rs_head_match[i]) begin
+      if (!lsu_rs_head_found && dut.u_backend.u_issue_lsu.u_load_rs.busy[i] &&
+          (dut.u_backend.u_issue_lsu.u_load_rs.dst_arr[i] == dut.u_backend.rob_head_ptr)) begin
         lsu_rs_head_found = 1'b1;
+        lsu_rs_head_from_load_rs = 1'b1;
+        lsu_rs_head_idx = i[$clog2(Cfg.RS_DEPTH)-1:0];
+      end else if (!lsu_rs_head_found && dut.u_backend.u_issue_lsu.u_rs.busy[i] &&
+                   (dut.u_backend.u_issue_lsu.u_rs.dst_arr[i] == dut.u_backend.rob_head_ptr)) begin
+        lsu_rs_head_found = 1'b1;
+        lsu_rs_head_from_load_rs = 1'b0;
         lsu_rs_head_idx = i[$clog2(Cfg.RS_DEPTH)-1:0];
       end
     end
@@ -786,36 +845,43 @@ module tb_triathlon #(
   assign dbg_lsu_rs_head_match_o = lsu_rs_head_match;
   assign dbg_lsu_rs_head_valid_o = lsu_rs_head_found;
   assign dbg_lsu_rs_head_idx_o   = lsu_rs_head_idx;
-  assign dbg_lsu_rs_head_dst_o   = lsu_rs_head_found
-                                  ? dut.u_backend.u_issue_lsu.u_rs.dst_arr[lsu_rs_head_idx]
-                                  : '0;
-  assign dbg_lsu_rs_head_r1_ready_o = lsu_rs_head_found
-                                     ? dut.u_backend.u_issue_lsu.u_rs.r1_arr[lsu_rs_head_idx]
-                                     : 1'b0;
-  assign dbg_lsu_rs_head_r2_ready_o = lsu_rs_head_found
-                                     ? dut.u_backend.u_issue_lsu.u_rs.r2_arr[lsu_rs_head_idx]
-                                     : 1'b0;
-  assign dbg_lsu_rs_head_q1_o = lsu_rs_head_found
-                              ? dut.u_backend.u_issue_lsu.u_rs.q1_arr[lsu_rs_head_idx]
-                              : '0;
-  assign dbg_lsu_rs_head_q2_o = lsu_rs_head_found
-                              ? dut.u_backend.u_issue_lsu.u_rs.q2_arr[lsu_rs_head_idx]
-                              : '0;
-  assign dbg_lsu_rs_head_has_rs1_o = lsu_rs_head_found
-                                   ? dut.u_backend.u_issue_lsu.u_rs.op_arr[lsu_rs_head_idx].has_rs1
-                                   : 1'b0;
-  assign dbg_lsu_rs_head_has_rs2_o = lsu_rs_head_found
-                                   ? dut.u_backend.u_issue_lsu.u_rs.op_arr[lsu_rs_head_idx].has_rs2
-                                   : 1'b0;
-  assign dbg_lsu_rs_head_is_store_o = lsu_rs_head_found
-                                    ? dut.u_backend.u_issue_lsu.u_rs.op_arr[lsu_rs_head_idx].is_store
-                                    : 1'b0;
-  assign dbg_lsu_rs_head_is_load_o = lsu_rs_head_found
-                                   ? dut.u_backend.u_issue_lsu.u_rs.op_arr[lsu_rs_head_idx].is_load
-                                   : 1'b0;
-  assign dbg_lsu_rs_head_st_id_o = lsu_rs_head_found
-                                 ? dut.u_backend.u_issue_lsu.u_rs.st_arr[lsu_rs_head_idx]
-                                 : '0;
+  assign dbg_lsu_rs_head_dst_o   = !lsu_rs_head_found ? '0 :
+                                  (lsu_rs_head_from_load_rs
+                                   ? dut.u_backend.u_issue_lsu.u_load_rs.dst_arr[lsu_rs_head_idx]
+                                   : dut.u_backend.u_issue_lsu.u_rs.dst_arr[lsu_rs_head_idx]);
+  assign dbg_lsu_rs_head_r1_ready_o = lsu_rs_head_found &&
+                                     (lsu_rs_head_from_load_rs
+                                      ? dut.u_backend.u_issue_lsu.u_load_rs.r1_arr[lsu_rs_head_idx]
+                                      : dut.u_backend.u_issue_lsu.u_rs.r1_arr[lsu_rs_head_idx]);
+  assign dbg_lsu_rs_head_r2_ready_o = lsu_rs_head_found &&
+                                     (lsu_rs_head_from_load_rs
+                                      ? dut.u_backend.u_issue_lsu.u_load_rs.r2_arr[lsu_rs_head_idx]
+                                      : dut.u_backend.u_issue_lsu.u_rs.r2_arr[lsu_rs_head_idx]);
+  assign dbg_lsu_rs_head_q1_o = !lsu_rs_head_found ? '0 :
+                               (lsu_rs_head_from_load_rs
+                                ? dut.u_backend.u_issue_lsu.u_load_rs.q1_arr[lsu_rs_head_idx]
+                                : dut.u_backend.u_issue_lsu.u_rs.q1_arr[lsu_rs_head_idx]);
+  assign dbg_lsu_rs_head_q2_o = !lsu_rs_head_found ? '0 :
+                               (lsu_rs_head_from_load_rs
+                                ? dut.u_backend.u_issue_lsu.u_load_rs.q2_arr[lsu_rs_head_idx]
+                                : dut.u_backend.u_issue_lsu.u_rs.q2_arr[lsu_rs_head_idx]);
+  assign dbg_lsu_rs_head_has_rs1_o = lsu_rs_head_found &&
+                                    (lsu_rs_head_from_load_rs
+                                     ? dut.u_backend.u_issue_lsu.u_load_rs.op_arr[lsu_rs_head_idx].has_rs1
+                                     : dut.u_backend.u_issue_lsu.u_rs.op_arr[lsu_rs_head_idx].has_rs1);
+  assign dbg_lsu_rs_head_has_rs2_o = lsu_rs_head_found &&
+                                    (lsu_rs_head_from_load_rs
+                                     ? dut.u_backend.u_issue_lsu.u_load_rs.op_arr[lsu_rs_head_idx].has_rs2
+                                     : dut.u_backend.u_issue_lsu.u_rs.op_arr[lsu_rs_head_idx].has_rs2);
+  assign dbg_lsu_rs_head_is_store_o = lsu_rs_head_found && !lsu_rs_head_from_load_rs &&
+                                     dut.u_backend.u_issue_lsu.u_rs.op_arr[lsu_rs_head_idx].is_store;
+  assign dbg_lsu_rs_head_is_load_o = lsu_rs_head_found &&
+                                    (lsu_rs_head_from_load_rs ||
+                                     dut.u_backend.u_issue_lsu.u_rs.op_arr[lsu_rs_head_idx].is_load);
+  assign dbg_lsu_rs_head_st_id_o = !lsu_rs_head_found ? '0 :
+                                  (lsu_rs_head_from_load_rs
+                                   ? dut.u_backend.u_issue_lsu.u_load_rs.st_arr[lsu_rs_head_idx]
+                                   : dut.u_backend.u_issue_lsu.u_rs.st_arr[lsu_rs_head_idx]);
 
   logic lsu_head_block_store_w;
   logic [$clog2(Cfg.RS_DEPTH+1)-1:0] lsu_rs_older_store_count_w;
@@ -825,12 +891,13 @@ module tb_triathlon #(
     logic [ROB_IDX_W-1:0] load_dst;
     logic [ROB_IDX_W-1:0] load_age;
 
+    head_ptr = dut.u_backend.rob_head_ptr;
+    load_dst = '0;
+    load_age = '0;
     lsu_head_block_store_w = 1'b0;
     lsu_rs_older_store_count_w = '0;
-    if (lsu_rs_head_found &&
-        dut.u_backend.u_issue_lsu.u_rs.op_arr[lsu_rs_head_idx].is_load) begin
-      head_ptr = dut.u_backend.rob_head_ptr;
-      load_dst = dut.u_backend.u_issue_lsu.u_rs.dst_arr[lsu_rs_head_idx];
+    if (lsu_rs_head_found && dbg_lsu_rs_head_is_load_o) begin
+      load_dst = dbg_lsu_rs_head_dst_o;
       load_age = load_dst - head_ptr;
       for (int n = 0; n < Cfg.RS_DEPTH; n++) begin
         if (dut.u_backend.u_issue_lsu.u_rs.busy[n] &&
@@ -891,6 +958,57 @@ module tb_triathlon #(
   assign dbg_lsu_dual_shape_block_p1_not_plain_o = dut.u_backend.u_lsu_group.dbg_dual_shape_block_p1_not_plain_q;
   assign dbg_lsu_dual_shape_block_p0_walk_o = dut.u_backend.u_lsu_group.dbg_dual_shape_block_p0_walk_q;
   assign dbg_lsu_dual_shape_block_p1_walk_o = dut.u_backend.u_lsu_group.dbg_dual_shape_block_p1_walk_q;
+  assign dbg_lsu_dual_pair_load_store_o = dut.u_backend.u_lsu_group.dbg_dual_pair_load_store_q;
+  assign dbg_lsu_dual_pair_store_load_o = dut.u_backend.u_lsu_group.dbg_dual_pair_store_load_q;
+  assign dbg_lsu_dual_pair_store_store_o = dut.u_backend.u_lsu_group.dbg_dual_pair_store_store_q;
+  assign dbg_lsu_dual_pair_load_special_o = dut.u_backend.u_lsu_group.dbg_dual_pair_load_special_q;
+  assign dbg_lsu_dual_pair_other_o = dut.u_backend.u_lsu_group.dbg_dual_pair_other_q;
+  assign dbg_lsu_sta_early_fire_o = dut.u_backend.u_issue_lsu.dbg_sta_early_fire_q;
+  assign dbg_lsu_std_early_fire_o = dut.u_backend.u_issue_lsu.dbg_std_early_fire_q;
+  assign dbg_lsu_dispatch_load_o = dut.u_backend.u_issue_lsu.dbg_dispatch_load_q;
+  assign dbg_lsu_dispatch_store_o = dut.u_backend.u_issue_lsu.dbg_dispatch_store_q;
+  assign dbg_lsu_dispatch_both_o = dut.u_backend.u_issue_lsu.dbg_dispatch_both_q;
+  assign dbg_lsu_dispatch_other_o = dut.u_backend.u_issue_lsu.dbg_dispatch_other_q;
+  assign dbg_lsu_dispatch_load_block_full_o =
+      dut.u_backend.u_issue_lsu.dbg_dispatch_load_block_full_q;
+  assign dbg_lsu_dispatch_store_block_full_o =
+      dut.u_backend.u_issue_lsu.dbg_dispatch_store_block_full_q;
+  assign dbg_lsu_dispatch_both_block_full_o =
+      dut.u_backend.u_issue_lsu.dbg_dispatch_both_block_full_q;
+  assign dbg_lsu_dispatch_other_block_full_o =
+      dut.u_backend.u_issue_lsu.dbg_dispatch_other_block_full_q;
+  assign dbg_stq_load_order_query_total_o = dut.u_backend.u_stq.dbg_load_order_query_total_q;
+  assign dbg_stq_load_order_query_addr_unknown_o = dut.u_backend.u_stq.dbg_load_order_query_addr_unknown_q;
+  assign dbg_stq_load_order_query_overlap_o = dut.u_backend.u_stq.dbg_load_order_query_overlap_q;
+  assign dbg_stq_load_order_query_data_not_ready_o = dut.u_backend.u_stq.dbg_load_order_query_data_not_ready_q;
+  assign dbg_stq_load_order_query_forward_full_o = dut.u_backend.u_stq.dbg_load_order_query_forward_full_q;
+  assign dbg_stq_load_order_query_safe_o = dut.u_backend.u_stq.dbg_load_order_query_safe_q;
+  assign dbg_lsu_rs_load_order_override_ready_o =
+      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_order_override_ready_q +
+      dut.u_backend.u_issue_lsu.u_load_rs.dbg_rs_load_order_override_ready_q;
+  assign dbg_lsu_rs_load_order_forward_full_ready_o =
+      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_order_forward_full_ready_q +
+      dut.u_backend.u_issue_lsu.u_load_rs.dbg_rs_load_order_forward_full_ready_q;
+  assign dbg_lsu_rs_load_order_forward_full_issue_o =
+      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_order_forward_full_issue_q +
+      dut.u_backend.u_issue_lsu.u_load_rs.dbg_rs_load_order_forward_full_issue_q;
+  assign dbg_lsu_rs_load_order_forward_full_not_issue_o =
+      dut.u_backend.u_issue_lsu.u_rs.dbg_rs_load_order_forward_full_not_issue_q +
+      dut.u_backend.u_issue_lsu.u_load_rs.dbg_rs_load_order_forward_full_not_issue_q;
+  assign dbg_lsu_ff_query_active_o = dut.u_backend.u_issue_lsu.dbg_ff_query_active_q;
+  assign dbg_lsu_ff_query_issue_o = dut.u_backend.u_issue_lsu.dbg_ff_query_issue_q;
+  assign dbg_lsu_ff_query_not_issue_o =
+      dut.u_backend.u_issue_lsu.dbg_ff_query_not_issue_q;
+  assign dbg_lsu_ff_not_issue_base_block_o =
+      dut.u_backend.u_issue_lsu.dbg_ff_not_issue_base_block_q;
+  assign dbg_lsu_ff_not_issue_p1_gated_o =
+      dut.u_backend.u_issue_lsu.dbg_ff_not_issue_p1_gated_q;
+  assign dbg_lsu_ff_not_issue_low_addr_o =
+      dut.u_backend.u_issue_lsu.dbg_ff_not_issue_low_addr_q;
+  assign dbg_lsu_ff_not_issue_not_selected_o =
+      dut.u_backend.u_issue_lsu.dbg_ff_not_issue_not_selected_q;
+  assign dbg_lsu_ff_not_issue_selected_other_o =
+      dut.u_backend.u_issue_lsu.dbg_ff_not_issue_selected_other_q;
   always_comb begin
     commit_store_valid_o = '0;
     commit_store_addr_o  = '0;
@@ -1048,6 +1166,24 @@ module tb_triathlon #(
       dut.u_frontend.i_bpu.pred_snap_cond_lane_sc_override_q;
   assign dbg_bpu_pred_snap_cond_lane_loop_override_o =
       dut.u_frontend.i_bpu.pred_snap_cond_lane_loop_override_q;
+  assign dbg_bpu_pred_snap_cond_lane_tage_hit_o =
+      dut.u_frontend.i_bpu.pred_snap_cond_lane_tage_hit_q;
+  assign dbg_bpu_pred_snap_cond_lane_tage_strong_o =
+      dut.u_frontend.i_bpu.pred_snap_cond_lane_tage_strong_q;
+  assign dbg_bpu_pred_snap_cond_lane_tage_provider_o =
+      dut.u_frontend.i_bpu.pred_snap_cond_lane_tage_provider_q;
+  assign dbg_bpu_pred_snap_cond_lane_tage_conf_o =
+      dut.u_frontend.i_bpu.pred_snap_cond_lane_tage_conf_q;
+  assign dbg_bpu_pred_snap_cond_lane_sc_use_o =
+      dut.u_frontend.i_bpu.pred_snap_cond_lane_sc_use_q;
+  assign dbg_bpu_pred_snap_cond_lane_loop_hit_o =
+      dut.u_frontend.i_bpu.pred_snap_cond_lane_loop_hit_q;
+  assign dbg_bpu_pred_snap_cond_lane_loop_conf_o =
+      dut.u_frontend.i_bpu.pred_snap_cond_lane_loop_conf_q;
+  assign dbg_bpu_pred_snap_cond_lane0_ghr_o =
+      dut.u_frontend.i_bpu.pred_snap_cond_lane0_ghr_q;
+  assign dbg_bpu_pred_snap_cond_lane1_ghr_o =
+      dut.u_frontend.i_bpu.pred_snap_cond_lane1_ghr_q;
   assign dbg_bpu_pred_snap_cond_lane0_pc_o = dut.u_frontend.i_bpu.pred_snap_cond_lane0_pc_q;
   assign dbg_bpu_pred_snap_cond_lane1_pc_o = dut.u_frontend.i_bpu.pred_snap_cond_lane1_pc_q;
   assign dbg_bpu_pred_snap_pick_cond_o = dut.u_frontend.i_bpu.pred_snap_pick_cond_q;

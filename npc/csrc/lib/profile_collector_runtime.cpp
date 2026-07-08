@@ -53,6 +53,14 @@ struct FtbPredSnap {
   uint32_t cond_lane_provider[2] = {};
   bool cond_lane_sc_override[2] = {};
   bool cond_lane_loop_override[2] = {};
+  bool cond_lane_tage_hit[2] = {};
+  bool cond_lane_tage_strong[2] = {};
+  uint32_t cond_lane_tage_provider[2] = {};
+  uint32_t cond_lane_tage_conf[2] = {};
+  bool cond_lane_sc_use[2] = {};
+  bool cond_lane_loop_hit[2] = {};
+  bool cond_lane_loop_conf[2] = {};
+  uint32_t cond_lane_ghr[2] = {};
   uint32_t cond_lane_pc[2] = {};
   bool pick_cond = false;
   bool pick_jump = false;
@@ -65,6 +73,14 @@ struct FtbPredSnap {
 uint64_t cond_provider_lane_key(uint32_t pc, uint32_t provider, uint32_t lane) {
   return (static_cast<uint64_t>(pc) << 4) | ((static_cast<uint64_t>(provider) & 3ull) << 2) |
          (static_cast<uint64_t>(lane) & 3ull);
+}
+
+uint64_t cond_pc_lane_key(uint32_t pc, uint32_t lane) {
+  return (static_cast<uint64_t>(pc) << 2) | (static_cast<uint64_t>(lane) & 3ull);
+}
+
+uint64_t cond_ghr_key(uint32_t pc, uint32_t ghr) {
+  return (static_cast<uint64_t>(pc) << 32) | static_cast<uint64_t>(ghr);
 }
 
 const char *control_kind_name(bool is_jump, bool is_rvc) {
@@ -159,12 +175,33 @@ FtbPredSnap read_ftb_pred_snap(const Vtb_triathlon *top, uint32_t ftq_id, uint32
       read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_sc_override_o, ftq_id, 2);
   const uint32_t cond_lane_loop_override =
       read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_loop_override_o, ftq_id, 2);
+  const uint32_t cond_lane_tage_hit =
+      read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_tage_hit_o, ftq_id, 2);
+  const uint32_t cond_lane_tage_strong =
+      read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_tage_strong_o, ftq_id, 2);
+  const uint32_t cond_lane_tage_provider =
+      read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_tage_provider_o, ftq_id, 4);
+  const uint32_t cond_lane_tage_conf =
+      read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_tage_conf_o, ftq_id, 6);
+  const uint32_t cond_lane_sc_use =
+      read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_sc_use_o, ftq_id, 2);
+  const uint32_t cond_lane_loop_hit =
+      read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_loop_hit_o, ftq_id, 2);
+  const uint32_t cond_lane_loop_conf =
+      read_packed_field64(top->dbg_bpu_pred_snap_cond_lane_loop_conf_o, ftq_id, 2);
   for (uint32_t lane = 0; lane < 2; lane++) {
     snap.cond_lane_valid[lane] = ((cond_lane_valid >> lane) & 1u) != 0u;
     snap.cond_lane_taken[lane] = ((cond_lane_taken >> lane) & 1u) != 0u;
     snap.cond_lane_provider[lane] = (cond_lane_provider >> (lane * 2u)) & 3u;
     snap.cond_lane_sc_override[lane] = ((cond_lane_sc_override >> lane) & 1u) != 0u;
     snap.cond_lane_loop_override[lane] = ((cond_lane_loop_override >> lane) & 1u) != 0u;
+    snap.cond_lane_tage_hit[lane] = ((cond_lane_tage_hit >> lane) & 1u) != 0u;
+    snap.cond_lane_tage_strong[lane] = ((cond_lane_tage_strong >> lane) & 1u) != 0u;
+    snap.cond_lane_tage_provider[lane] = (cond_lane_tage_provider >> (lane * 2u)) & 3u;
+    snap.cond_lane_tage_conf[lane] = (cond_lane_tage_conf >> (lane * 3u)) & 7u;
+    snap.cond_lane_sc_use[lane] = ((cond_lane_sc_use >> lane) & 1u) != 0u;
+    snap.cond_lane_loop_hit[lane] = ((cond_lane_loop_hit >> lane) & 1u) != 0u;
+    snap.cond_lane_loop_conf[lane] = ((cond_lane_loop_conf >> lane) & 1u) != 0u;
   }
   snap.pick_cond = read_packed_bit(top->dbg_bpu_pred_snap_pick_cond_o, ftq_id);
   snap.pick_jump = read_packed_bit(top->dbg_bpu_pred_snap_pick_jump_o, ftq_id);
@@ -175,6 +212,8 @@ FtbPredSnap read_ftb_pred_snap(const Vtb_triathlon *top, uint32_t ftq_id, uint32
   snap.jump_branch_pc = top->dbg_bpu_pred_snap_jump_branch_pc_o[ftq_id];
   snap.cond_lane_pc[0] = top->dbg_bpu_pred_snap_cond_lane0_pc_o[ftq_id];
   snap.cond_lane_pc[1] = top->dbg_bpu_pred_snap_cond_lane1_pc_o[ftq_id];
+  snap.cond_lane_ghr[0] = top->dbg_bpu_pred_snap_cond_lane0_ghr_o[ftq_id];
+  snap.cond_lane_ghr[1] = top->dbg_bpu_pred_snap_cond_lane1_ghr_o[ftq_id];
   return snap;
 }
 
@@ -321,6 +360,28 @@ void ProfileCollector::observe_cycle(const Vtb_triathlon *top) {
             cond_provider_lane_override_hist_[key]++;
             if (pred_correct) cond_provider_lane_override_correct_hist_[key]++;
           }
+
+          const uint64_t pc_lane_key = cond_pc_lane_key(pc, lane);
+          CondPcDetail &detail = cond_pc_detail_hist_[pc_lane_key];
+          detail.selected++;
+          if (pred_correct) detail.correct++;
+          else detail.miss++;
+          if (snap.cond_lane_taken[lane]) detail.pred_taken++;
+          if (taken) detail.actual_taken++;
+          if (snap.cond_lane_tage_hit[lane]) detail.tage_hit++;
+          if (snap.cond_lane_tage_strong[lane]) detail.tage_strong++;
+          if (snap.cond_lane_sc_use[lane]) detail.sc_use++;
+          if (snap.cond_lane_sc_override[lane]) detail.sc_override++;
+          if (snap.cond_lane_loop_hit[lane]) detail.loop_hit++;
+          if (snap.cond_lane_loop_conf[lane]) detail.loop_confident++;
+          if (snap.cond_lane_loop_override[lane]) detail.loop_override++;
+          detail.provider_selected[provider & 3u]++;
+          detail.tage_provider[snap.cond_lane_tage_provider[lane] & 3u]++;
+          detail.tage_conf[snap.cond_lane_tage_conf[lane] & 7u]++;
+
+          const uint64_t ghr_key = cond_ghr_key(pc, snap.cond_lane_ghr[lane]);
+          cond_ghr_selected_hist_[ghr_key]++;
+          if (!pred_correct) cond_ghr_miss_hist_[ghr_key]++;
         }
       }
       if (!selected_update) {

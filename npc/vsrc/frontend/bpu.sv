@@ -160,6 +160,15 @@ module bpu #(
   logic [FTQ_DEPTH-1:0][3:0] pred_snap_cond_lane_provider_q;
   logic [FTQ_DEPTH-1:0][1:0] pred_snap_cond_lane_sc_override_q;
   logic [FTQ_DEPTH-1:0][1:0] pred_snap_cond_lane_loop_override_q;
+  logic [FTQ_DEPTH-1:0][1:0] pred_snap_cond_lane_tage_hit_q;
+  logic [FTQ_DEPTH-1:0][1:0] pred_snap_cond_lane_tage_strong_q;
+  logic [FTQ_DEPTH-1:0][3:0] pred_snap_cond_lane_tage_provider_q;
+  logic [FTQ_DEPTH-1:0][5:0] pred_snap_cond_lane_tage_conf_q;
+  logic [FTQ_DEPTH-1:0][1:0] pred_snap_cond_lane_sc_use_q;
+  logic [FTQ_DEPTH-1:0][1:0] pred_snap_cond_lane_loop_hit_q;
+  logic [FTQ_DEPTH-1:0][1:0] pred_snap_cond_lane_loop_conf_q;
+  logic [FTQ_DEPTH-1:0][GHR_W-1:0] pred_snap_cond_lane0_ghr_q;
+  logic [FTQ_DEPTH-1:0][GHR_W-1:0] pred_snap_cond_lane1_ghr_q;
   logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] pred_snap_cond_lane0_pc_q;
   logic [FTQ_DEPTH-1:0][Cfg.PLEN-1:0] pred_snap_cond_lane1_pc_q;
   logic [FTQ_DEPTH-1:0] pred_snap_pick_valid_q;
@@ -1027,6 +1036,15 @@ module bpu #(
       pred_snap_cond_lane_provider_q <= '0;
       pred_snap_cond_lane_sc_override_q <= '0;
       pred_snap_cond_lane_loop_override_q <= '0;
+      pred_snap_cond_lane_tage_hit_q <= '0;
+      pred_snap_cond_lane_tage_strong_q <= '0;
+      pred_snap_cond_lane_tage_provider_q <= '0;
+      pred_snap_cond_lane_tage_conf_q <= '0;
+      pred_snap_cond_lane_sc_use_q <= '0;
+      pred_snap_cond_lane_loop_hit_q <= '0;
+      pred_snap_cond_lane_loop_conf_q <= '0;
+      pred_snap_cond_lane0_ghr_q <= '0;
+      pred_snap_cond_lane1_ghr_q <= '0;
       pred_snap_cond_lane0_pc_q <= '0;
       pred_snap_cond_lane1_pc_q <= '0;
       pred_snap_pick_valid_q <= '0;
@@ -1106,6 +1124,19 @@ module bpu #(
           pred_snap_cond_lane_sc_override_q[ftq_enq_id_i] <= dbg_snap_cond_lane_sc_override_w;
           pred_snap_cond_lane_loop_override_q[ftq_enq_id_i] <=
               dbg_snap_cond_lane_loop_override_w;
+          pred_snap_cond_lane_tage_hit_q[ftq_enq_id_i] <= tage_hit_lane_w;
+          pred_snap_cond_lane_tage_strong_q[ftq_enq_id_i] <= tage_strong_lane_w;
+          pred_snap_cond_lane_tage_provider_q[ftq_enq_id_i] <= {
+            tage_provider_lane_w[1], tage_provider_lane_w[0]
+          };
+          pred_snap_cond_lane_tage_conf_q[ftq_enq_id_i] <= {
+            tage_conf_lane_w[1], tage_conf_lane_w[0]
+          };
+          pred_snap_cond_lane_sc_use_q[ftq_enq_id_i] <= sc_use_lane_w;
+          pred_snap_cond_lane_loop_hit_q[ftq_enq_id_i] <= loop_hit_lane_w;
+          pred_snap_cond_lane_loop_conf_q[ftq_enq_id_i] <= loop_confident_lane_w;
+          pred_snap_cond_lane0_ghr_q[ftq_enq_id_i] <= cond_lane_ghr_w[0];
+          pred_snap_cond_lane1_ghr_q[ftq_enq_id_i] <= cond_lane_ghr_w[1];
           pred_snap_cond_lane0_pc_q[ftq_enq_id_i] <= cond_cand_pc_w[0];
           pred_snap_cond_lane1_pc_q[ftq_enq_id_i] <= cond_cand_pc_w[1];
           pred_snap_pick_valid_q[ftq_enq_id_i] <= ftb_pick_valid_w;

@@ -126,6 +126,95 @@ void append_cond_provider_lane_top(
   os << "]";
 }
 
+
+void append_u64_array(std::ostringstream &os, const uint64_t *items, size_t count) {
+  os << "[";
+  for (size_t i = 0; i < count; i++) {
+    if (i > 0) os << ",";
+    os << items[i];
+  }
+  os << "]";
+}
+
+void append_cond_pc_detail_top(
+    std::ostringstream &os,
+    const std::unordered_map<uint64_t, CondPcDetail> &detail) {
+  std::vector<std::pair<uint64_t, CondPcDetail>> items(detail.begin(), detail.end());
+  std::sort(items.begin(), items.end(), [](const auto &a, const auto &b) {
+    if (a.second.miss != b.second.miss) return a.second.miss > b.second.miss;
+    if (a.second.selected != b.second.selected) return a.second.selected > b.second.selected;
+    return a.first < b.first;
+  });
+  os << "[";
+  const size_t limit = std::min<size_t>(64, items.size());
+  for (size_t i = 0; i < limit; i++) {
+    const uint64_t key = items[i].first;
+    const CondPcDetail &d = items[i].second;
+    const uint32_t pc = static_cast<uint32_t>(key >> 2);
+    const uint32_t lane = static_cast<uint32_t>(key & 3ull);
+    if (i > 0) os << ",";
+    os << "{\"pc\":\"0x" << std::hex << pc << std::dec << "\""
+       << ",\"lane\":" << lane
+       << ",\"selected\":" << d.selected
+       << ",\"correct\":" << d.correct
+       << ",\"miss\":" << d.miss
+       << ",\"accuracy\":" << safe_div(static_cast<double>(d.correct),
+                                            static_cast<double>(d.selected))
+       << ",\"pred_taken\":" << d.pred_taken
+       << ",\"actual_taken\":" << d.actual_taken
+       << ",\"tage_hit\":" << d.tage_hit
+       << ",\"tage_hit_rate\":" << safe_div(static_cast<double>(d.tage_hit),
+                                                static_cast<double>(d.selected))
+       << ",\"tage_strong\":" << d.tage_strong
+       << ",\"tage_strong_rate\":" << safe_div(static_cast<double>(d.tage_strong),
+                                                   static_cast<double>(d.selected))
+       << ",\"sc_use\":" << d.sc_use
+       << ",\"sc_override\":" << d.sc_override
+       << ",\"loop_hit\":" << d.loop_hit
+       << ",\"loop_confident\":" << d.loop_confident
+       << ",\"loop_override\":" << d.loop_override
+       << ",\"provider_selected\":";
+    append_u64_array(os, d.provider_selected.data(), d.provider_selected.size());
+    os << ",\"tage_provider\":";
+    append_u64_array(os, d.tage_provider.data(), d.tage_provider.size());
+    os << ",\"tage_conf\":";
+    append_u64_array(os, d.tage_conf.data(), d.tage_conf.size());
+    os << "}";
+  }
+  os << "]";
+}
+
+void append_cond_ghr_top(std::ostringstream &os,
+                         const std::unordered_map<uint64_t, uint64_t> &selected,
+                         const std::unordered_map<uint64_t, uint64_t> &miss) {
+  std::vector<std::pair<uint64_t, uint64_t>> items(miss.begin(), miss.end());
+  std::sort(items.begin(), items.end(), [&](const auto &a, const auto &b) {
+    if (a.second != b.second) return a.second > b.second;
+    const uint64_t sa = lookup_u64(selected, a.first);
+    const uint64_t sb = lookup_u64(selected, b.first);
+    if (sa != sb) return sa > sb;
+    return a.first < b.first;
+  });
+  os << "[";
+  const size_t limit = std::min<size_t>(64, items.size());
+  for (size_t i = 0; i < limit; i++) {
+    const uint64_t key = items[i].first;
+    const uint32_t pc = static_cast<uint32_t>(key >> 32);
+    const uint32_t ghr = static_cast<uint32_t>(key & 0xFFFFFFFFull);
+    const uint64_t miss_v = items[i].second;
+    const uint64_t selected_v = lookup_u64(selected, key);
+    if (i > 0) os << ",";
+    os << "{\"pc\":\"0x" << std::hex << pc
+       << "\",\"ghr\":\"0x" << ghr << std::dec << "\""
+       << ",\"selected\":" << selected_v
+       << ",\"miss\":" << miss_v
+       << ",\"miss_rate\":" << safe_div(static_cast<double>(miss_v),
+                                            static_cast<double>(selected_v))
+       << "}";
+  }
+  os << "]";
+}
+
 void append_uint_key_map(std::ostringstream &os,
                          const std::unordered_map<uint32_t, uint64_t> &m) {
   bool first = true;
@@ -745,6 +834,10 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
                                 cond_provider_lane_miss_hist_,
                                 cond_provider_lane_override_hist_,
                                 cond_provider_lane_override_correct_hist_);
+  os << ",\"cond_pc_detail_top\":";
+  append_cond_pc_detail_top(os, cond_pc_detail_hist_);
+  os << ",\"cond_ghr_top\":";
+  append_cond_ghr_top(os, cond_ghr_selected_hist_, cond_ghr_miss_hist_);
   os << ",\"memory\":{";
   os << "\"dcache_port_b\":{"
      << "\"req_valid\":" << static_cast<uint64_t>(top->dbg_dc_pb_req_valid_o)
@@ -767,6 +860,55 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
      << static_cast<uint64_t>(top->dbg_lsu_rs_load_block_store_data_not_ready_o)
      << ",\"older_store_not_issued\":"
      << static_cast<uint64_t>(top->dbg_lsu_rs_load_block_store_not_issued_o)
+     << "},\"lsu_rs_load_order_override\":{"
+     << "\"override_ready\":"
+     << static_cast<uint64_t>(top->dbg_lsu_rs_load_order_override_ready_o)
+     << ",\"forward_full_ready\":"
+     << static_cast<uint64_t>(top->dbg_lsu_rs_load_order_forward_full_ready_o)
+     << ",\"forward_full_issue\":"
+     << static_cast<uint64_t>(top->dbg_lsu_rs_load_order_forward_full_issue_o)
+     << ",\"forward_full_not_issue\":"
+     << static_cast<uint64_t>(top->dbg_lsu_rs_load_order_forward_full_not_issue_o)
+     << ",\"query_active\":"
+     << static_cast<uint64_t>(top->dbg_lsu_ff_query_active_o)
+     << ",\"query_issue\":"
+     << static_cast<uint64_t>(top->dbg_lsu_ff_query_issue_o)
+     << ",\"query_not_issue\":"
+     << static_cast<uint64_t>(top->dbg_lsu_ff_query_not_issue_o)
+     << ",\"not_issue_base_block\":"
+     << static_cast<uint64_t>(top->dbg_lsu_ff_not_issue_base_block_o)
+     << ",\"not_issue_p1_gated\":"
+     << static_cast<uint64_t>(top->dbg_lsu_ff_not_issue_p1_gated_o)
+     << ",\"not_issue_low_addr\":"
+     << static_cast<uint64_t>(top->dbg_lsu_ff_not_issue_low_addr_o)
+     << ",\"not_issue_not_selected\":"
+     << static_cast<uint64_t>(top->dbg_lsu_ff_not_issue_not_selected_o)
+     << ",\"not_issue_selected_other\":"
+     << static_cast<uint64_t>(top->dbg_lsu_ff_not_issue_selected_other_o)
+     << "},\"lsu_dispatch_split\":{"
+     << "\"load\":" << static_cast<uint64_t>(top->dbg_lsu_dispatch_load_o)
+     << ",\"store\":" << static_cast<uint64_t>(top->dbg_lsu_dispatch_store_o)
+     << ",\"both\":" << static_cast<uint64_t>(top->dbg_lsu_dispatch_both_o)
+     << ",\"other\":" << static_cast<uint64_t>(top->dbg_lsu_dispatch_other_o)
+     << ",\"load_block_full\":"
+     << static_cast<uint64_t>(top->dbg_lsu_dispatch_load_block_full_o)
+     << ",\"store_block_full\":"
+     << static_cast<uint64_t>(top->dbg_lsu_dispatch_store_block_full_o)
+     << ",\"both_block_full\":"
+     << static_cast<uint64_t>(top->dbg_lsu_dispatch_both_block_full_o)
+     << ",\"other_block_full\":"
+     << static_cast<uint64_t>(top->dbg_lsu_dispatch_other_block_full_o)
+     << "},\"lsu_sta_early\":{"
+     << "\"fire\":" << static_cast<uint64_t>(top->dbg_lsu_sta_early_fire_o)
+     << "},\"lsu_std_early\":{"
+     << "\"fire\":" << static_cast<uint64_t>(top->dbg_lsu_std_early_fire_o)
+     << "},\"stq_load_order_query\":{"
+     << "\"total\":" << static_cast<uint64_t>(top->dbg_stq_load_order_query_total_o)
+     << ",\"addr_unknown\":" << static_cast<uint64_t>(top->dbg_stq_load_order_query_addr_unknown_o)
+     << ",\"overlap_data_ready\":" << static_cast<uint64_t>(top->dbg_stq_load_order_query_overlap_o)
+     << ",\"overlap_data_not_ready\":" << static_cast<uint64_t>(top->dbg_stq_load_order_query_data_not_ready_o)
+     << ",\"forward_full\":" << static_cast<uint64_t>(top->dbg_stq_load_order_query_forward_full_o)
+     << ",\"safe\":" << static_cast<uint64_t>(top->dbg_stq_load_order_query_safe_o)
      << "},\"lsu_dual_load\":{"
      << "\"pick_pair\":" << static_cast<uint64_t>(top->dbg_lsu_dual_pick_pair_o)
      << ",\"block_shape\":" << static_cast<uint64_t>(top->dbg_lsu_dual_block_shape_o)
@@ -776,7 +918,13 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
      << ",\"block_ldq\":" << static_cast<uint64_t>(top->dbg_lsu_dual_block_ldq_o)
      << ",\"block_p0_lane\":" << static_cast<uint64_t>(top->dbg_lsu_dual_block_p0_lane_o)
      << ",\"block_p1_lane\":" << static_cast<uint64_t>(top->dbg_lsu_dual_block_p1_lane_o)
-     << ",\"shape_breakdown\":{"
+     << ",\"pair_shape\":{"
+     << "\"load_store\":" << static_cast<uint64_t>(top->dbg_lsu_dual_pair_load_store_o)
+     << ",\"store_load\":" << static_cast<uint64_t>(top->dbg_lsu_dual_pair_store_load_o)
+     << ",\"store_store\":" << static_cast<uint64_t>(top->dbg_lsu_dual_pair_store_store_o)
+     << ",\"load_special\":" << static_cast<uint64_t>(top->dbg_lsu_dual_pair_load_special_o)
+     << ",\"other\":" << static_cast<uint64_t>(top->dbg_lsu_dual_pair_other_o)
+     << "},\"shape_breakdown\":{"
      << "\"pend\":" << static_cast<uint64_t>(top->dbg_lsu_dual_shape_block_pend_o)
      << ",\"mmu_busy\":" << static_cast<uint64_t>(top->dbg_lsu_dual_shape_block_mmu_busy_o)
      << ",\"amo_inflight\":" << static_cast<uint64_t>(top->dbg_lsu_dual_shape_block_amo_inflight_o)

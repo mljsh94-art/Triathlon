@@ -13,6 +13,24 @@ class Vtb_triathlon;
 
 namespace npc {
 
+struct CondPcDetail {
+  uint64_t selected = 0;
+  uint64_t correct = 0;
+  uint64_t miss = 0;
+  uint64_t pred_taken = 0;
+  uint64_t actual_taken = 0;
+  uint64_t tage_hit = 0;
+  uint64_t tage_strong = 0;
+  uint64_t sc_use = 0;
+  uint64_t sc_override = 0;
+  uint64_t loop_hit = 0;
+  uint64_t loop_confident = 0;
+  uint64_t loop_override = 0;
+  std::array<uint64_t, 4> provider_selected = {};
+  std::array<uint64_t, 4> tage_provider = {};
+  std::array<uint64_t, 8> tage_conf = {};
+};
+
 class ProfileCollector {
  public:
   ProfileCollector(const SimArgs &args,
@@ -214,6 +232,9 @@ class ProfileCollector {
   std::unordered_map<uint64_t, uint64_t> cond_provider_lane_miss_hist_;
   std::unordered_map<uint64_t, uint64_t> cond_provider_lane_override_hist_;
   std::unordered_map<uint64_t, uint64_t> cond_provider_lane_override_correct_hist_;
+  std::unordered_map<uint64_t, CondPcDetail> cond_pc_detail_hist_;
+  std::unordered_map<uint64_t, uint64_t> cond_ghr_selected_hist_;
+  std::unordered_map<uint64_t, uint64_t> cond_ghr_miss_hist_;
   std::unordered_map<std::string, uint64_t> flush_reason_hist_;
   std::unordered_map<std::string, uint64_t> flush_source_hist_;
 
