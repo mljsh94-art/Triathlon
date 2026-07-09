@@ -106,7 +106,9 @@ module issue_store #(
     output logic [TAG_W-1:0]              best_st_sideband_age_o,
     output logic                          found_legacy0_o,
     output logic [$clog2(RS_DEPTH)-1:0]   legacy_idx0_o,
-    output logic [TAG_W-1:0]              best_legacy_age0_o
+    output logic [TAG_W-1:0]              best_legacy_age0_o,
+
+    input wire                            paging_active_i
 );
 
   // ---------------------------------------------------------------
@@ -302,7 +304,7 @@ module issue_store #(
 
     for (int i = 0; i < RS_DEPTH; i++) begin
       age = rob_age(dst_tag_o[i], rob_head_i);
-      if (ready_o[i] && is_plain_store_uop(store_op_o[i])) begin
+      if (ready_o[i] && is_plain_store_uop(store_op_o[i]) && !paging_active_i) begin
         if (!found_st_sideband_o || (age < best_st_sideband_age_o)) begin
           found_st_sideband_o = 1'b1;
           best_st_sideband_age_o = age;

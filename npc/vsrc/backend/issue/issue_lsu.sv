@@ -95,7 +95,12 @@ module issue_lsu #(
     input  wire                           stq_order_query_forward_full_i,
     input  wire                           stq_order_oldest_store_valid_i,
     input  wire              [ TAG_W-1:0] stq_order_oldest_store_rob_idx_i,
-    input  wire                           stq_order_has_committed_store_i
+    input  wire                           stq_order_has_committed_store_i,
+
+    // SV32 paging active (satp.MODE && !M-mode): when set, plain stores need
+    // a TLB walk that the sideband path cannot provide — they must go through
+    // the legacy (main) path which has MMU walk support.
+    input  wire                           paging_active_i
 );
   wire full_stall;
   assign issue_ready = ~full_stall;
@@ -575,7 +580,8 @@ module issue_lsu #(
       .best_st_sideband_age_o(best_st_sideband_age),
       .found_legacy0_o(found_legacy0),
       .legacy_idx0_o(legacy_idx0),
-      .best_legacy_age0_o(best_legacy_age0)
+      .best_legacy_age0_o(best_legacy_age0),
+      .paging_active_i(paging_active_i)
   );
 
   // =========================================================
@@ -614,6 +620,11 @@ module issue_lsu #(
   // =========================================================
   // Final arbitration: combine load and store candidates
   // =========================================================
+  // Sideband is "effective" only when paging is OFF (M-mode). When paging is
+  // active, plain stores need a TLB walk that the sideband path cannot provide;
+  // they must fall through to the legacy (main) path which has MMU support.
+  wire st_sideband_effective = found_st_sideband && !paging_active_i;
+
   always_comb begin
     issue_valid_raw[0] = 1'b0;
     issue_valid_raw[1] = 1'b0;
@@ -623,7 +634,7 @@ module issue_lsu #(
     issue_rs_is_load_raw[1] = 1'b0;
     st_issue_rs_idx = st_sideband_idx;
 
-    if (found_legacy0 && !found_st_sideband && (!found_load0 || (best_legacy_age0 < best_load_age0))) begin
+    if (found_legacy0 && !st_sideband_effective && (!found_load0 || (best_legacy_age0 < best_load_age0))) begin
       issue_valid_raw[0] = 1'b1;
       issue_rs_idx_raw[0] = legacy_idx0;
       issue_rs_is_load_raw[0] = 1'b0;
@@ -636,13 +647,13 @@ module issue_lsu #(
         issue_rs_idx_raw[1] = load_idx1;
         issue_rs_is_load_raw[1] = 1'b1;
       end
-    end else if (found_legacy0 && !found_st_sideband) begin
+    end else if (found_legacy0 && !st_sideband_effective) begin
       issue_valid_raw[0] = 1'b1;
       issue_rs_idx_raw[0] = legacy_idx0;
       issue_rs_is_load_raw[0] = 1'b0;
     end
 
-    st_issue_pick = found_st_sideband;
+    st_issue_pick = st_sideband_effective;
   end
 
   // =========================================================

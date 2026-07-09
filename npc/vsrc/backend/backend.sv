@@ -1588,7 +1588,8 @@ module backend #(
       .stq_order_query_forward_full_i(stq_order_load_query_forward_full),
       .stq_order_oldest_store_valid_i(stq_order_oldest_store_valid),
       .stq_order_oldest_store_rob_idx_i(stq_order_oldest_store_rob_idx),
-      .stq_order_has_committed_store_i(stq_order_has_committed_store)
+      .stq_order_has_committed_store_i(stq_order_has_committed_store),
+      .paging_active_i(csr_satp_state[31] && (csr_priv_mode != 2'b11))
   );
 
   issue_single #(
