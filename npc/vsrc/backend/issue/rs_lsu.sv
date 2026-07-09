@@ -85,7 +85,8 @@ module reservation_station_lsu #(
     output logic [DATA_W-1:0] store_v1_o[0:RS_DEPTH-1],
     output logic store_r1_o[0:RS_DEPTH-1],
     output logic [DATA_W-1:0] store_v2_o[0:RS_DEPTH-1],
-    output logic store_r2_o[0:RS_DEPTH-1]
+    output logic store_r2_o[0:RS_DEPTH-1],
+    output logic [ST_W-1:0] store_st_id_o[0:RS_DEPTH-1]
 );
 
   // RS 存储阵列
@@ -695,6 +696,7 @@ module reservation_station_lsu #(
       store_r1_o[i] = r1_arr[i];
       store_v2_o[i] = v2_arr[i];
       store_r2_o[i] = r2_arr[i];
+      store_st_id_o[i] = st_arr[i];
     end
   end
 

@@ -902,6 +902,8 @@ void ProfileCollector::emit_summary_json(uint64_t final_cycles, const Vtb_triath
      << "\"fire\":" << static_cast<uint64_t>(top->dbg_lsu_sta_early_fire_o)
      << "},\"lsu_std_early\":{"
      << "\"fire\":" << static_cast<uint64_t>(top->dbg_lsu_std_early_fire_o)
+     << "},\"lsu_store_sideband\":{"
+     << "\"fire\":" << static_cast<uint64_t>(top->dbg_lsu_store_sideband_fire_o)
      << "},\"stq_load_order_query\":{"
      << "\"total\":" << static_cast<uint64_t>(top->dbg_stq_load_order_query_total_o)
      << ",\"addr_unknown\":" << static_cast<uint64_t>(top->dbg_stq_load_order_query_addr_unknown_o)

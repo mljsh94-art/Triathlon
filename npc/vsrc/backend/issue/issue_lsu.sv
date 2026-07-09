@@ -1,4 +1,8 @@
 // vsrc/backend/issue/issue_lsu.sv
+// Thin wrapper: instantiates issue_load + issue_store, performs final
+// arbitration between load/store candidates, output mux, grant mask
+// distribution, STA/STD fire, STQ order query arbitration, and debug.
+// External interface is UNCHANGED from pre-split version.
 import decode_pkg::*;
 
 module issue_lsu #(
@@ -60,6 +64,16 @@ module issue_lsu #(
     // fast-path shape; otherwise serialize through port0 alone.
     input  wire                           dual_port1_en_i,
 
+    // Stage 6A-2: independent ordinary-store complete sideband. This is a
+    // consuming path for ready plain stores and does not occupy lsu_en[0:1].
+    input  wire                           st_issue_ready_i,
+    output wire                           st_issue_valid_o,
+    output decode_pkg::uop_t              st_issue_uop_o,
+    output wire              [DATA_W-1:0] st_issue_v1_o,
+    output wire              [DATA_W-1:0] st_issue_v2_o,
+    output wire              [ TAG_W-1:0] st_issue_dst_o,
+    output wire              [  ST_W-1:0] st_issue_stq_id_o,
+
     // Non-consuming STA-only path for ordinary stores. This writes STQ addr
     // early but leaves the RS entry resident until full store issue.
     input  wire                           sta_ready_i,
@@ -94,67 +108,85 @@ module issue_lsu #(
     end
   endfunction
 
-  function automatic logic [TAG_W-1:0] rob_age(
-      input logic [TAG_W-1:0] idx, input logic [TAG_W-1:0] head);
-    begin
-      rob_age = idx - head;
-    end
-  endfunction
+  // =========================================================
+  // Sub-module wires
+  // =========================================================
 
-  function automatic logic is_plain_load_uop(input decode_pkg::uop_t op);
-    begin
-      is_plain_load_uop = op.is_load && !op.is_store &&
-                          (op.lsu_op != decode_pkg::LSU_AMO) &&
-                          (op.lsu_op != decode_pkg::LSU_LR);
-    end
-  endfunction
-
-  // A. Split allocator <-> RS control.
+  // --- issue_load outputs ---
   wire [RS_DEPTH-1:0] load_rs_busy_wires;
-  wire [RS_DEPTH-1:0] store_rs_busy_wires;
-  wire [RS_DEPTH-1:0] rs_busy_wires;
-  wire [RS_DEPTH-1:0] load_alloc_wen;
-  wire [RS_DEPTH-1:0] store_alloc_wen;
-  wire [$clog2(RS_DEPTH)-1:0] load_routing_idx[0:3];
-  wire [$clog2(RS_DEPTH)-1:0] store_routing_idx[0:3];
-  logic [3:0] load_dispatch_valid;
-  logic [3:0] store_dispatch_valid;
-  logic [1:0] load_dispatch_lane[0:3];
-  logic [1:0] store_dispatch_lane[0:3];
-  logic [2:0] load_dispatch_count;
-  logic [2:0] store_dispatch_count;
-  wire load_full_stall_raw;
-  wire store_full_stall_raw;
-  wire load_full_stall;
-  wire store_full_stall;
-
-  // B. RS <-> Select Logic.
   wire [RS_DEPTH-1:0] load_rs_ready_wires;
-  wire [RS_DEPTH-1:0] store_rs_ready_wires;
-  wire [RS_DEPTH-1:0] rs_ready_wires;
   wire [RS_DEPTH-1:0] load_rs_plain_load_wires;
+  wire                load_full_stall_raw;
+  wire [2:0]          load_dispatch_count;
+  decode_pkg::uop_t   load_out_op_0, load_out_op_1;
+  wire [DATA_W-1:0]   load_out_v1_0, load_out_v1_1;
+  wire [DATA_W-1:0]   load_out_v2_0, load_out_v2_1;
+  wire [TAG_W-1:0]    load_out_dst_0, load_out_dst_1;
+  wire [ST_W-1:0]     load_out_st_id_0, load_out_st_id_1;
+  logic [TAG_W-1:0]   load_rs_dst_tag[0:RS_DEPTH-1];
+  wire                load_rs_load_order_query_valid;
+  wire [DATA_W-1:0]   load_rs_load_order_query_addr;
+  wire [DATA_W/8-1:0] load_rs_load_order_query_be;
+  wire [TAG_W-1:0]    load_rs_load_order_query_rob_idx;
+  wire                found_load0, found_load1;
+  wire [$clog2(RS_DEPTH)-1:0] load_idx0, load_idx1;
+  wire [TAG_W-1:0]    best_load_age0, best_load_age1;
+
+  // --- issue_store outputs ---
+  wire [RS_DEPTH-1:0] store_rs_busy_wires;
+  wire [RS_DEPTH-1:0] store_rs_ready_wires;
   wire [RS_DEPTH-1:0] store_rs_plain_load_wires;
   wire [RS_DEPTH-1:0] store_rs_ready_store_wires;
   wire [RS_DEPTH-1:0] store_rs_blocking_ready_store_wires;
-  logic [RS_DEPTH-1:0] load_issue_grant_selected;
-  logic [RS_DEPTH-1:0] store_issue_grant_selected;
-  wire [RS_DEPTH-1:0] load_grant_mask_wires;
-  wire [RS_DEPTH-1:0] store_grant_mask_wires;
+  wire                store_full_stall_raw;
+  wire [2:0]          store_dispatch_count;
+  decode_pkg::uop_t   store_out_op_0, store_out_op_1;
+  wire [DATA_W-1:0]   store_out_v1_0, store_out_v1_1;
+  wire [DATA_W-1:0]   store_out_v2_0, store_out_v2_1;
+  wire [TAG_W-1:0]    store_out_dst_0, store_out_dst_1;
+  wire [ST_W-1:0]     store_out_st_id_0, store_out_st_id_1;
+  logic [TAG_W-1:0]   store_rs_dst_tag[0:RS_DEPTH-1];
+  decode_pkg::uop_t   store_rs_store_op[0:RS_DEPTH-1];
+  wire [RS_DEPTH-1:0] store_rs_store_busy;
+  wire [TAG_W-1:0]    store_rs_store_dst_tag[0:RS_DEPTH-1];
+  wire [DATA_W-1:0]   store_rs_store_v1[0:RS_DEPTH-1];
+  wire                store_rs_store_r1[0:RS_DEPTH-1];
+  wire [DATA_W-1:0]   store_rs_store_v2[0:RS_DEPTH-1];
+  wire                store_rs_store_r2[0:RS_DEPTH-1];
+  wire [ST_W-1:0]     store_rs_store_st_id[0:RS_DEPTH-1];
+  wire                rs_sta_valid;
+  decode_pkg::uop_t   rs_sta_uop;
+  wire [DATA_W-1:0]   rs_sta_v1;
+  wire [TAG_W-1:0]    rs_sta_dst;
+  wire [ST_W-1:0]     rs_sta_st_id;
+  wire                rs_std_valid;
+  wire [DATA_W-1:0]   rs_std_data;
+  wire [ST_W-1:0]     rs_std_st_id;
+  wire                store_rs_load_order_query_valid;
+  wire [DATA_W-1:0]   store_rs_load_order_query_addr;
+  wire [DATA_W/8-1:0] store_rs_load_order_query_be;
+  wire [TAG_W-1:0]    store_rs_load_order_query_rob_idx;
+  wire                found_st_sideband;
+  wire [$clog2(RS_DEPTH)-1:0] st_sideband_idx;
+  wire [TAG_W-1:0]    best_st_sideband_age;
+  wire                found_legacy0;
+  wire [$clog2(RS_DEPTH)-1:0] legacy_idx0;
+  wire [TAG_W-1:0]    best_legacy_age0;
 
-  // C. Select Logic -> LSU.
+  // --- Internal arbitration signals ---
+  wire [RS_DEPTH-1:0] rs_busy_wires;
+  wire [RS_DEPTH-1:0] rs_ready_wires;
+  wire                load_full_stall;
+  wire                store_full_stall;
+
   logic [ISSUE_WIDTH-1:0] issue_valid_raw;
   logic [$clog2(RS_DEPTH)-1:0] issue_rs_idx_raw[0:ISSUE_WIDTH-1];
   logic issue_rs_is_load_raw[0:ISSUE_WIDTH-1];
-  logic [DATA_W-1:0] issue_v1_0;
-  logic [DATA_W-1:0] issue_v1_1;
-  logic [DATA_W-1:0] issue_v2_0;
-  logic [DATA_W-1:0] issue_v2_1;
-  logic [ TAG_W-1:0] issue_dst_0;
-  logic [ TAG_W-1:0] issue_dst_1;
-  logic [  ST_W-1:0] issue_st_id_0;
-  logic [  ST_W-1:0] issue_st_id_1;
-  decode_pkg::uop_t issue_uop_0;
-  decode_pkg::uop_t issue_uop_1;
+  logic [DATA_W-1:0] issue_v1_0, issue_v1_1;
+  logic [DATA_W-1:0] issue_v2_0, issue_v2_1;
+  logic [ TAG_W-1:0] issue_dst_0, issue_dst_1;
+  logic [  ST_W-1:0] issue_st_id_0, issue_st_id_1;
+  decode_pkg::uop_t issue_uop_0, issue_uop_1;
   wire [DATA_W-1:0] issue_effective_addr_0;
   wire [DATA_W-1:0] issue_effective_addr_1;
   wire              issue_blocked_low_addr_spec_0;
@@ -164,73 +196,36 @@ module issue_lsu #(
   wire              issue_pick_any;
   wire              issue_fire;
   wire              issue_base_allow;
+  logic             st_issue_pick;
+  wire              st_issue_fire;
+  logic [$clog2(RS_DEPTH)-1:0] st_issue_rs_idx;
   wire              sta_base_allow;
   wire              std_base_allow;
+  wire              rs_sta_fire;
+  wire              rs_std_fire;
 
-  wire rs_sta_valid;
-  wire rs_sta_fire;
-  decode_pkg::uop_t rs_sta_uop;
-  wire [DATA_W-1:0] rs_sta_v1;
-  wire [TAG_W-1:0] rs_sta_dst;
-  wire [ST_W-1:0] rs_sta_st_id;
-  wire [DATA_W-1:0] rs_sta_addr;
-  wire rs_std_valid;
-  wire rs_std_fire;
-  wire [DATA_W-1:0] rs_std_data;
-  wire [ST_W-1:0] rs_std_st_id;
-
-  wire load_rs_load_order_query_valid;
-  wire [DATA_W-1:0] load_rs_load_order_query_addr;
-  wire [DATA_W/8-1:0] load_rs_load_order_query_be;
-  wire [TAG_W-1:0] load_rs_load_order_query_rob_idx;
-  wire store_rs_load_order_query_valid;
-  wire [DATA_W-1:0] store_rs_load_order_query_addr;
-  wire [DATA_W/8-1:0] store_rs_load_order_query_be;
-  wire [TAG_W-1:0] store_rs_load_order_query_rob_idx;
-  wire rs_load_order_query_valid;
+  wire              load_rs_query_chosen;
+  wire              rs_load_order_query_valid;
   wire [DATA_W-1:0] rs_load_order_query_addr;
   wire [DATA_W/8-1:0] rs_load_order_query_be;
-  wire [TAG_W-1:0] rs_load_order_query_rob_idx;
-  wire load_rs_query_chosen;
+  wire [TAG_W-1:0]  rs_load_order_query_rob_idx;
 
-  decode_pkg::uop_t store_rs_store_op[0:RS_DEPTH-1];
-  wire [RS_DEPTH-1:0] store_rs_store_busy;
-  wire [TAG_W-1:0] store_rs_store_dst_tag[0:RS_DEPTH-1];
-  wire [DATA_W-1:0] store_rs_store_v1[0:RS_DEPTH-1];
-  wire store_rs_store_r1[0:RS_DEPTH-1];
-  wire [DATA_W-1:0] store_rs_store_v2[0:RS_DEPTH-1];
-  wire store_rs_store_r2[0:RS_DEPTH-1];
+  logic [RS_DEPTH-1:0] load_issue_grant_selected;
+  logic [RS_DEPTH-1:0] store_issue_grant_selected;
+  wire [RS_DEPTH-1:0]  load_grant_mask_wires;
+  wire [RS_DEPTH-1:0]  store_grant_mask_wires;
 
-  decode_pkg::uop_t load_out_op_0;
-  decode_pkg::uop_t load_out_op_1;
-  wire [DATA_W-1:0] load_out_v1_0;
-  wire [DATA_W-1:0] load_out_v1_1;
-  wire [DATA_W-1:0] load_out_v2_0;
-  wire [DATA_W-1:0] load_out_v2_1;
-  wire [TAG_W-1:0] load_out_dst_0;
-  wire [TAG_W-1:0] load_out_dst_1;
-  wire [ST_W-1:0] load_out_st_id_0;
-  wire [ST_W-1:0] load_out_st_id_1;
-  logic [TAG_W-1:0] load_rs_dst_tag[0:RS_DEPTH-1];
-
-  decode_pkg::uop_t store_out_op_0;
-  decode_pkg::uop_t store_out_op_1;
-  wire [DATA_W-1:0] store_out_v1_0;
-  wire [DATA_W-1:0] store_out_v1_1;
-  wire [DATA_W-1:0] store_out_v2_0;
-  wire [DATA_W-1:0] store_out_v2_1;
-  wire [TAG_W-1:0] store_out_dst_0;
-  wire [TAG_W-1:0] store_out_dst_1;
-  wire [ST_W-1:0] store_out_st_id_0;
-  wire [ST_W-1:0] store_out_st_id_1;
-  logic [TAG_W-1:0] store_rs_dst_tag[0:RS_DEPTH-1];
   wire [$clog2(RS_DEPTH)-1:0] load_sel_idx_0;
   wire [$clog2(RS_DEPTH)-1:0] load_sel_idx_1;
   wire [$clog2(RS_DEPTH)-1:0] store_sel_idx_0;
   wire [$clog2(RS_DEPTH)-1:0] store_sel_idx_1;
 
+  // =========================================================
+  // Debug signals
+  // =========================================================
   logic [63:0] dbg_sta_early_fire_q;
   logic [63:0] dbg_std_early_fire_q;
+  logic [63:0] dbg_st_sideband_fire_q;
   logic [63:0] dbg_dispatch_load_q;
   logic [63:0] dbg_dispatch_store_q;
   logic [63:0] dbg_dispatch_both_q;
@@ -290,12 +285,18 @@ module issue_lsu #(
   endfunction
 `endif
 
+  // =========================================================
+  // Stall / busy composites
+  // =========================================================
   assign rs_busy_wires = load_rs_busy_wires | store_rs_busy_wires;
   assign rs_ready_wires = load_rs_ready_wires | store_rs_ready_wires;
   assign load_full_stall = (load_dispatch_count != 0) && load_full_stall_raw;
   assign store_full_stall = (store_dispatch_count != 0) && store_full_stall_raw;
   assign full_stall = load_full_stall || store_full_stall;
 
+  // =========================================================
+  // Issue pick logic
+  // =========================================================
   assign issue_effective_addr_0 = issue_v1_0 + issue_uop_0.imm;
   assign issue_effective_addr_1 = issue_v1_1 + issue_uop_1.imm;
   assign issue_blocked_low_addr_spec_0 = spec_low_addr_block_en_i &&
@@ -313,18 +314,24 @@ module issue_lsu #(
   assign sta_base_allow = !flush_i && !mispred_block_i && sta_ready_i;
   assign std_base_allow = !flush_i && !mispred_block_i;
   assign issue_fire = issue_base_allow && issue_pick_any;
-  assign rs_sta_addr = rs_sta_v1 + rs_sta_uop.imm;
   assign rs_sta_fire = sta_base_allow && rs_sta_valid;
   assign rs_std_fire = std_base_allow && rs_std_valid;
+
+  // =========================================================
+  // STA / STD outputs
+  // =========================================================
   assign sta_valid_o = rs_sta_fire;
   assign sta_uop_o = rs_sta_uop;
-  assign sta_addr_o = rs_sta_addr;
+  assign sta_addr_o = rs_sta_v1 + rs_sta_uop.imm;
   assign sta_dst_o = rs_sta_dst;
   assign sta_stq_id_o = rs_sta_st_id;
   assign std_valid_o = rs_std_fire;
   assign std_data_o = rs_std_data;
   assign std_stq_id_o = rs_std_st_id;
 
+  // =========================================================
+  // STQ order query arbitration
+  // =========================================================
   assign load_rs_query_chosen = load_rs_load_order_query_valid;
   assign rs_load_order_query_valid = load_rs_query_chosen ? load_rs_load_order_query_valid :
                                                             store_rs_load_order_query_valid;
@@ -339,6 +346,9 @@ module issue_lsu #(
   assign stq_order_query_be_o = rs_load_order_query_be;
   assign stq_order_query_rob_idx_o = rs_load_order_query_rob_idx;
 
+  // =========================================================
+  // LSU output assignments
+  // =========================================================
   assign lsu_pick_v[0] = issue_pick_0;
   assign lsu_pick_v[1] = issue_pick_1;
   assign lsu_en[0] = issue_base_allow && issue_pick_0;
@@ -355,7 +365,17 @@ module issue_lsu #(
   assign lsu_stq_id[1] = issue_st_id_1;
   assign lsu_cand_v[0] = issue_pick_0;
   assign lsu_cand_v[1] = issue_pick_1 && dual_port1_en_i;
+  assign st_issue_fire = st_issue_pick && st_issue_ready_i && !flush_i && !mispred_block_i;
+  assign st_issue_valid_o = st_issue_fire;
+  assign st_issue_uop_o = store_rs_store_op[st_issue_rs_idx];
+  assign st_issue_v1_o = store_rs_store_v1[st_issue_rs_idx];
+  assign st_issue_v2_o = store_rs_store_v2[st_issue_rs_idx];
+  assign st_issue_dst_o = store_rs_store_dst_tag[st_issue_rs_idx];
+  assign st_issue_stq_id_o = store_rs_store_st_id[st_issue_rs_idx];
 
+  // =========================================================
+  // Debug: forwarded-full query analysis
+  // =========================================================
   assign dbg_ff_query_active = stq_order_query_valid_o && stq_order_query_safe_i &&
                                stq_order_query_forward_full_i;
   assign dbg_ff_sel0 = dbg_ff_query_active && issue_valid_raw[0] &&
@@ -377,6 +397,9 @@ module issue_lsu #(
                                  !dbg_ff_low_addr && !dbg_ff_p1_gated &&
                                  !dbg_ff_not_selected;
 
+  // =========================================================
+  // Grant mask computation
+  // =========================================================
   always_comb begin
     load_issue_grant_selected = '0;
     store_issue_grant_selected = '0;
@@ -388,73 +411,258 @@ module issue_lsu #(
       if (issue_rs_is_load_raw[1]) load_issue_grant_selected[issue_rs_idx_raw[1]] = 1'b1;
       else store_issue_grant_selected[issue_rs_idx_raw[1]] = 1'b1;
     end
+    if (st_issue_fire) begin
+      store_issue_grant_selected[st_issue_rs_idx] = 1'b1;
+    end
   end
 
   assign load_grant_mask_wires = issue_base_allow ? load_issue_grant_selected : '0;
-  assign store_grant_mask_wires = issue_base_allow ? store_issue_grant_selected : '0;
+  assign store_grant_mask_wires = ((issue_base_allow || st_issue_fire) ? store_issue_grant_selected : '0);
 
-  // D. Split crossbar inputs.
-  decode_pkg::uop_t load_rs_in_op[0:RS_DEPTH-1];
-  logic [TAG_W-1:0] load_rs_in_dst[0:RS_DEPTH-1];
-  logic [DATA_W-1:0] load_rs_in_v1[0:RS_DEPTH-1];
-  logic [TAG_W-1:0] load_rs_in_q1[0:RS_DEPTH-1];
-  logic load_rs_in_r1[0:RS_DEPTH-1];
-  logic [DATA_W-1:0] load_rs_in_v2[0:RS_DEPTH-1];
-  logic [TAG_W-1:0] load_rs_in_q2[0:RS_DEPTH-1];
-  logic load_rs_in_r2[0:RS_DEPTH-1];
-  logic [ST_W-1:0] load_rs_in_st_id[0:RS_DEPTH-1];
+  // =========================================================
+  // sel_idx computation (RS read port selection)
+  // =========================================================
+  assign load_sel_idx_0 = issue_rs_is_load_raw[0] ? issue_rs_idx_raw[0] : '0;
+  assign load_sel_idx_1 = issue_rs_is_load_raw[1] ? issue_rs_idx_raw[1] : '0;
+  assign store_sel_idx_0 = issue_rs_is_load_raw[0] ? '0 : issue_rs_idx_raw[0];
+  assign store_sel_idx_1 = issue_rs_is_load_raw[1] ? '0 : issue_rs_idx_raw[1];
 
-  decode_pkg::uop_t store_rs_in_op[0:RS_DEPTH-1];
-  logic [TAG_W-1:0] store_rs_in_dst[0:RS_DEPTH-1];
-  logic [DATA_W-1:0] store_rs_in_v1[0:RS_DEPTH-1];
-  logic [TAG_W-1:0] store_rs_in_q1[0:RS_DEPTH-1];
-  logic store_rs_in_r1[0:RS_DEPTH-1];
-  logic [DATA_W-1:0] store_rs_in_v2[0:RS_DEPTH-1];
-  logic [TAG_W-1:0] store_rs_in_q2[0:RS_DEPTH-1];
-  logic store_rs_in_r2[0:RS_DEPTH-1];
-  logic [ST_W-1:0] store_rs_in_st_id[0:RS_DEPTH-1];
-
-  rs_allocator #(.Cfg(Cfg)) u_load_alloc (
-      .rs_busy    (load_rs_busy_wires),
-      .instr_valid(load_dispatch_valid),
-      .entry_wen  (load_alloc_wen),
-      .idx_map    (load_routing_idx),
-      .full_stall (load_full_stall_raw)
+  // =========================================================
+  // Sub-module instantiation
+  // =========================================================
+  issue_load #(
+      .Cfg   (Cfg),
+      .RS_DEPTH(RS_DEPTH),
+      .DATA_W(DATA_W),
+      .TAG_W (TAG_W),
+      .CDB_W (CDB_W),
+      .ST_W  (ST_W)
+  ) u_load_rs (
+      .clk(clk),
+      .rst_n(rst_n),
+      .flush_i(flush_i),
+      .rob_head_i(rob_head_i),
+      .spec_low_addr_block_en_i(spec_low_addr_block_en_i),
+      .dispatch_valid(dispatch_valid),
+      .dispatch_op(dispatch_op),
+      .dispatch_dst(dispatch_dst),
+      .dispatch_v1(dispatch_v1),
+      .dispatch_q1(dispatch_q1),
+      .dispatch_r1(dispatch_r1),
+      .dispatch_v2(dispatch_v2),
+      .dispatch_q2(dispatch_q2),
+      .dispatch_r2(dispatch_r2),
+      .dispatch_st_id(dispatch_st_id),
+      .cdb_valid(cdb_valid),
+      .cdb_tag(cdb_tag),
+      .cdb_val(cdb_val),
+      .store_busy_i(store_rs_store_busy),
+      .store_op_i(store_rs_store_op),
+      .store_dst_tag_i(store_rs_store_dst_tag),
+      .store_v1_i(store_rs_store_v1),
+      .store_r1_i(store_rs_store_r1),
+      .store_v2_i(store_rs_store_v2),
+      .store_r2_i(store_rs_store_r2),
+      .stq_oldest_store_valid_i(stq_order_oldest_store_valid_i),
+      .stq_oldest_store_rob_idx_i(stq_order_oldest_store_rob_idx_i),
+      .stq_has_committed_store_i(stq_order_has_committed_store_i),
+      .load_order_query_safe_i(load_rs_query_chosen ? stq_order_query_safe_i : 1'b0),
+      .load_order_query_forward_full_i(load_rs_query_chosen ? stq_order_query_forward_full_i : 1'b0),
+      .issue_grant_i(load_grant_mask_wires),
+      .sel_idx_0_i(load_sel_idx_0),
+      .sel_idx_1_i(load_sel_idx_1),
+      .busy_o(load_rs_busy_wires),
+      .ready_o(load_rs_ready_wires),
+      .plain_load_o(load_rs_plain_load_wires),
+      .full_stall_raw_o(load_full_stall_raw),
+      .dispatch_count_o(load_dispatch_count),
+      .out_op_0_o(load_out_op_0),
+      .out_op_1_o(load_out_op_1),
+      .out_v1_0_o(load_out_v1_0),
+      .out_v1_1_o(load_out_v1_1),
+      .out_v2_0_o(load_out_v2_0),
+      .out_v2_1_o(load_out_v2_1),
+      .out_dst_0_o(load_out_dst_0),
+      .out_dst_1_o(load_out_dst_1),
+      .out_st_id_0_o(load_out_st_id_0),
+      .out_st_id_1_o(load_out_st_id_1),
+      .dst_tag_o(load_rs_dst_tag),
+      .load_order_query_valid_o(load_rs_load_order_query_valid),
+      .load_order_query_addr_o(load_rs_load_order_query_addr),
+      .load_order_query_be_o(load_rs_load_order_query_be),
+      .load_order_query_rob_idx_o(load_rs_load_order_query_rob_idx),
+      .found_load0_o(found_load0),
+      .found_load1_o(found_load1),
+      .load_idx0_o(load_idx0),
+      .load_idx1_o(load_idx1),
+      .best_load_age0_o(best_load_age0),
+      .best_load_age1_o(best_load_age1)
   );
 
-  rs_allocator #(.Cfg(Cfg)) u_store_alloc (
-      .rs_busy    (store_rs_busy_wires),
-      .instr_valid(store_dispatch_valid),
-      .entry_wen  (store_alloc_wen),
-      .idx_map    (store_routing_idx),
-      .full_stall (store_full_stall_raw)
+  issue_store #(
+      .Cfg   (Cfg),
+      .RS_DEPTH(RS_DEPTH),
+      .DATA_W(DATA_W),
+      .TAG_W (TAG_W),
+      .CDB_W (CDB_W),
+      .ST_W  (ST_W)
+  ) u_rs (
+      .clk(clk),
+      .rst_n(rst_n),
+      .flush_i(flush_i),
+      .rob_head_i(rob_head_i),
+      .spec_low_addr_block_en_i(spec_low_addr_block_en_i),
+      .dispatch_valid(dispatch_valid),
+      .dispatch_op(dispatch_op),
+      .dispatch_dst(dispatch_dst),
+      .dispatch_v1(dispatch_v1),
+      .dispatch_q1(dispatch_q1),
+      .dispatch_r1(dispatch_r1),
+      .dispatch_v2(dispatch_v2),
+      .dispatch_q2(dispatch_q2),
+      .dispatch_r2(dispatch_r2),
+      .dispatch_st_id(dispatch_st_id),
+      .cdb_valid(cdb_valid),
+      .cdb_tag(cdb_tag),
+      .cdb_val(cdb_val),
+      .issue_grant_i(store_grant_mask_wires),
+      .sel_idx_0_i(store_sel_idx_0),
+      .sel_idx_1_i(store_sel_idx_1),
+      .sta_fire_i(rs_sta_fire),
+      .std_fire_i(rs_std_fire),
+      .load_order_query_safe_i((!load_rs_query_chosen) ? stq_order_query_safe_i : 1'b0),
+      .load_order_query_forward_full_i((!load_rs_query_chosen) ? stq_order_query_forward_full_i : 1'b0),
+      .busy_o(store_rs_busy_wires),
+      .ready_o(store_rs_ready_wires),
+      .plain_load_o(store_rs_plain_load_wires),
+      .ready_store_o(store_rs_ready_store_wires),
+      .blocking_ready_store_o(store_rs_blocking_ready_store_wires),
+      .full_stall_raw_o(store_full_stall_raw),
+      .dispatch_count_o(store_dispatch_count),
+      .out_op_0_o(store_out_op_0),
+      .out_op_1_o(store_out_op_1),
+      .out_v1_0_o(store_out_v1_0),
+      .out_v1_1_o(store_out_v1_1),
+      .out_v2_0_o(store_out_v2_0),
+      .out_v2_1_o(store_out_v2_1),
+      .out_dst_0_o(store_out_dst_0),
+      .out_dst_1_o(store_out_dst_1),
+      .out_st_id_0_o(store_out_st_id_0),
+      .out_st_id_1_o(store_out_st_id_1),
+      .dst_tag_o(store_rs_dst_tag),
+      .store_busy_o(store_rs_store_busy),
+      .store_op_o(store_rs_store_op),
+      .store_dst_tag_o(store_rs_store_dst_tag),
+      .store_v1_o(store_rs_store_v1),
+      .store_r1_o(store_rs_store_r1),
+      .store_v2_o(store_rs_store_v2),
+      .store_r2_o(store_rs_store_r2),
+      .store_st_id_o(store_rs_store_st_id),
+      .sta_valid_o(rs_sta_valid),
+      .sta_uop_o(rs_sta_uop),
+      .sta_v1_o(rs_sta_v1),
+      .sta_dst_o(rs_sta_dst),
+      .sta_st_id_o(rs_sta_st_id),
+      .std_valid_o(rs_std_valid),
+      .std_data_o(rs_std_data),
+      .std_st_id_o(rs_std_st_id),
+      .load_order_query_valid_o(store_rs_load_order_query_valid),
+      .load_order_query_addr_o(store_rs_load_order_query_addr),
+      .load_order_query_be_o(store_rs_load_order_query_be),
+      .load_order_query_rob_idx_o(store_rs_load_order_query_rob_idx),
+      .found_st_sideband_o(found_st_sideband),
+      .st_sideband_idx_o(st_sideband_idx),
+      .best_st_sideband_age_o(best_st_sideband_age),
+      .found_legacy0_o(found_legacy0),
+      .legacy_idx0_o(legacy_idx0),
+      .best_legacy_age0_o(best_legacy_age0)
   );
 
+  // =========================================================
+  // Output mux: select between load/store RS read ports
+  // =========================================================
   always_comb begin
-    load_dispatch_valid = '0;
-    store_dispatch_valid = '0;
-    load_dispatch_count = '0;
-    store_dispatch_count = '0;
-    for (int i = 0; i < 4; i++) begin
-      load_dispatch_lane[i] = '0;
-      store_dispatch_lane[i] = '0;
+    if (issue_rs_is_load_raw[0]) begin
+      issue_uop_0 = load_out_op_0;
+      issue_v1_0 = load_out_v1_0;
+      issue_v2_0 = load_out_v2_0;
+      issue_dst_0 = load_out_dst_0;
+      issue_st_id_0 = load_out_st_id_0;
+    end else begin
+      issue_uop_0 = store_out_op_0;
+      issue_v1_0 = store_out_v1_0;
+      issue_v2_0 = store_out_v2_0;
+      issue_dst_0 = store_out_dst_0;
+      issue_st_id_0 = store_out_st_id_0;
     end
 
-    for (int i = 0; i < 4; i++) begin
-      if (dispatch_valid[i]) begin
-        if (is_plain_load_uop(dispatch_op[i])) begin
-          load_dispatch_valid[load_dispatch_count] = 1'b1;
-          load_dispatch_lane[load_dispatch_count] = i[1:0];
-          load_dispatch_count = load_dispatch_count + 3'd1;
-        end else begin
-          store_dispatch_valid[store_dispatch_count] = 1'b1;
-          store_dispatch_lane[store_dispatch_count] = i[1:0];
-          store_dispatch_count = store_dispatch_count + 3'd1;
-        end
-      end
+    if (issue_rs_is_load_raw[1]) begin
+      issue_uop_1 = load_out_op_1;
+      issue_v1_1 = load_out_v1_1;
+      issue_v2_1 = load_out_v2_1;
+      issue_dst_1 = load_out_dst_1;
+      issue_st_id_1 = load_out_st_id_1;
+    end else begin
+      issue_uop_1 = store_out_op_1;
+      issue_v1_1 = store_out_v1_1;
+      issue_v2_1 = store_out_v2_1;
+      issue_dst_1 = store_out_dst_1;
+      issue_st_id_1 = store_out_st_id_1;
     end
   end
 
+  // =========================================================
+  // Final arbitration: combine load and store candidates
+  // =========================================================
+  always_comb begin
+    issue_valid_raw[0] = 1'b0;
+    issue_valid_raw[1] = 1'b0;
+    issue_rs_idx_raw[0] = '0;
+    issue_rs_idx_raw[1] = '0;
+    issue_rs_is_load_raw[0] = 1'b0;
+    issue_rs_is_load_raw[1] = 1'b0;
+    st_issue_rs_idx = st_sideband_idx;
+
+    if (found_legacy0 && !found_st_sideband && (!found_load0 || (best_legacy_age0 < best_load_age0))) begin
+      issue_valid_raw[0] = 1'b1;
+      issue_rs_idx_raw[0] = legacy_idx0;
+      issue_rs_is_load_raw[0] = 1'b0;
+    end else if (found_load0) begin
+      issue_valid_raw[0] = 1'b1;
+      issue_rs_idx_raw[0] = load_idx0;
+      issue_rs_is_load_raw[0] = 1'b1;
+      if (found_load1) begin
+        issue_valid_raw[1] = 1'b1;
+        issue_rs_idx_raw[1] = load_idx1;
+        issue_rs_is_load_raw[1] = 1'b1;
+      end
+    end else if (found_legacy0 && !found_st_sideband) begin
+      issue_valid_raw[0] = 1'b1;
+      issue_rs_idx_raw[0] = legacy_idx0;
+      issue_rs_is_load_raw[0] = 1'b0;
+    end
+
+    st_issue_pick = found_st_sideband;
+  end
+
+  // =========================================================
+  // Free count (conservative: min of load and store)
+  // =========================================================
+  always_comb begin
+    logic [$clog2(RS_DEPTH+1)-1:0] load_free_count;
+    logic [$clog2(RS_DEPTH+1)-1:0] store_free_count;
+    load_free_count = '0;
+    store_free_count = '0;
+    for (int i = 0; i < RS_DEPTH; i++) begin
+      if (!load_rs_busy_wires[i]) load_free_count++;
+      if (!store_rs_busy_wires[i]) store_free_count++;
+    end
+    free_count_o = (load_free_count < store_free_count) ? load_free_count : store_free_count;
+  end
+
+  // =========================================================
+  // Debug counters
+  // =========================================================
   always_comb begin
     dbg_dispatch_load_inc_w = '0;
     dbg_dispatch_store_inc_w = '0;
@@ -488,226 +696,11 @@ module issue_lsu #(
     end
   end
 
-  always_comb begin
-    for (int k = 0; k < RS_DEPTH; k++) begin
-      load_rs_in_op[k]    = 0;
-      load_rs_in_dst[k]   = 0;
-      load_rs_in_v1[k]    = 0;
-      load_rs_in_q1[k]    = 0;
-      load_rs_in_r1[k]    = 0;
-      load_rs_in_v2[k]    = 0;
-      load_rs_in_q2[k]    = 0;
-      load_rs_in_r2[k]    = 0;
-      load_rs_in_st_id[k] = 0;
-      store_rs_in_op[k]    = 0;
-      store_rs_in_dst[k]   = 0;
-      store_rs_in_v1[k]    = 0;
-      store_rs_in_q1[k]    = 0;
-      store_rs_in_r1[k]    = 0;
-      store_rs_in_v2[k]    = 0;
-      store_rs_in_q2[k]    = 0;
-      store_rs_in_r2[k]    = 0;
-      store_rs_in_st_id[k] = 0;
-    end
-
-    for (int p = 0; p < 4; p++) begin
-      if (load_dispatch_valid[p]) begin
-        int unsigned src;
-        src = load_dispatch_lane[p];
-        load_rs_in_op[load_routing_idx[p]]    = dispatch_op[src];
-        load_rs_in_dst[load_routing_idx[p]]   = dispatch_dst[src];
-        load_rs_in_v1[load_routing_idx[p]]    = dispatch_v1[src];
-        load_rs_in_q1[load_routing_idx[p]]    = dispatch_q1[src];
-        load_rs_in_r1[load_routing_idx[p]]    = dispatch_r1[src];
-        load_rs_in_v2[load_routing_idx[p]]    = dispatch_v2[src];
-        load_rs_in_q2[load_routing_idx[p]]    = dispatch_q2[src];
-        load_rs_in_r2[load_routing_idx[p]]    = dispatch_r2[src];
-        load_rs_in_st_id[load_routing_idx[p]] = dispatch_st_id[src];
-      end
-      if (store_dispatch_valid[p]) begin
-        int unsigned src;
-        src = store_dispatch_lane[p];
-        store_rs_in_op[store_routing_idx[p]]    = dispatch_op[src];
-        store_rs_in_dst[store_routing_idx[p]]   = dispatch_dst[src];
-        store_rs_in_v1[store_routing_idx[p]]    = dispatch_v1[src];
-        store_rs_in_q1[store_routing_idx[p]]    = dispatch_q1[src];
-        store_rs_in_r1[store_routing_idx[p]]    = dispatch_r1[src];
-        store_rs_in_v2[store_routing_idx[p]]    = dispatch_v2[src];
-        store_rs_in_q2[store_routing_idx[p]]    = dispatch_q2[src];
-        store_rs_in_r2[store_routing_idx[p]]    = dispatch_r2[src];
-        store_rs_in_st_id[store_routing_idx[p]] = dispatch_st_id[src];
-      end
-    end
-  end
-
-  assign load_sel_idx_0 = issue_rs_is_load_raw[0] ? issue_rs_idx_raw[0] : '0;
-  assign load_sel_idx_1 = issue_rs_is_load_raw[1] ? issue_rs_idx_raw[1] : '0;
-  assign store_sel_idx_0 = issue_rs_is_load_raw[0] ? '0 : issue_rs_idx_raw[0];
-  assign store_sel_idx_1 = issue_rs_is_load_raw[1] ? '0 : issue_rs_idx_raw[1];
-
-  reservation_station_load #(
-      .Cfg   (Cfg),
-      .DATA_W(DATA_W),
-      .TAG_W (TAG_W),
-      .CDB_W (CDB_W),
-      .ST_W  (ST_W)
-  ) u_load_rs (
-      .clk  (clk),
-      .rst_n(rst_n),
-      .flush_i(flush_i),
-      .rob_head_i(rob_head_i),
-      .spec_low_addr_block_en_i(spec_low_addr_block_en_i),
-      .entry_wen (load_alloc_wen),
-      .in_op     (load_rs_in_op),
-      .in_dst_tag(load_rs_in_dst),
-      .in_v1     (load_rs_in_v1),
-      .in_q1     (load_rs_in_q1),
-      .in_r1     (load_rs_in_r1),
-      .in_v2     (load_rs_in_v2),
-      .in_q2     (load_rs_in_q2),
-      .in_r2     (load_rs_in_r2),
-      .in_st_id  (load_rs_in_st_id),
-      .cdb_valid(cdb_valid),
-      .cdb_tag  (cdb_tag),
-      .cdb_value(cdb_val),
-      .store_busy_i(store_rs_store_busy),
-      .store_op_i(store_rs_store_op),
-      .store_dst_tag_i(store_rs_store_dst_tag),
-      .store_v1_i(store_rs_store_v1),
-      .store_r1_i(store_rs_store_r1),
-      .store_v2_i(store_rs_store_v2),
-      .store_r2_i(store_rs_store_r2),
-      .stq_oldest_store_valid_i(stq_order_oldest_store_valid_i),
-      .stq_oldest_store_rob_idx_i(stq_order_oldest_store_rob_idx_i),
-      .stq_has_committed_store_i(stq_order_has_committed_store_i),
-      .ready_mask (load_rs_ready_wires),
-      .issue_grant(load_grant_mask_wires),
-      .load_order_query_safe_i(load_rs_query_chosen ? stq_order_query_safe_i : 1'b0),
-      .load_order_query_forward_full_i(load_rs_query_chosen ? stq_order_query_forward_full_i : 1'b0),
-      .load_order_query_valid_o(load_rs_load_order_query_valid),
-      .load_order_query_addr_o(load_rs_load_order_query_addr),
-      .load_order_query_be_o(load_rs_load_order_query_be),
-      .load_order_query_rob_idx_o(load_rs_load_order_query_rob_idx),
-      .busy_vector(load_rs_busy_wires),
-      .sel_idx_0(load_sel_idx_0),
-      .sel_idx_1(load_sel_idx_1),
-      .out_op_0(load_out_op_0),
-      .out_op_1(load_out_op_1),
-      .out_v1_0(load_out_v1_0),
-      .out_v1_1(load_out_v1_1),
-      .out_v2_0(load_out_v2_0),
-      .out_v2_1(load_out_v2_1),
-      .out_dst_tag_0(load_out_dst_0),
-      .out_dst_tag_1(load_out_dst_1),
-      .out_st_id_0(load_out_st_id_0),
-      .out_st_id_1(load_out_st_id_1),
-      .dst_tag_o(load_rs_dst_tag),
-      .plain_load_mask_o(load_rs_plain_load_wires)
-  );
-
-  reservation_station_lsu #(
-      .Cfg   (Cfg),
-      .DATA_W(DATA_W),
-      .TAG_W (TAG_W),
-      .CDB_W (CDB_W),
-      .ST_W  (ST_W)
-  ) u_rs (
-      .clk  (clk),
-      .rst_n(rst_n),
-      .flush_i(flush_i),
-      .rob_head_i(rob_head_i),
-      .spec_low_addr_block_en_i(spec_low_addr_block_en_i),
-      .entry_wen (store_alloc_wen),
-      .in_op     (store_rs_in_op),
-      .in_dst_tag(store_rs_in_dst),
-      .in_v1     (store_rs_in_v1),
-      .in_q1     (store_rs_in_q1),
-      .in_r1     (store_rs_in_r1),
-      .in_v2     (store_rs_in_v2),
-      .in_q2     (store_rs_in_q2),
-      .in_r2     (store_rs_in_r2),
-      .in_st_id  (store_rs_in_st_id),
-      .cdb_valid(cdb_valid),
-      .cdb_tag  (cdb_tag),
-      .cdb_value(cdb_val),
-      .busy_vector(store_rs_busy_wires),
-      .ready_mask (store_rs_ready_wires),
-      .issue_grant(store_grant_mask_wires),
-      .sta_fire_i(rs_sta_fire),
-      .sta_valid_o(rs_sta_valid),
-      .sta_uop_o(rs_sta_uop),
-      .sta_v1_o(rs_sta_v1),
-      .sta_dst_tag_o(rs_sta_dst),
-      .sta_st_id_o(rs_sta_st_id),
-      .std_fire_i(rs_std_fire),
-      .std_valid_o(rs_std_valid),
-      .std_data_o(rs_std_data),
-      .std_st_id_o(rs_std_st_id),
-      .load_order_query_safe_i((!load_rs_query_chosen) ? stq_order_query_safe_i : 1'b0),
-      .load_order_query_forward_full_i((!load_rs_query_chosen) ? stq_order_query_forward_full_i : 1'b0),
-      .load_order_query_valid_o(store_rs_load_order_query_valid),
-      .load_order_query_addr_o(store_rs_load_order_query_addr),
-      .load_order_query_be_o(store_rs_load_order_query_be),
-      .load_order_query_rob_idx_o(store_rs_load_order_query_rob_idx),
-      .sel_idx_0(store_sel_idx_0),
-      .sel_idx_1(store_sel_idx_1),
-      .out_op_0(store_out_op_0),
-      .out_op_1(store_out_op_1),
-      .out_v1_0(store_out_v1_0),
-      .out_v1_1(store_out_v1_1),
-      .out_v2_0(store_out_v2_0),
-      .out_v2_1(store_out_v2_1),
-      .out_dst_tag_0(store_out_dst_0),
-      .out_dst_tag_1(store_out_dst_1),
-      .out_st_id_0(store_out_st_id_0),
-      .out_st_id_1(store_out_st_id_1),
-      .dst_tag_o(store_rs_dst_tag),
-      .plain_load_mask_o(store_rs_plain_load_wires),
-      .ready_store_mask_o(store_rs_ready_store_wires),
-      .blocking_ready_store_mask_o(store_rs_blocking_ready_store_wires),
-      .store_busy_o(store_rs_store_busy),
-      .store_op_o(store_rs_store_op),
-      .store_dst_tag_o(store_rs_store_dst_tag),
-      .store_v1_o(store_rs_store_v1),
-      .store_r1_o(store_rs_store_r1),
-      .store_v2_o(store_rs_store_v2),
-      .store_r2_o(store_rs_store_r2)
-  );
-
-  always_comb begin
-    if (issue_rs_is_load_raw[0]) begin
-      issue_uop_0 = load_out_op_0;
-      issue_v1_0 = load_out_v1_0;
-      issue_v2_0 = load_out_v2_0;
-      issue_dst_0 = load_out_dst_0;
-      issue_st_id_0 = load_out_st_id_0;
-    end else begin
-      issue_uop_0 = store_out_op_0;
-      issue_v1_0 = store_out_v1_0;
-      issue_v2_0 = store_out_v2_0;
-      issue_dst_0 = store_out_dst_0;
-      issue_st_id_0 = store_out_st_id_0;
-    end
-
-    if (issue_rs_is_load_raw[1]) begin
-      issue_uop_1 = load_out_op_1;
-      issue_v1_1 = load_out_v1_1;
-      issue_v2_1 = load_out_v2_1;
-      issue_dst_1 = load_out_dst_1;
-      issue_st_id_1 = load_out_st_id_1;
-    end else begin
-      issue_uop_1 = store_out_op_1;
-      issue_v1_1 = store_out_v1_1;
-      issue_v2_1 = store_out_v2_1;
-      issue_dst_1 = store_out_dst_1;
-      issue_st_id_1 = store_out_st_id_1;
-    end
-  end
-
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       dbg_sta_early_fire_q <= '0;
       dbg_std_early_fire_q <= '0;
+      dbg_st_sideband_fire_q <= '0;
       dbg_dispatch_load_q <= '0;
       dbg_dispatch_store_q <= '0;
       dbg_dispatch_both_q <= '0;
@@ -730,6 +723,9 @@ module issue_lsu #(
       end
       if (rs_std_fire) begin
         dbg_std_early_fire_q <= dbg_std_early_fire_q + 64'd1;
+      end
+      if (st_issue_fire) begin
+        dbg_st_sideband_fire_q <= dbg_st_sideband_fire_q + 64'd1;
       end
       dbg_dispatch_load_q <= dbg_dispatch_load_q + 64'(dbg_dispatch_load_inc_w);
       dbg_dispatch_store_q <= dbg_dispatch_store_q + 64'(dbg_dispatch_store_inc_w);
@@ -767,171 +763,9 @@ module issue_lsu #(
     end
   end
 
-  // Pick port0 by ROB age across load_rs and store/complex RS. If no ready
-  // store exists, rematch the two oldest ready plain loads from load_rs.
-  always_comb begin
-    logic found0;
-    logic found1;
-    logic found_load0;
-    logic found_load1;
-    logic found_blocking_store1;
-    logic load_load_rematch;
-    logic [$clog2(RS_DEPTH)-1:0] pick_idx0;
-    logic [$clog2(RS_DEPTH)-1:0] pick_idx1;
-    logic pick_is_load0;
-    logic pick_is_load1;
-    logic [$clog2(RS_DEPTH)-1:0] load_idx0;
-    logic [$clog2(RS_DEPTH)-1:0] load_idx1;
-    logic [$clog2(RS_DEPTH)-1:0] blocking_store_idx1;
-    logic [TAG_W-1:0] best_age0;
-    logic [TAG_W-1:0] best_age1;
-    logic [TAG_W-1:0] best_load_age0;
-    logic [TAG_W-1:0] best_load_age1;
-    logic [TAG_W-1:0] best_blocking_store_age1;
-    logic [TAG_W-1:0] age;
-
-    issue_valid_raw[0] = 1'b0;
-    issue_valid_raw[1] = 1'b0;
-    issue_rs_idx_raw[0] = '0;
-    issue_rs_idx_raw[1] = '0;
-    issue_rs_is_load_raw[0] = 1'b0;
-    issue_rs_is_load_raw[1] = 1'b0;
-    pick_idx0 = '0;
-    pick_idx1 = '0;
-    pick_is_load0 = 1'b0;
-    pick_is_load1 = 1'b0;
-    load_idx0 = '0;
-    load_idx1 = '0;
-    blocking_store_idx1 = '0;
-    found0 = 1'b0;
-    found1 = 1'b0;
-    found_load0 = 1'b0;
-    found_load1 = 1'b0;
-    found_blocking_store1 = 1'b0;
-    load_load_rematch = 1'b0;
-    best_age0 = {TAG_W{1'b1}};
-    best_age1 = {TAG_W{1'b1}};
-    best_load_age0 = {TAG_W{1'b1}};
-    best_load_age1 = {TAG_W{1'b1}};
-    best_blocking_store_age1 = {TAG_W{1'b1}};
-    age = '0;
-
-    for (int i = 0; i < RS_DEPTH; i++) begin
-      age = rob_age(store_rs_dst_tag[i], rob_head_i);
-      if (store_rs_ready_wires[i] && (!found0 || (age < best_age0))) begin
-        found0 = 1'b1;
-        best_age0 = age;
-        pick_idx0 = i[$clog2(RS_DEPTH)-1:0];
-        pick_is_load0 = 1'b0;
-      end
-      age = rob_age(load_rs_dst_tag[i], rob_head_i);
-      if (load_rs_ready_wires[i] && (!found0 || (age < best_age0))) begin
-        found0 = 1'b1;
-        best_age0 = age;
-        pick_idx0 = i[$clog2(RS_DEPTH)-1:0];
-        pick_is_load0 = 1'b1;
-      end
-
-      if (load_rs_ready_wires[i] && load_rs_plain_load_wires[i]) begin
-        if (!found_load0 || (age < best_load_age0)) begin
-          found_load1 = found_load0;
-          best_load_age1 = best_load_age0;
-          load_idx1 = load_idx0;
-          found_load0 = 1'b1;
-          best_load_age0 = age;
-          load_idx0 = i[$clog2(RS_DEPTH)-1:0];
-        end else if (!found_load1 || (age < best_load_age1)) begin
-          found_load1 = 1'b1;
-          best_load_age1 = age;
-          load_idx1 = i[$clog2(RS_DEPTH)-1:0];
-        end
-      end
-    end
-
-    load_load_rematch = found_load0 && found_load1 && !(|store_rs_ready_store_wires);
-
-    if (load_load_rematch) begin
-      found0 = 1'b1;
-      found1 = 1'b1;
-      pick_idx0 = load_idx0;
-      pick_idx1 = load_idx1;
-      pick_is_load0 = 1'b1;
-      pick_is_load1 = 1'b1;
-    end else begin
-      for (int i = 0; i < RS_DEPTH; i++) begin
-        age = rob_age(store_rs_dst_tag[i], rob_head_i);
-        if (store_rs_ready_wires[i] && store_rs_blocking_ready_store_wires[i] &&
-            !(found0 && !pick_is_load0 && (i[$clog2(RS_DEPTH)-1:0] == pick_idx0)) &&
-            (!found_blocking_store1 || (age < best_blocking_store_age1))) begin
-          found_blocking_store1 = 1'b1;
-          best_blocking_store_age1 = age;
-          blocking_store_idx1 = i[$clog2(RS_DEPTH)-1:0];
-        end
-      end
-
-      if (found_blocking_store1) begin
-        found1 = 1'b1;
-        pick_idx1 = blocking_store_idx1;
-        pick_is_load1 = 1'b0;
-      end else begin
-        for (int i = 0; i < RS_DEPTH; i++) begin
-          age = rob_age(load_rs_dst_tag[i], rob_head_i);
-          if (load_rs_ready_wires[i] && load_rs_plain_load_wires[i] &&
-              !(found0 && pick_is_load0 && (i[$clog2(RS_DEPTH)-1:0] == pick_idx0)) &&
-              (!found1 || (age < best_age1))) begin
-            found1 = 1'b1;
-            best_age1 = age;
-            pick_idx1 = i[$clog2(RS_DEPTH)-1:0];
-            pick_is_load1 = 1'b1;
-          end
-        end
-
-        if (!found1) begin
-          for (int i = 0; i < RS_DEPTH; i++) begin
-            age = rob_age(store_rs_dst_tag[i], rob_head_i);
-            if (store_rs_ready_wires[i] &&
-                !(found0 && !pick_is_load0 && (i[$clog2(RS_DEPTH)-1:0] == pick_idx0)) &&
-                (!found1 || (age < best_age1))) begin
-              found1 = 1'b1;
-              best_age1 = age;
-              pick_idx1 = i[$clog2(RS_DEPTH)-1:0];
-              pick_is_load1 = 1'b0;
-            end
-            age = rob_age(load_rs_dst_tag[i], rob_head_i);
-            if (load_rs_ready_wires[i] &&
-                !(found0 && pick_is_load0 && (i[$clog2(RS_DEPTH)-1:0] == pick_idx0)) &&
-                (!found1 || (age < best_age1))) begin
-              found1 = 1'b1;
-              best_age1 = age;
-              pick_idx1 = i[$clog2(RS_DEPTH)-1:0];
-              pick_is_load1 = 1'b1;
-            end
-          end
-        end
-      end
-    end
-
-    issue_valid_raw[0] = found0;
-    issue_valid_raw[1] = found1;
-    issue_rs_idx_raw[0] = pick_idx0;
-    issue_rs_idx_raw[1] = pick_idx1;
-    issue_rs_is_load_raw[0] = pick_is_load0;
-    issue_rs_is_load_raw[1] = pick_is_load1;
-  end
-
-  // Report a conservative shared budget to the existing backend dispatcher.
-  always_comb begin
-    logic [$clog2(RS_DEPTH+1)-1:0] load_free_count;
-    logic [$clog2(RS_DEPTH+1)-1:0] store_free_count;
-    load_free_count = '0;
-    store_free_count = '0;
-    for (int i = 0; i < RS_DEPTH; i++) begin
-      if (!load_rs_busy_wires[i]) load_free_count++;
-      if (!store_rs_busy_wires[i]) store_free_count++;
-    end
-    free_count_o = (load_free_count < store_free_count) ? load_free_count : store_free_count;
-  end
-
+  // =========================================================
+  // Debug trace (synthesis excluded)
+  // =========================================================
 `ifndef SYNTHESIS
   always_ff @(posedge clk or negedge rst_n) begin
     logic watch_pc;

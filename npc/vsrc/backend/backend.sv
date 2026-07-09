@@ -1564,6 +1564,13 @@ module backend #(
       .lsu_cand_v(lsu_cand_v),
       .lsu_pick_v(lsu_pick_v),
       .dual_port1_en_i(lsu_dual_port1_en),
+      .st_issue_ready_i(lsu_st_issue_ready),
+      .st_issue_valid_o(lsu_st_issue_valid),
+      .st_issue_uop_o(lsu_st_issue_uop),
+      .st_issue_v1_o(lsu_st_issue_v1),
+      .st_issue_v2_o(lsu_st_issue_v2),
+      .st_issue_dst_o(lsu_st_issue_dst),
+      .st_issue_stq_id_o(lsu_st_issue_stq_id),
       .sta_ready_i(lsu_sta_early_ready),
       .sta_valid_o(lsu_sta_early_valid),
       .sta_uop_o(lsu_sta_early_uop),
@@ -1780,6 +1787,13 @@ module backend #(
   logic lsu_cand_v[0:1];
   logic lsu_pick_v[0:1];
   logic lsu_dual_port1_en;
+  logic lsu_st_issue_ready;
+  logic lsu_st_issue_valid;
+  decode_pkg::uop_t lsu_st_issue_uop;
+  logic [Cfg.XLEN-1:0] lsu_st_issue_v1;
+  logic [Cfg.XLEN-1:0] lsu_st_issue_v2;
+  logic [ROB_IDX_WIDTH-1:0] lsu_st_issue_dst;
+  logic [ST_IDX_WIDTH-1:0] lsu_st_issue_stq_id;
 
   logic lsu_req_ready;
   logic [LSU_WB_PORTS-1:0] lsu_wb_valid;
@@ -2013,6 +2027,13 @@ module backend #(
       .rob_tag_i  (lsu_dst),
       .rob_head_i (rob_head_ptr),
       .st_id_i    (lsu_stq_id),
+      .st_issue_valid_i(lsu_st_issue_valid),
+      .st_issue_ready_o(lsu_st_issue_ready),
+      .st_issue_uop_i(lsu_st_issue_uop),
+      .st_issue_rs1_data_i(lsu_st_issue_v1),
+      .st_issue_rs2_data_i(lsu_st_issue_v2),
+      .st_issue_rob_tag_i(lsu_st_issue_dst),
+      .st_issue_st_id_i(lsu_st_issue_stq_id),
       .mmu_satp_i(csr_satp_state),
       .mmu_priv_i(csr_priv_mode),
       .mmu_sum_i(csr_mstatus_sum),

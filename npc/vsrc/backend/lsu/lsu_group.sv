@@ -64,6 +64,18 @@ module lsu_group #(
     input  logic             [ROB_IDX_WIDTH-1:0] rob_tag_i    [0:1],
     input  logic             [ROB_IDX_WIDTH-1:0] rob_head_i,
     input  logic             [ ST_IDX_WIDTH-1:0] st_id_i      [0:1],
+
+    // Stage 6A-2: independent consuming path for ordinary store completion.
+    // It lets a ready plain store resolve into STQ in the same cycle that the
+    // legacy two lanes admit up to two loads. Complex stores still use req_*.
+    input  logic                                 st_issue_valid_i,
+    output logic                                 st_issue_ready_o,
+    input  decode_pkg::uop_t                     st_issue_uop_i,
+    input  logic             [     Cfg.XLEN-1:0] st_issue_rs1_data_i,
+    input  logic             [     Cfg.XLEN-1:0] st_issue_rs2_data_i,
+    input  logic             [ROB_IDX_WIDTH-1:0] st_issue_rob_tag_i,
+    input  logic             [ ST_IDX_WIDTH-1:0] st_issue_st_id_i,
+
     input  logic             [            31:0]   mmu_satp_i,
     input  logic             [             1:0]   mmu_priv_i,
     input  logic                                 mmu_sum_i,
@@ -424,6 +436,15 @@ module lsu_group #(
   logic                                                        req_is_amo;
   logic                                                        store_misaligned;
   logic                                                        store_page_fault;
+  logic                                                        st_sideband_fire;
+  logic                                                        st_issue_plain_store;
+  logic                                                        st_issue_need_walk;
+  logic                                                        st_issue_store_misaligned;
+  logic                [      Cfg.XLEN-1:0]                   st_issue_eff_addr_xlen;
+  logic                [      Cfg.PLEN-1:0]                   st_issue_eff_addr;
+  logic                                                        st_issue_agu_is_load;
+  logic                                                        st_issue_agu_is_store;
+  logic                                                        st_issue_agu_is_amo;
   logic                                                        store_req_ready;
   logic                                                        load_req_ready;
   logic                                                        req_has_force_fault;
@@ -756,6 +777,19 @@ module lsu_group #(
       .misaligned_o(req_p1_misaligned)
   );
 
+  lsu_agu #(
+      .Cfg(Cfg)
+  ) u_agu_st_sideband (
+      .uop_i(st_issue_uop_i),
+      .rs1_data_i(st_issue_rs1_data_i),
+      .eff_addr_xlen_o(st_issue_eff_addr_xlen),
+      .eff_addr_o(st_issue_eff_addr),
+      .is_load_o(st_issue_agu_is_load),
+      .is_store_o(st_issue_agu_is_store),
+      .is_amo_o(st_issue_agu_is_amo),
+      .misaligned_o(st_issue_store_misaligned)
+  );
+
   assign req_in_eff_addr_xlen = cand_valid_i[0] ? req_p0_eff_addr_xlen : req_p1_eff_addr_xlen;
   assign req_in_eff_addr      = cand_valid_i[0] ? req_p0_eff_addr : req_p1_eff_addr;
   assign agu_is_load           = cand_valid_i[0] ? req_p0_is_load : req_p1_is_load;
@@ -780,6 +814,13 @@ module lsu_group #(
   assign req_p1_special_load = uop_i[1].is_load && !req_p1_plain_load;
   assign req_p0_store_only = uop_i[0].is_store && !uop_i[0].is_load;
   assign req_p1_store_only = uop_i[1].is_store && !uop_i[1].is_load;
+  assign st_issue_plain_store = st_issue_uop_i.is_store && !st_issue_uop_i.is_load &&
+                                ((st_issue_uop_i.lsu_op == decode_pkg::LSU_SB) ||
+                                 (st_issue_uop_i.lsu_op == decode_pkg::LSU_SH) ||
+                                 (st_issue_uop_i.lsu_op == decode_pkg::LSU_SW) ||
+                                 (st_issue_uop_i.lsu_op == decode_pkg::LSU_SD));
+  assign st_issue_need_walk = translation_active_w && st_issue_agu_is_store &&
+                              !st_issue_store_misaligned;
   assign dual_pair_shape_load_store_w = req_p0_plain_load && req_p1_store_only;
   assign dual_pair_shape_store_load_w = req_p0_store_only && req_p1_plain_load;
   assign dual_pair_shape_store_store_w = req_p0_store_only && req_p1_store_only;
@@ -1177,12 +1218,15 @@ module lsu_group #(
   // commits a dummy store writing no bytes). AMO is serialized on the single
   // lane (amo_inflight blocks younger loads from executing concurrently), so
   // its store side needs no CAM here.
-  assign ldq_st_query_valid = store_req_fire && req_is_store &&
-                             !store_misaligned && !store_page_fault &&
-                             !(is_sc && sc_fail);
-  assign ldq_st_paddr       = req_eff_addr;
-  assign ldq_st_be          = store_be_mask(selected_uop.lsu_op, req_eff_addr);
-  assign ldq_st_rob_tag     = pend_valid_q ? pend_rob_tag_q : sel_rob_tag;
+  assign ldq_st_query_valid = ((store_req_fire && req_is_store &&
+                              !store_misaligned && !store_page_fault &&
+                              !(is_sc && sc_fail)) ||
+                             (st_sideband_fire && !st_issue_store_misaligned));
+  assign ldq_st_paddr       = st_sideband_fire ? st_issue_eff_addr : req_eff_addr;
+  assign ldq_st_be          = st_sideband_fire ? store_be_mask(st_issue_uop_i.lsu_op, st_issue_eff_addr) :
+                                                store_be_mask(selected_uop.lsu_op, req_eff_addr);
+  assign ldq_st_rob_tag     = st_sideband_fire ? st_issue_rob_tag_i :
+                                                (pend_valid_q ? pend_rob_tag_q : sel_rob_tag);
 
   logic res_valid_q;
   logic [Cfg.PLEN-1:0] res_addr_q;
@@ -1328,6 +1372,10 @@ module lsu_group #(
   // stq 的未上报 store 计数（专用上报口每拍排空 1 个，恒可推进）。
   assign store_req_ready = (st_unreported_count_i < ($clog2(SB_DEPTH+1))'(SB_DEPTH)) ||
                            (st_wb_valid_i && wb_ready_i[STORE_WB_PORT]);
+  assign st_issue_ready_o = !flush_i && st_issue_plain_store && store_req_ready &&
+                            !pend_valid_q && (mmu_state_q == MMU_ST_IDLE) &&
+                            !amo_inflight && (!st_issue_need_walk || st_issue_store_misaligned);
+  assign st_sideband_fire = st_issue_valid_i && st_issue_ready_o;
   // Debug/diag aliases for the removed `sq` (stq store-wb derived).
   assign sq_alloc_ready = store_req_ready;
   assign sq_full = !store_req_ready;
@@ -1420,14 +1468,17 @@ module lsu_group #(
   end
 
   always_comb begin
-    st_ex_valid_o = store_req_fire && !store_misaligned && !store_page_fault;
-    st_ex_st_id_o = pend_valid_q ? pend_st_id_q : sel_st_id;
-    st_ex_addr_o = req_eff_addr;
-    st_ex_data_o = selected_rs2_data;
-    st_ex_op_o = sc_fail ? decode_pkg::LSU_SC_FAIL :
-                 is_sc ? decode_pkg::LSU_SW : 
-                 selected_uop.lsu_op;
-    st_ex_rob_idx_o = pend_valid_q ? pend_rob_tag_q : sel_rob_tag;
+    st_ex_valid_o = (store_req_fire && !store_misaligned && !store_page_fault) ||
+                    (st_sideband_fire && !st_issue_store_misaligned);
+    st_ex_st_id_o = st_sideband_fire ? st_issue_st_id_i :
+                                      (pend_valid_q ? pend_st_id_q : sel_st_id);
+    st_ex_addr_o = st_sideband_fire ? st_issue_eff_addr : req_eff_addr;
+    st_ex_data_o = st_sideband_fire ? st_issue_rs2_data_i : selected_rs2_data;
+    st_ex_op_o = st_sideband_fire ? st_issue_uop_i.lsu_op :
+                 (sc_fail ? decode_pkg::LSU_SC_FAIL :
+                  is_sc ? decode_pkg::LSU_SW : selected_uop.lsu_op);
+    st_ex_rob_idx_o = st_sideband_fire ? st_issue_rob_tag_i :
+                                        (pend_valid_q ? pend_rob_tag_q : sel_rob_tag);
     if (amo_wb_fire && !lane_wb_exception[amo_wb_lane]) begin
       st_ex_valid_o = 1'b1;
       st_ex_st_id_o = lane_amo_st_id_q[amo_wb_lane];
@@ -1537,20 +1588,28 @@ module lsu_group #(
   // Store 完成上报 fill：在 store 准入 (store_req_fire，纯 store) 当拍把完成
   // 字段填入对应 stq 条目，等价于原 store_wb_q 的 push。faulting store 也在此
   // 上报（携带异常 ecause + 故障地址作为 tval）。
-  assign st_complete_valid_o     = store_req_fire;
-  assign st_complete_id_o        = pend_valid_q ? pend_st_id_q : sel_st_id;
-  assign st_complete_rob_idx_o   = pend_valid_q ? pend_rob_tag_q : sel_rob_tag;
-  assign st_complete_data_o      = (store_misaligned || store_page_fault) ?
-                                   Cfg.XLEN'(req_eff_addr) :
-                                   (is_sc && sc_fail) ? Cfg.XLEN'(1) : '0;
-  assign st_complete_exception_o = store_misaligned || store_page_fault;
-  assign st_complete_ecause_o    = store_misaligned ? EXC_ST_ADDR_MISALIGNED :
-                                   (store_page_fault ? EXC_ST_PAGE_FAULT : '0);
+  assign st_complete_valid_o     = store_req_fire || st_sideband_fire;
+  assign st_complete_id_o        = st_sideband_fire ? st_issue_st_id_i :
+                                                     (pend_valid_q ? pend_st_id_q : sel_st_id);
+  assign st_complete_rob_idx_o   = st_sideband_fire ? st_issue_rob_tag_i :
+                                                     (pend_valid_q ? pend_rob_tag_q : sel_rob_tag);
+  assign st_complete_data_o      = st_sideband_fire ?
+                                   (st_issue_store_misaligned ? Cfg.XLEN'(st_issue_eff_addr) : '0) :
+                                   ((store_misaligned || store_page_fault) ?
+                                    Cfg.XLEN'(req_eff_addr) :
+                                    (is_sc && sc_fail) ? Cfg.XLEN'(1) : '0);
+  assign st_complete_exception_o = st_sideband_fire ? st_issue_store_misaligned :
+                                                     (store_misaligned || store_page_fault);
+  assign st_complete_ecause_o    = st_sideband_fire ?
+                                   (st_issue_store_misaligned ? EXC_ST_ADDR_MISALIGNED : '0) :
+                                   (store_misaligned ? EXC_ST_ADDR_MISALIGNED :
+                                    (store_page_fault ? EXC_ST_PAGE_FAULT : '0));
   // load-store 违例：年轻 load 已乱序执行并别名该 store，记在完成上报里；store
   // 退休时 ROB 按 is_mispred 处理（提交该 store 后冲刷并重定向到违例 load PC）。
   assign st_complete_is_mispred_o   = ldq_violation_valid;
   assign st_complete_redirect_pc_o  = ldq_violation_pc;
-  assign st_complete_pc_o           = pend_valid_q ? pend_uop_q.pc : sel_uop.pc;
+  assign st_complete_pc_o           = st_sideband_fire ? st_issue_uop_i.pc :
+                                                        (pend_valid_q ? pend_uop_q.pc : sel_uop.pc);
 
   // AMO completes on whichever granted load port carries the (single, due to
   // amo_inflight serialization) in-flight AMO lane.
